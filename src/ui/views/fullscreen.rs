@@ -120,14 +120,10 @@ impl AppRoot {
         let track = self.player.current().cloned();
         let (title, artist, cover) = match &track {
             Some(track) => {
-                let local = self
-                    .display_cover(&track.cover_art, self.fullscreen_hero_bucket())
-                    .map(CoverSource::Path)
-                    .or_else(|| self.hero_cover(&track.cover_url, self.fullscreen_hero_bucket()));
-                let cover = match local {
-                    Some(source) => Some(source.with_remote_fallback(&track.cover_remote)),
-                    None => remote_cover(&track.cover_remote).map(CoverSource::Remote),
-                };
+                // The fullscreen cover is the largest art in the app; paint the
+                // original file here, never the thumbnail/display derivative.
+                let cover =
+                    full_cover_source_with_remote(&track.cover_url, &track.cover_remote);
                 (track.title.clone(), track.artist.clone(), cover)
             }
             None => ("No track playing".to_string(), String::new(), None),

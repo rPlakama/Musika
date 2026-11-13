@@ -184,7 +184,9 @@ pub(crate) async fn page_data(
                         String::new()
                     }
                 ),
-                cover_url: thumbify(crate::covers::url_for(album.cover_art.as_deref(), &covers)),
+                // Hero surfaces paint the untouched original; the row covers
+                // further down keep their thumbnail URLs.
+                cover_url: crate::covers::url_for(album.cover_art.as_deref(), &covers),
                 cover_remote,
                 collage: Vec::new(),
                 collage_remote: Vec::new(),
@@ -252,7 +254,9 @@ pub(crate) async fn page_data(
                 title: artist.name,
                 subtitle: albums_label(artist.album_count),
                 meta: String::new(),
-                cover_url: thumbify(crate::covers::url_for(artist.cover_art.as_deref(), &covers)),
+                // Hero surfaces paint the untouched original; the album rows
+                // further down keep their thumbnail URLs.
+                cover_url: crate::covers::url_for(artist.cover_art.as_deref(), &covers),
                 cover_remote,
                 collage: Vec::new(),
                 collage_remote: Vec::new(),

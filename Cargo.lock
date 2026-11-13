@@ -3678,6 +3678,7 @@ dependencies = [
  "resvg 0.48.1",
  "serde",
  "serde_json",
+ "smallvec",
  "sqlx",
  "tokio",
  "zbus",

@@ -123,6 +123,20 @@ async fn run_async() {
         });
     }
 
+    // Local maintenance before the UI can attach: cap pathological cached
+    // originals once (no network). This keeps the very first page open from
+    // racing a URL rewrite; ordinary art costs only a header probe per file.
+    match (crate::app::dbs(), crate::db::covers_dir()) {
+        (Some(dbs), Ok(dir)) => {
+            match crate::covers::cap_cached_oversized(&dbs.covers, &dir, 16, true).await {
+                Ok(0) => {}
+                Ok(capped) => eprintln!("covers: capped {capped} oversized original(s)"),
+                Err(err) => eprintln!("covers: oversized-original migration failed: {err:#}"),
+            }
+        }
+        _ => eprintln!("covers: oversized-original migration skipped (databases not ready)"),
+    }
+
     let (server_tx, mut server_rx) = mpsc::unbounded_channel::<ServerEvent>();
     clients::spawn(
         crate::ipc::daemon_socket_path(),
@@ -233,7 +247,6 @@ async fn run_async() {
                     | Event::Notes { .. }
                     | Event::Marks { .. }
                     | Event::Preload { .. }
-                    | Event::DisplayCover { .. }
                     | Event::RowsPatched { .. }
                     | Event::AlbumState { .. }
                     | Event::LibrarySynced

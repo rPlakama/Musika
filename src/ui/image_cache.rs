@@ -11,7 +11,7 @@
 //! rules. An image that no element has requested for a couple of frames is
 //! unloaded immediately: leaving a page (or closing an overlay) drops its
 //! covers instead of keeping them resident until some later page happens to
-//! need the memory. A decoded-byte budget (default 64 MiB) then backstops a
+//! need the memory. A decoded-byte budget (default 96 MiB) then backstops a
 //! single screen that really does paint more than that at once. Eviction drops
 //! the image from the window sprite atlas with [`gpui::App::drop_image`], so
 //! neither the CPU pixels nor the texture survive. Only decoded bytes are
@@ -21,6 +21,15 @@
 //! through the same `img` element path every surface already uses. The one
 //! app-wide cache entity is installed as the root render's image cache, so
 //! every cover `img()` in the tree inherits it.
+//!
+//! Decoding is edge-capped: hero surfaces paint full-resolution originals, and
+//! a pathological source (a 7200 px cover decodes to ~198 MiB RGBA on its own)
+//! would blow past the byte budget before the cache could react. Local image
+//! files therefore decode through a capped path (default 4096 px long edge,
+//! `MUSIKA_COVER_MAX_EDGE` overrides, clamped 512-8192): ordinary cover art is
+//! stored and decoded untouched; only absurd originals are downscaled, once,
+//! at decode time. Non-file resources (remote provider art, embedded assets)
+//! keep gpui's stock loader.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -28,13 +37,14 @@ use std::sync::Arc;
 use futures_util::FutureExt as _;
 use gpui::{
     App, AppContext, Asset, AssetLogger, Entity, ImageAssetLoader, ImageCache, ImageCacheError,
-    ImageCacheItem, RenderImage, Resource, Window, hash,
+    ImageCacheItem, ImageLoadingTask, RenderImage, Resource, Window, hash,
 };
 
-/// Decoded RGBA budget for cover art. A 768 px hero is ~2.4 MiB, a 320 px row
-/// thumbnail ~0.4 MiB; 64 MiB keeps a full hero plus several screens of row
-/// covers resident without letting a long page history accumulate.
-pub(crate) const DEFAULT_BUDGET_MIB: usize = 64;
+/// Decoded RGBA budget for cover art. A full-resolution hero decodes to up to
+/// 64 MiB after the 4096 px decode cap; 96 MiB holds that hero plus the visible
+/// row thumbnails (320 px, ~0.4 MiB each) without letting a long page history
+/// accumulate.
+pub(crate) const DEFAULT_BUDGET_MIB: usize = 96;
 const MIN_BUDGET_MIB: usize = 8;
 const MAX_BUDGET_MIB: usize = 512;
 const BYTES_PER_MIB: usize = 1024 * 1024;
@@ -45,6 +55,13 @@ const BYTES_PER_MIB: usize = 1024 * 1024;
 /// just moved to; frame counting (not wall clock) means an idle window keeps
 /// the cover it is showing.
 const STALE_FRAMES: u64 = 2;
+
+/// Longest edge decoded for a local cover file. Hero surfaces paint originals;
+/// this only guards pathological sources so one image cannot dominate the
+/// decoded-byte budget (4096 px RGBA is ~64 MiB, the budget itself).
+const DECODE_MAX_EDGE: u32 = 4096;
+const DECODE_MIN_EDGE: u32 = 512;
+const DECODE_MAX_EDGE_LIMIT: u32 = 8192;
 
 /// Creates the single app-wide cover cache.
 ///
@@ -157,8 +174,7 @@ impl BoundedImageCache {
             self.lru.touch(key);
             loaded
         } else {
-            let future = AssetLogger::<ImageAssetLoader>::load(resource.clone(), cx);
-            let task = cx.background_executor().spawn(future).shared();
+            let task = load_image_task(resource, cx);
             self.entries.insert(
                 key,
                 Entry {
@@ -297,6 +313,76 @@ fn is_stale(frame: u64, last_used: u64) -> bool {
     frame.saturating_sub(last_used) >= STALE_FRAMES
 }
 
+/// Builds the loading task for one image: local files decode through the
+/// edge-capped path; everything else (remote provider art, embedded assets)
+/// keeps gpui's stock loader.
+fn load_image_task(resource: &Resource, cx: &mut App) -> ImageLoadingTask {
+    let Some(path) = cappable_path(resource) else {
+        let future = AssetLogger::<ImageAssetLoader>::load(resource.clone(), cx);
+        return cx.background_executor().spawn(future).shared();
+    };
+    let max_edge = decode_max_edge();
+    cx.background_executor()
+        .spawn(async move { decode_capped_file(&path, max_edge) })
+        .shared()
+}
+
+/// Local files that decode through [`decode_capped_file`]. Animated cover
+/// formats (GIF) and SVG-backed assets keep gpui's loader.
+fn cappable_path(resource: &Resource) -> Option<Arc<std::path::Path>> {
+    let Resource::Path(path) = resource else {
+        return None;
+    };
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    matches!(
+        extension.as_str(),
+        "jpg" | "jpeg" | "png" | "webp" | "bmp" | "tif" | "tiff"
+    )
+    .then(|| Arc::clone(path))
+}
+
+fn decode_max_edge() -> u32 {
+    decode_edge_from(std::env::var("MUSIKA_COVER_MAX_EDGE").ok().as_deref())
+}
+
+/// Parses the decode-cap override, defaulting and clamping so a typo can
+/// neither reintroduce the pathological single-image spike nor blur covers.
+fn decode_edge_from(raw: Option<&str>) -> u32 {
+    raw.and_then(|raw| raw.trim().parse::<u32>().ok())
+        .unwrap_or(DECODE_MAX_EDGE)
+        .clamp(DECODE_MIN_EDGE, DECODE_MAX_EDGE_LIMIT)
+}
+
+/// Reads and decodes one local cover, downscaling only when its longest edge
+/// exceeds `max_edge`.
+///
+/// gpui exposes no decode-size limit, and a 7200 px cover allocates ~198 MiB of
+/// RGBA before any resize could run; capping inside the cache's own decoder is
+/// the only place that avoids that transient spike. The result mirrors gpui's
+/// own conversion: RGBA pixels byte-swapped to BGRA, wrapped in one
+/// [`RenderImage`] frame.
+fn decode_capped_file(
+    path: &std::path::Path,
+    max_edge: u32,
+) -> Result<Arc<RenderImage>, ImageCacheError> {
+    let bytes = std::fs::read(path).map_err(|err| ImageCacheError::Io(Arc::new(err)))?;
+    let format = image::guess_format(&bytes)
+        .map_err(|err| ImageCacheError::Image(Arc::new(err)))?;
+    let mut image = image::load_from_memory_with_format(&bytes, format)
+        .map_err(|err| ImageCacheError::Image(Arc::new(err)))?;
+    if image.width().max(image.height()) > max_edge {
+        image = image.thumbnail(max_edge, max_edge);
+    }
+    let mut rgba = image.into_rgba8();
+    // gpui's `RenderImage` is BGRA; mirror the stock ImageDecoder swap.
+    for pixel in rgba.pixels_mut() {
+        pixel.0.swap(0, 2);
+    }
+    Ok(Arc::new(RenderImage::new(smallvec::smallvec![
+        image::Frame::new(rgba)
+    ])))
+}
+
 /// Decoded byte length of an image, across all its frames.
 fn image_bytes(image: &Arc<RenderImage>) -> usize {
     (0..image.frame_count()).fold(0, |total, frame| {
@@ -420,6 +506,55 @@ mod tests {
         assert_eq!(lru.remove(7), 0, "removal is idempotent");
         assert_eq!(lru.used, 0);
         assert_eq!(lru.eviction_candidate(|_| true), None);
+    }
+
+    #[test]
+    fn decode_cap_override_is_clamped() {
+        assert_eq!(decode_edge_from(None), DECODE_MAX_EDGE);
+        assert_eq!(decode_edge_from(Some("100")), DECODE_MIN_EDGE);
+        assert_eq!(decode_edge_from(Some(" 2048 ")), 2048);
+        assert_eq!(decode_edge_from(Some("99999")), DECODE_MAX_EDGE_LIMIT);
+        assert_eq!(decode_edge_from(Some("junk")), DECODE_MAX_EDGE);
+    }
+
+    fn temp_image(name: &str) -> std::path::PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default();
+        std::env::temp_dir().join(format!(
+            "musika-decode-{}-{stamp}-{name}",
+            std::process::id()
+        ))
+    }
+
+    fn write_jpeg(width: u32, height: u32, pixel: [u8; 3]) -> std::path::PathBuf {
+        let path = temp_image("cover.jpg");
+        let image = image::RgbImage::from_pixel(width, height, image::Rgb(pixel));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(&mut bytes, image::ImageFormat::Jpeg)
+            .expect("encode fixture");
+        std::fs::write(&path, bytes.into_inner()).expect("write fixture");
+        path
+    }
+
+    #[test]
+    fn oversized_photos_decode_downscaled_and_small_ones_untouched() {
+        let large = write_jpeg(5000, 2500, [10, 20, 30]);
+        let decoded = decode_capped_file(&large, 4096).expect("decode large fixture");
+        let size = decoded.size(0);
+        assert_eq!((size.width.0, size.height.0), (4096, 2048));
+        // gpui expects BGRA; the RGB fixture becomes B,G,R,A after the swap.
+        let first = &decoded.as_bytes(0).expect("frame bytes")[..4];
+        assert_eq!(first, [30, 20, 10, 255]);
+        _ = std::fs::remove_file(&large);
+
+        let small = write_jpeg(320, 200, [1, 2, 3]);
+        let decoded = decode_capped_file(&small, 4096).expect("decode small fixture");
+        let size = decoded.size(0);
+        assert_eq!((size.width.0, size.height.0), (320, 200));
+        _ = std::fs::remove_file(&small);
     }
 
     #[test]

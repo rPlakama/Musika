@@ -15,18 +15,12 @@ impl AppRoot {
         let cover_side = page_w.min(page_h).min(max_cover).max(1.0);
         let cover_art_side = (cover_side - page_w * 0.04).max(1.0);
         let cover_bottom = cover_art_side + page_w * 0.02;
-        let hero_bucket = self.page_hero_bucket();
+        // The page hero paints at hundreds of pixels: use the untouched
+        // original art, never the row thumbnail or a resized display copy.
         let cover = if profile.collage {
             None
         } else {
-            let local = self
-                .display_cover(&page.header.cover_art, hero_bucket)
-                .map(CoverSource::Path)
-                .or_else(|| self.hero_cover(&page.header.cover_url, hero_bucket));
-            match local {
-                Some(source) => Some(source.with_remote_fallback(&page.header.cover_remote)),
-                None => remote_cover(&page.header.cover_remote).map(CoverSource::Remote),
-            }
+            full_cover_source_with_remote(&page.header.cover_url, &page.header.cover_remote)
         };
         let header_h = cover_bottom.max(240.0);
 
@@ -86,31 +80,23 @@ impl AppRoot {
                     .justify_center()
                     .overflow_hidden()
                     .child(if profile.collage {
+                        // Collage panes are hero-sized too: each pane paints the
+                        // full-resolution cover, falling back to the provider
+                        // URL when the local original is missing.
                         let sources = page
                             .header
                             .collage
                             .iter()
                             .enumerate()
                             .map(|(index, url)| {
-                                page.header
-                                    .collage_art
-                                    .get(index)
-                                    .filter(|id| !id.is_empty())
-                                    .and_then(|id| {
-                                        self.display_cover(id, hero_bucket)
-                                            .map(CoverSource::Path)
-                                            .or_else(|| self.hero_cover(id, hero_bucket))
-                                    })
-                                    .or_else(|| {
-                                        cover_source_with_remote(
-                                            url,
-                                            page.header
-                                                .collage_remote
-                                                .get(index)
-                                                .map(String::as_str)
-                                                .unwrap_or_default(),
-                                        )
-                                    })
+                                full_cover_source_with_remote(
+                                    url,
+                                    page.header
+                                        .collage_remote
+                                        .get(index)
+                                        .map(String::as_str)
+                                        .unwrap_or_default(),
+                                )
                             })
                             .collect();
                         collage_art_from_sources(sources, cover_art_side)

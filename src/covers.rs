@@ -104,6 +104,21 @@ const THUMB_QUALITY: u8 = 82;
 /// the sync's cover pass; small art keeps the parallel path.
 pub(crate) const THUMB_LARGE_BYTES: u64 = 2 * 1024 * 1024;
 
+/// Longest edge of a cached "original". Hero surfaces paint the full file, so
+/// ordinary art (typically 1000-2000 px) is stored untouched, but a
+/// pathological source (a 7200 px cover decodes to ~198 MB of RGBA on its own)
+/// is downscaled once at ingest or by the local migration below. 4096 px keeps
+/// more than every display bucket ever asked for while bounding one cover to
+/// ~64 MB of RGBA.
+pub(crate) const COVER_MAX_EDGE: u32 = 4096;
+/// JPEG quality used only when a > [`COVER_MAX_EDGE`] original is re-encoded.
+const COVER_CAP_QUALITY: u8 = 92;
+/// The migration probes at most this many of the largest cached blobs per pass.
+const CAP_MIGRATION_BATCH: usize = 8;
+/// Blobs below this cannot plausibly exceed the edge for photographic art;
+/// skipping them keeps the migration's per-pass cost negligible.
+const CAP_MIGRATION_MIN_BYTES: i64 = 2 * 1024 * 1024;
+
 /// ARC-39: remote SVG art is rasterized at ingest; the longest edge of the
 /// stored PNG never exceeds this (the palette and every surface are raster).
 pub(crate) const SVG_MAX_EDGE: u32 = 1024;
@@ -119,6 +134,8 @@ pub struct CoverReport {
     pub upgraded: usize,
     pub unchanged: usize,
     pub removed: usize,
+    /// Cached originals re-encoded down to [`COVER_MAX_EDGE`] by the migration.
+    pub capped: usize,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -269,6 +286,13 @@ async fn refresh_inner(
     }
     _ = ensure_thumbs(&dir, thumb_jobs).await;
     remove_orphans(pool, &dir).await?;
+    // Full passes also cap pathological originals already in the cache. This
+    // runs after the orphan sweep and keeps the old blob: removing it here
+    // could break a page whose payload still names the previous URL. The next
+    // sweep collects that orphan.
+    if purge_unreferenced {
+        report.capped = cap_cached_oversized(pool, &dir, CAP_MIGRATION_BATCH, false).await?;
+    }
 
     Ok(report)
 }
@@ -299,6 +323,29 @@ pub(crate) async fn apply_fetched(
                 eprintln!("covers: rejected undecodable SVG cover {id}");
                 return Ok(());
             };
+            // A provider can serve absurdly large art; cap it once at ingest so
+            // every later hero decode (and the on-disk cache) stays bounded.
+            let (original, capped) = match tokio::task::spawn_blocking(move || {
+                let capped = cap_oversized_art(&bytes, extension);
+                ((bytes, extension, content_type), capped)
+            })
+            .await
+            {
+                Ok(pair) => pair,
+                Err(err) => {
+                    eprintln!("covers: art cap task failed for {id}: {err}");
+                    return Ok(());
+                }
+            };
+            let (bytes, extension, content_type) =
+                match capped {
+                    Some((capped, capped_extension)) => (
+                        capped,
+                        capped_extension,
+                        Some(content_type_for(capped_extension).to_string()),
+                    ),
+                    None => original,
+                };
 
             let hash = crate::digest::md5_hex(&bytes)?;
             // Content-suffixed: changed art gets a new file/URL, so the UI
@@ -488,53 +535,21 @@ async fn remove_orphans(pool: &SqlitePool, dir: &std::path::Path) -> Result<()> 
         .await?;
     let kept: HashSet<String> = kept.into_iter().collect();
     let kept_thumbs: HashSet<String> = kept.iter().map(|file| thumb_name(file)).collect();
-    // The display tier (`<stem>_<edge>x<edge>.<ext>`, generated on demand for
-    // page heroes) is also derived from a kept blob. The sweep used to delete
-    // it, forcing a raw re-decode on every album page until the next request.
-    let kept_stems: HashSet<String> = kept
-        .iter()
-        .filter_map(|file| {
-            Path::new(file)
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .map(str::to_string)
-        })
-        .collect();
 
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Ok(());
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.ends_with(".tmp")
-            || (!kept.contains(&name)
-                && !kept_thumbs.contains(&name)
-                && !is_display_copy(&name, &kept_stems))
-        {
+        // The raw blob and its thumbnail are the only files the cache keeps.
+        // Legacy `<stem>_<edge>x<edge>.<ext>` display copies are stale
+        // derivatives (heroes paint the original now) and go with the
+        // unknown/temp blobs.
+        if name.ends_with(".tmp") || (!kept.contains(&name) && !kept_thumbs.contains(&name)) {
             _ = std::fs::remove_file(entry.path());
         }
     }
     Ok(())
-}
-
-/// True for a generated display copy of a kept cover
-/// (`<stem>_<edge>x<edge>.<ext>`); `kept_stems` holds the stem of every blob in
-/// the covers index.
-fn is_display_copy(name: &str, kept_stems: &HashSet<String>) -> bool {
-    if name.ends_with(".tmp") {
-        return false;
-    }
-    let Some((base, _extension)) = name.rsplit_once('.') else {
-        return false;
-    };
-    let Some((stem, suffix)) = base.rsplit_once('_') else {
-        return false;
-    };
-    let Some((width, height)) = suffix.split_once('x') else {
-        return false;
-    };
-    let digits = |value: &str| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
-    digits(width) && digits(height) && kept_stems.contains(stem)
 }
 
 pub(crate) fn extension(content_type: Option<&str>) -> &'static str {
@@ -695,6 +710,142 @@ pub(crate) fn write_thumb(source: &Path, dir: &Path, name: &str) -> Result<()> {
     })?;
     crate::cache::write_atomic(dir, name, &bytes)?;
     Ok(())
+}
+
+/// Content type for the two formats [`cap_oversized_art`] can emit.
+fn content_type_for(extension: &'static str) -> &'static str {
+    if extension == "png" {
+        "image/png"
+    } else {
+        "image/jpeg"
+    }
+}
+
+/// Re-encodes one image below [`COVER_MAX_EDGE`].
+///
+/// Returns `None` when the art is already small enough or cannot be decoded
+/// (the caller then keeps the original bytes rather than rejecting the art).
+/// PNG art keeps its alpha channel as PNG; every other oversized raster is
+/// re-encoded to JPEG, which is what a photographic 2000+ px cover should be.
+fn cap_oversized_art(bytes: &[u8], extension: &'static str) -> Option<(Vec<u8>, &'static str)> {
+    let format = match extension {
+        "jpg" | "jpeg" => image::ImageFormat::Jpeg,
+        "png" => image::ImageFormat::Png,
+        _ => return None,
+    };
+    let (width, height) = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()?;
+    if width.max(height) <= COVER_MAX_EDGE {
+        return None;
+    }
+    let decoded = image::load_from_memory_with_format(bytes, format).ok()?;
+    let resized = decoded.thumbnail(COVER_MAX_EDGE, COVER_MAX_EDGE);
+    let mut output = std::io::Cursor::new(Vec::new());
+    if format == image::ImageFormat::Png && decoded.color().has_alpha() {
+        resized
+            .write_to(&mut output, image::ImageFormat::Png)
+            .ok()?;
+        Some((output.into_inner(), "png"))
+    } else {
+        image::codecs::jpeg::JpegEncoder::new_with_quality(
+            &mut output,
+            COVER_CAP_QUALITY,
+        )
+        .encode_image(&resized.to_rgb8())
+        .ok()?;
+        Some((output.into_inner(), "jpg"))
+    }
+}
+
+/// Downscales already-cached originals above [`COVER_MAX_EDGE`].
+///
+/// Runs in the core (daemon startup and full cover passes), never on the UI
+/// path, and needs no network: the file is read, capped and re-stored under
+/// the canonical content-addressed name, a thumbnail job is queued, and the
+/// provider validators are kept so the next sync can still answer `304`.
+/// `remove_old` is only safe when no UI can hold the previous URL (startup,
+/// before the UI socket exists); a running sync leaves the old blob for the
+/// next orphan sweep instead of breaking a page decoded from the old payload.
+/// Returns how many blobs were re-encoded.
+pub async fn cap_cached_oversized(
+    pool: &SqlitePool,
+    dir: &Path,
+    limit: usize,
+    remove_old: bool,
+) -> Result<usize> {
+    if limit == 0 {
+        return Ok(0);
+    }
+    let rows: Vec<CoverRow> = sqlx::query_as(
+        "SELECT id, file, hash, etag, last_modified FROM covers
+         WHERE size > ?1 ORDER BY size DESC LIMIT ?2",
+    )
+    .bind(CAP_MIGRATION_MIN_BYTES)
+    .bind(limit as i64)
+    .fetch_all(pool)
+    .await?;
+    let mut capped = 0usize;
+    let mut thumb_jobs: Vec<(String, PathBuf)> = Vec::new();
+    for row in rows {
+        let path = dir.join(&row.file);
+        let Ok((width, height)) = image::image_dimensions(&path) else {
+            continue;
+        };
+        if width.max(height) <= COVER_MAX_EDGE {
+            continue;
+        }
+        let extension: &'static str = match path.extension().and_then(|ext| ext.to_str()) {
+            Some(ext) if ext.eq_ignore_ascii_case("png") => "png",
+            Some(ext) if ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg") => {
+                "jpg"
+            }
+            _ => continue,
+        };
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let capped_art = match tokio::task::spawn_blocking(move || {
+            cap_oversized_art(&bytes, extension)
+        })
+        .await
+        {
+            Ok(capped) => capped,
+            Err(err) => {
+                eprintln!("covers: oversized-art task failed for {}: {err}", row.file);
+                continue;
+            }
+        };
+        let Some((bytes, extension)) = capped_art else {
+            continue;
+        };
+        let hash = crate::digest::md5_hex(&bytes)?;
+        let file = cover_file_name(&row.id, &hash, extension)?;
+        crate::cache::write_atomic(dir, &file, &bytes)?;
+        thumb_jobs.push((thumb_name(&file), dir.join(&file)));
+        upsert(
+            pool,
+            &row.id,
+            &file,
+            &hash,
+            Some(content_type_for(extension)),
+            bytes.len() as i64,
+            row.etag.as_deref(),
+            row.last_modified.as_deref(),
+        )
+        .await?;
+        if remove_old {
+            _ = std::fs::remove_file(&path);
+            _ = std::fs::remove_file(dir.join(thumb_name(&row.file)));
+        }
+        capped += 1;
+    }
+    if !thumb_jobs.is_empty() {
+        _ = ensure_thumbs(dir, thumb_jobs).await;
+    }
+    Ok(capped)
 }
 
 /// Generates missing thumbnails on a bounded blocking pool: decoding is CPU
@@ -911,83 +1062,6 @@ fn unique_ids(ids: &[String]) -> Vec<&str> {
     unique
 }
 
-pub async fn get_or_create_resized_cover(
-    original_path: &Path,
-    target_size: u32,
-) -> Option<PathBuf> {
-    let stem = original_path.file_stem()?.to_str()?;
-    let ext = original_path.extension()?.to_str()?;
-
-    // Create a sub-file name such as cover_id_300x300.jpg
-    let resized_filename = format!("{stem}_{target_size}x{target_size}.{ext}");
-    let resized_path = original_path.parent()?.join(&resized_filename);
-
-    // A display copy is shared by every surface at this bucket. Validate a
-    // pre-existing file before reusing it: a crash/short write used to leave
-    // a truncated JPEG that legacy UI then reported as "Unsupported image format".
-    if resized_path.exists() {
-        if image::ImageReader::open(&resized_path)
-            .ok()
-            .and_then(|reader| reader.with_guessed_format().ok())
-            .and_then(|reader| reader.into_dimensions().ok())
-            .is_some()
-        {
-            return Some(resized_path);
-        }
-        _ = std::fs::remove_file(&resized_path);
-    }
-
-    // Offload image decoding and scaling to a blocking thread pool. Encode to
-    // bytes first and publish with the atomic cache writer: readers must never
-    // see a half-written display copy.
-    let orig = original_path.to_path_buf();
-    let target = resized_path.clone();
-    let parent = resized_path.parent()?.to_path_buf();
-    let filename = resized_filename.clone();
-    let format = image::ImageFormat::from_extension(ext.to_ascii_lowercase())?;
-
-    let started = std::time::Instant::now();
-    let source_bytes = std::fs::metadata(original_path).map(|meta| meta.len()).unwrap_or(0);
-    let source_dims = image::image_dimensions(original_path).ok();
-    crate::debug_log!(
-        "covers: resize start source={} dims={} bytes={} target={}",
-        original_path.display(),
-        source_dims
-            .map(|(width, height)| format!("{width}x{height}"))
-            .unwrap_or_else(|| "unknown".to_string()),
-        source_bytes,
-        target_size
-    );
-    tokio::task::spawn_blocking(move || {
-        let decode_started = std::time::Instant::now();
-        let img = image::open(&orig).ok()?;
-        let decode_ms = decode_started.elapsed().as_secs_f64() * 1000.0;
-        let resize_started = std::time::Instant::now();
-        // `thumbnail` uses the fast integer box/area downscale path; the
-        // general-purpose Triangle filter cost ~1 s at 2400 px in debug.
-        let resized = img.thumbnail(target_size, target_size);
-        let resize_ms = resize_started.elapsed().as_secs_f64() * 1000.0;
-        let encode_started = std::time::Instant::now();
-        let mut bytes = std::io::Cursor::new(Vec::new());
-        resized.write_to(&mut bytes, format).ok()?;
-        let encode_ms = encode_started.elapsed().as_secs_f64() * 1000.0;
-        crate::cache::write_atomic(&parent, &filename, bytes.get_ref()).ok()?;
-        crate::debug_log!(
-            "covers: resize done source={} target={} decode_ms={:.1} resize_ms={:.1} encode_ms={:.1} out_bytes={} elapsed_ms={:.1}",
-            orig.display(),
-            target_size,
-            decode_ms,
-            resize_ms,
-            encode_ms,
-            bytes.get_ref().len(),
-            started.elapsed().as_secs_f64() * 1000.0
-        );
-        Some(target)
-    })
-    .await
-    .ok()?
-}
-
 /// One-shot repair for caches whose raw covers predate thumbnail generation:
 /// scans the cover index, claims the missing thumb names and generates them on
 /// the bounded blocking pool (the same path as the lazy on-demand jobs).
@@ -1097,19 +1171,7 @@ mod orphan_tests {
     }
 
     #[test]
-    fn display_copy_names_are_recognised() {
-        let stems: HashSet<String> = ["raw-abc".to_string()].into();
-        assert!(is_display_copy("raw-abc_1024x1024.jpg", &stems));
-        assert!(is_display_copy("raw-abc_256x256.webp", &stems));
-        assert!(!is_display_copy("raw-abc.jpg", &stems));
-        assert!(!is_display_copy("raw-abc.thumb.jpg", &stems));
-        assert!(!is_display_copy("raw-other_1024x1024.jpg", &stems));
-        assert!(!is_display_copy("raw-abc_1024x1024.tmp", &stems));
-        assert!(!is_display_copy("raw-abc_axb.jpg", &stems));
-    }
-
-    #[test]
-    fn sweep_keeps_display_copies_and_removes_unknown_blobs() {
+    fn sweep_keeps_raw_and_thumb_and_removes_stale_derivatives() {
         let dir = std::env::temp_dir().join(format!(
             "musika-covers-sweep-{}-{:?}",
             std::process::id(),
@@ -1139,14 +1201,66 @@ mod orphan_tests {
         assert!(dir.join("raw-abc.jpg").exists(), "raw blob removed");
         assert!(dir.join("raw-abc.thumb.jpg").exists(), "thumb removed");
         assert!(
-            dir.join("raw-abc_1024x1024.jpg").exists(),
-            "display copy must survive the sweep"
+            !dir.join("raw-abc_1024x1024.jpg").exists(),
+            "stale display derivative kept"
         );
         assert!(
-            dir.join("raw-abc_256x256.jpg").exists(),
-            "other display bucket removed"
+            !dir.join("raw-abc_256x256.jpg").exists(),
+            "stale display derivative kept"
         );
         assert!(!dir.join("stray.jpg").exists(), "unknown blob kept");
         _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod cap_tests {
+    use super::*;
+
+    fn jpeg_bytes(width: u32, height: u32, pixel: [u8; 3]) -> Vec<u8> {
+        let image = image::RgbImage::from_pixel(width, height, image::Rgb(pixel));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(&mut bytes, image::ImageFormat::Jpeg)
+            .expect("encode fixture");
+        bytes.into_inner()
+    }
+
+    #[test]
+    fn oversized_art_is_capped_and_small_art_is_left_alone() {
+        let big = jpeg_bytes(5000, 2500, [10, 20, 30]);
+        let (capped, extension) = cap_oversized_art(&big, "jpg").expect("large art capped");
+        assert_eq!(extension, "jpg");
+        assert!(
+            capped.len() < big.len(),
+            "re-encoded art should be smaller: {} vs {}",
+            capped.len(),
+            big.len()
+        );
+        let decoded = image::load_from_memory(&capped).expect("capped art decodes");
+        let (width, height) = (decoded.width(), decoded.height());
+        assert_eq!((width, height), (COVER_MAX_EDGE, COVER_MAX_EDGE / 2));
+
+        let small = jpeg_bytes(800, 600, [1, 2, 3]);
+        assert!(
+            cap_oversized_art(&small, "jpg").is_none(),
+            "art within the edge must not be re-encoded"
+        );
+    }
+
+    #[test]
+    fn oversized_png_with_alpha_stays_png() {
+        let mut pixels = image::RgbaImage::from_pixel(5000, 5000, image::Rgba([0, 0, 0, 0]));
+        pixels.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(pixels)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .expect("encode png fixture");
+        let (capped, extension) =
+            cap_oversized_art(&bytes.into_inner(), "png").expect("large png capped");
+        assert_eq!(extension, "png");
+        let decoded = image::load_from_memory(&capped).expect("capped png decodes");
+        assert_eq!(decoded.width().max(decoded.height()), COVER_MAX_EDGE);
+        assert!(decoded.color().has_alpha());
     }
 }

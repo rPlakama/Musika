@@ -18,6 +18,7 @@ mod fullscreen_focus_tests {
 #[cfg(test)]
 mod contextual_bar_tests {
     use super::*;
+    use crate::ui::widgets::media::remote_cover;
     use crate::ui::widgets::media::cover_source;
 
     fn page_state(

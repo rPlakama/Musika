@@ -4,7 +4,7 @@
 //! runtime and return as plain `Event`s over a tokio channel; the GPUI root
 //! task drains them and notifies its entity.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -113,12 +113,6 @@ pub enum Event {
         order: usize,
         count: usize,
         rows: Vec<crate::model::Row>,
-    },
-    DisplayCover {
-        key: String,
-        cover_art: String,
-        target: u32,
-        path: Option<std::path::PathBuf>,
     },
     RowsPatched {
         kind: crate::model::RowKind,
@@ -309,7 +303,6 @@ pub struct Bridge {
     marks_generation: AtomicU64,
     offline: AtomicBool,
     palette_inflight: Arc<Mutex<Option<String>>>,
-    display_inflight: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Bridge {
@@ -322,7 +315,6 @@ impl Bridge {
             marks_generation: AtomicU64::new(0),
             offline: AtomicBool::new(false),
             palette_inflight: Arc::new(Mutex::new(None)),
-            display_inflight: Arc::new(Mutex::new(HashSet::new())),
         };
         bridge.refresh_header();
         bridge

@@ -371,73 +371,17 @@ impl AppRoot {
         self.bridge.request_album_state(album_id);
     }
 
-    pub(in crate::ui) fn page_hero_bucket(&self) -> u32 {
-        covers::bucket_for(PAGE_HERO_PX, self.scale_factor)
-    }
-
-    pub(in crate::ui) fn fullscreen_hero_bucket(&self) -> u32 {
-        covers::bucket_for(FULLSCREEN_HERO_PX, self.scale_factor)
-    }
-
-    pub(in crate::ui) fn hero_cover(&self, url: &str, target: u32) -> Option<CoverSource> {
-        let local = COVERS
-            .get_or_init(|| std::sync::Mutex::new(covers::CoverStore::new(768)))
-            .lock()
-            .ok()?
-            .hero_url(url, target);
-        local
-            .map(CoverSource::Path)
-            .or_else(|| remote_cover(url).map(CoverSource::Remote))
-    }
-
-    pub(in crate::ui) fn ensure_display_cover(&mut self, cover_art: &str, target: u32) {
-        if cover_art.is_empty() {
-            return;
-        }
-        let key = format!("{cover_art}:{target}");
-        if let Some(retry_at) = self.display_retry.get(&key)
-            && *retry_at > self.clock.now
-        {
-            return;
-        }
-        self.display_retry.remove(&key);
-        if !self.display_requested.insert(key.clone()) {
-            return;
-        }
-        self.bridge
-            .request_display_cover(key, cover_art.to_string(), target);
-    }
-
-    pub(in crate::ui) fn display_cover(
-        &self,
-        cover_art: &str,
-        target: u32,
-    ) -> Option<std::path::PathBuf> {
-        self.display_covers
-            .get(&format!("{cover_art}:{target}"))
-            .cloned()
-    }
-
     /// Drops render-side bookkeeping that belongs to a page that is no longer
     /// open.
     ///
     /// Page entries are virtual: [`AppRoot::page`] is replaced on every
     /// navigation, never stacked, and [`state::Travel`] stores descriptors
-    /// only. Two pieces of render state still accumulated with each visited
-    /// page: row emphasis animations keyed by the retired page generation and
-    /// resolved display-cover paths for covers no current surface paints.
-    /// Pruning them keeps a long travel session's state the size of one page.
-    /// Decoded cover pixels are bounded separately by the shared image cache.
-    pub(in crate::ui) fn prune_page_state(&mut self) {
+    /// only. Row emphasis animations are keyed by the page generation, so the
+    /// retired page's entries are dropped here; decoded cover pixels are
+    /// bounded separately by the shared image cache.
+    pub(in crate::ui) fn prune_page_state(&self) {
         let generation = self.page.as_ref().map(|_| self.page_generation as usize);
         prune_page_emphases(&mut self.row_scales.borrow_mut(), generation);
-        let keep = display_keep(self.page.as_ref(), self.player.current());
-        self.display_covers
-            .retain(|key, _| display_key_is_wanted(key, &keep));
-        self.display_requested
-            .retain(|key| display_key_is_wanted(key, &keep));
-        self.display_retry
-            .retain(|key, _| display_key_is_wanted(key, &keep));
     }
 
     pub(in crate::ui) fn set_scope(&mut self, scope: Scope) {
@@ -686,26 +630,6 @@ pub(in crate::ui) fn needs_page_prune(
     previous != Some((generation, page_open))
 }
 
-/// The cover-art ids some current surface still paints: the open page's hero
-/// and collage, plus the playing track (player bar/fullscreen). Covers outside
-/// this set were left behind by the page change and their display paths are
-/// dropped, so the maps stay one page's size instead of the travel log's.
-fn display_keep(
-    page: Option<&PageState>,
-    track: Option<&crate::player::Track>,
-) -> std::collections::HashSet<String> {
-    let mut keep = std::collections::HashSet::new();
-    if let Some(page) = page {
-        keep.insert(page.header.cover_art.clone());
-        keep.extend(page.header.collage_art.iter().cloned());
-    }
-    if let Some(track) = track {
-        keep.insert(track.cover_art.clone());
-    }
-    keep.remove("");
-    keep
-}
-
 /// Retains row emphasis entries for every surface except rows of a retired
 /// page generation. `generation` is `None` when no page is open.
 fn prune_page_emphases(
@@ -715,13 +639,6 @@ fn prune_page_emphases(
     scales.retain(|(surface, scope, _), _| {
         !matches!(surface, LineSurface::Page) || generation == Some(*scope)
     });
-}
-
-/// A display-cover key is `"{cover_art}:{target_px}"`; only keys whose art id is
-/// still painted by a live surface survive a page change.
-fn display_key_is_wanted(key: &str, keep: &std::collections::HashSet<String>) -> bool {
-    key.rsplit_once(':')
-        .is_some_and(|(art, _)| keep.contains(art))
 }
 
 /// Hash of one marks window. Split out so the "unchanged window is a no-op"
@@ -749,12 +666,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        display_key_is_wanted, display_keep, marks_signature, needs_page_prune,
-        prune_page_emphases,
-    };
+    use super::{marks_signature, needs_page_prune, prune_page_emphases};
     use crate::ui::{LineSurface, RowEmphasis};
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
 
     fn rows<'a>(ids: &'a [(&'a str, &'a str)]) -> impl Iterator<Item = (&'a str, &'a str)> + 'a {
         ids.iter().copied()
@@ -765,55 +679,6 @@ mod tests {
             .into_iter()
             .map(|(surface, scope)| ((surface, scope, 0), RowEmphasis::new(false)))
             .collect()
-    }
-
-    fn page_with_art(art: &str, collage: &[&str]) -> crate::ui::PageState {
-        let mut page = crate::ui::PageState::new(crate::ui::state::PageDescriptor::new(
-            crate::ui::PageKind::Album,
-            "a",
-        ));
-        page.header.cover_art = art.to_string();
-        page.header.collage_art = collage.iter().map(|art| art.to_string()).collect();
-        page
-    }
-
-    fn track_with_art(art: &str) -> crate::player::Track {
-        crate::player::Track {
-            item: crate::model::ItemMeta {
-                id: "s".into(),
-                title: String::new(),
-                cover_url: String::new(),
-                cover_remote: String::new(),
-                album_id: String::new(),
-            },
-            artist: String::new(),
-            album: String::new(),
-            favorite: false,
-            duration: 0.0,
-            url: String::new(),
-            cover_art: art.to_string(),
-        }
-    }
-
-    #[test]
-    fn display_keep_is_the_open_page_and_playing_track_only() {
-        let page = page_with_art("hero", &["mosaic-a", "mosaic-b"]);
-        let track = track_with_art("playing");
-        let keep = display_keep(Some(&page), Some(&track));
-        assert_eq!(keep.len(), 4);
-        assert!(keep.contains("hero"));
-        assert!(keep.contains("mosaic-a"));
-        assert!(keep.contains("mosaic-b"));
-        assert!(keep.contains("playing"));
-
-        assert!(display_keep(Some(&page), None).contains("hero"));
-        assert_eq!(
-            display_keep(None, Some(&track)),
-            ["playing".to_string()].into_iter().collect(),
-            "home keeps only the playing track's cover"
-        );
-        assert!(display_keep(Some(&page_with_art("", &[])), None).is_empty());
-        assert!(display_keep(None, None).is_empty());
     }
 
     #[test]
@@ -850,18 +715,6 @@ mod tests {
         prune_page_emphases(&mut scales, None);
         assert_eq!(scales.len(), 1, "only the non-page surface survives");
         assert!(scales.contains_key(&(LineSurface::Library, 0, 0)));
-    }
-
-    #[test]
-    fn display_cover_keys_survive_only_for_visible_art() {
-        let keep: HashSet<String> = ["hero-art".to_string(), "collage-art".to_string()]
-            .into_iter()
-            .collect();
-        assert!(display_key_is_wanted("hero-art:768", &keep));
-        assert!(display_key_is_wanted("collage-art:256", &keep));
-        assert!(!display_key_is_wanted("retired-art:768", &keep));
-        assert!(!display_key_is_wanted("hero-art", &keep));
-        assert!(!display_key_is_wanted("", &keep));
     }
 
     #[test]

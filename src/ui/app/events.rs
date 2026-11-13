@@ -235,9 +235,6 @@ impl AppRoot {
                         {
                             covers.clear();
                         }
-                        self.display_covers.clear();
-                        self.display_requested.clear();
-                        self.display_retry.clear();
                         self.palette_cover = None;
                         self.palette_motion.reset(&self.clock);
                     }
@@ -332,39 +329,6 @@ impl AppRoot {
                 };
                 self.open_descriptor_reveal(descriptor, Some(reveal));
             }
-            Event::DisplayCover {
-                key,
-                cover_art,
-                target,
-                path,
-            } => match path {
-                Some(path) => {
-                    self.display_retry.remove(&key);
-                    self.display_covers.insert(key, path.clone());
-                    if let Some(trace) = self.cover_trace.as_ref()
-                        && trace.cover_art == cover_art
-                        && trace.bucket == target
-                    {
-                        crate::debug_log!(
-                            "album entry: proper res loaded cover={} bucket={} path={} elapsed_ms={:.1} at={}",
-                            cover_art,
-                            target,
-                            path.display(),
-                            trace.started.elapsed().as_secs_f64() * 1000.0,
-                            unix_ms()
-                        );
-                    }
-                }
-                None => {
-                    self.display_requested.remove(&key);
-                    self.display_retry.insert(key, self.clock.now + 5.0);
-                    crate::debug_log!(
-                        "album entry: cover load failed cover={} bucket={} path=none",
-                        cover_art,
-                        target
-                    );
-                }
-            },
             Event::Preload {
                 scope,
                 order,
@@ -852,9 +816,6 @@ impl AppRoot {
         self.alt_was_typing = false;
         self.marks = MarksState::default();
         self.warm.clear();
-        self.display_covers.clear();
-        self.display_requested.clear();
-        self.display_retry.clear();
         self.restored = false;
         self.header = None;
         self.notes = None;

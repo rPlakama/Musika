@@ -57,9 +57,10 @@ use self::text_modal::TextModal;
 use self::widgets::marquee::{MarqueeText, line_width};
 use self::widgets::media::{
     CoverSource, FAVORITE_GOLD, RowMarks, art, collage_art_from_sources, cover_element,
-    cover_source_with_remote, format_time, highlighted_text, icon, icon_rotated,
-    loading_placeholder, loading_skeleton, page_key, remote_cover, repeat_label, progress_bar,
-    row_mark_icons, spinning_icon, transport_controls, volume_meter,
+    cover_source_with_remote, format_time, full_cover_source_with_remote,
+    highlighted_text, icon, icon_rotated, loading_placeholder, loading_skeleton, page_key,
+    repeat_label, progress_bar, row_mark_icons, spinning_icon,
+    transport_controls, volume_meter,
 };
 use self::widgets::retained_cover::RetainedCover;
 use self::widgets::retained_icon::RetainedIcon;
@@ -534,8 +535,6 @@ impl AssetSource for Assets {
     }
 }
 
-const PAGE_HERO_PX: f32 = 720.0;
-const FULLSCREEN_HERO_PX: f32 = 720.0;
 struct RowPaint {
     flags: page_profile::RowFlags,
     surface: LineSurface,
@@ -799,13 +798,6 @@ const LIBRARY_ROW_FLAGS: page_profile::RowFlags = page_profile::RowFlags {
     compact: false,
 };
 
-struct CoverLoadTrace {
-    cover_art: String,
-    bucket: u32,
-    started: std::time::Instant,
-    thumb_logged: bool,
-}
-
 /// Wayland/GPUI cannot activate an application on Linux (the platform
 /// implementation is a no-op and xdg_activation tokens are rejected without a
 /// real input serial). Under niri, use its IPC to focus our window on an
@@ -835,13 +827,6 @@ fn activate_niri_window() {
     _ = std::process::Command::new("niri")
         .args(["msg", "action", "focus-window", "--id", &id.to_string()])
         .output();
-}
-
-fn unix_ms() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default()
 }
 
 struct AppRoot {
@@ -984,11 +969,7 @@ struct AppRoot {
     marks: MarksState,
     warm: std::collections::HashMap<(Scope, usize), (usize, Vec<Row>)>,
     preloaded: bool,
-    display_covers: std::collections::HashMap<String, std::path::PathBuf>,
-    display_requested: std::collections::HashSet<String>,
-    display_retry: std::collections::HashMap<String, f64>,
     scale_factor: f32,
-    cover_trace: Option<CoverLoadTrace>,
     trace: bool,
     frames: u64,
     /// The window activation observer is installed on the first render (the
@@ -1267,11 +1248,7 @@ impl AppRoot {
             marks: MarksState::default(),
             warm: std::collections::HashMap::new(),
             preloaded: false,
-            display_covers: std::collections::HashMap::new(),
-            display_requested: std::collections::HashSet::new(),
-            display_retry: std::collections::HashMap::new(),
             scale_factor: window.scale_factor(),
-            cover_trace: None,
             trace: std::env::var_os("MUSIKA_GPUUI_TRACE").is_some(),
             frames: 0,
             activation_observed: false,

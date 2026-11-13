@@ -216,46 +216,6 @@ impl Render for AppRoot {
             self.ensure_marks();
             self.refresh_fullscreen_album_state();
         }
-        if let Some(page) = self.page.as_ref() {
-            let cover_art = page.header.cover_art.clone();
-            let bucket = self.page_hero_bucket();
-            let changed = self
-                .cover_trace
-                .as_ref()
-                .map(|trace| (trace.cover_art.as_str(), trace.bucket))
-                != Some((cover_art.as_str(), bucket));
-            if changed {
-                let started = std::time::Instant::now();
-                crate::debug_log!(
-                    "album entry: init album cover load cover={} bucket={} at={}",
-                    cover_art,
-                    bucket,
-                    unix_ms()
-                );
-                self.cover_trace = Some(CoverLoadTrace {
-                    cover_art: cover_art.clone(),
-                    bucket,
-                    started,
-                    thumb_logged: false,
-                });
-            }
-            if self.display_cover(&cover_art, bucket).is_none()
-                && let Some(trace) = self.cover_trace.as_mut()
-                && !trace.thumb_logged
-            {
-                trace.thumb_logged = true;
-                crate::debug_log!(
-                    "album entry: album cover thumb shown cover={} bucket={} elapsed_ms={:.1}",
-                    cover_art,
-                    bucket,
-                    trace.started.elapsed().as_secs_f64() * 1000.0
-                );
-            }
-            self.ensure_display_cover(&cover_art, bucket);
-        }
-        if let Some(track) = self.player.current().cloned() {
-            self.ensure_display_cover(&track.cover_art, self.fullscreen_hero_bucket());
-        }
         let lyrics_overlay_progress = self.lyrics_overlay_anim.target(
             if self.lyrics_overlay { 1.0 } else { 0.0 },
             anim::QUICK_MS,

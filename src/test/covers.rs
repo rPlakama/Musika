@@ -278,3 +278,66 @@ async fn ensure_thumbs_covers_both_size_buckets() {
 
     _ = std::fs::remove_dir_all(dir);
 }
+
+/// The daemon-startup/full-sync migration re-encodes already-cached
+/// pathological originals in place (bounded batch), keeping reliability and
+/// regenerating the thumbnail so every surface keeps working.
+#[tokio::test]
+async fn cap_cached_oversized_migrates_a_cached_giant() {
+    use image::ImageFormat;
+
+    let pool = crate::test::memory_pool(sqlx::migrate!("./migrations_media")).await;
+    let dir = temp_thumb_dir();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let file = format!("raw-cap-{nanos}.jpg");
+    let path = dir.join(&file);
+    // Photographic noise keeps the fixture above CAP_MIGRATION_MIN_BYTES; a
+    // solid-colour JPEG would compress far below the migration threshold.
+    let image = image::RgbImage::from_fn(5000, 2500, |x, y| {
+        image::Rgb([
+            (x.wrapping_mul(31) ^ y) as u8,
+            (y.wrapping_mul(17) ^ (x / 3)) as u8,
+            ((x + y) % 251) as u8,
+        ])
+    });
+    image::DynamicImage::ImageRgb8(image)
+        .save_with_format(&path, ImageFormat::Jpeg)
+        .expect("write oversized fixture");
+    let size = std::fs::metadata(&path).expect("fixture metadata").len();
+
+    sqlx::query(
+        "INSERT INTO covers (id, file, hash, content_type, size, etag, fetched_at)
+         VALUES ('giant', ?1, 'h1', 'image/jpeg', ?2, '\"v1\"', '0')",
+    )
+    .bind(&file)
+    .bind(size as i64)
+    .execute(&pool)
+    .await
+    .expect("insert cover row");
+
+    let capped = crate::covers::cap_cached_oversized(&pool, &dir, 8, true)
+        .await
+        .expect("cap migration");
+    assert_eq!(capped, 1);
+
+    let (new_file, new_size): (String, i64) =
+        sqlx::query_as("SELECT file, size FROM covers WHERE id = 'giant'")
+            .fetch_one(&pool)
+            .await
+            .expect("updated cover row");
+    assert_ne!(new_file, file, "the file name is content-addressed");
+    assert!(new_size > 0, "re-encoded file is stored");
+    assert!(dir.join(&new_file).is_file(), "new blob written");
+    assert!(
+        dir.join(crate::covers::thumb_name(&new_file)).is_file(),
+        "thumbnail regenerated"
+    );
+    assert!(!dir.join(&file).is_file(), "old oversized blob removed");
+    let (width, height) = image::image_dimensions(dir.join(&new_file)).expect("capped dimensions");
+    assert_eq!(width.max(height), crate::covers::COVER_MAX_EDGE);
+
+    _ = std::fs::remove_dir_all(dir);
+}

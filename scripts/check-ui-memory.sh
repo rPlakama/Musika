@@ -259,6 +259,12 @@ fi
 # Leave phase: navigate out of the page and confirm the page covers unload.
 LEAVE=${MUSIKA_MEM_LEAVE:-1}
 LEAVE_WAIT=${MUSIKA_MEM_LEAVE_WAIT:-1.5}
+# Optional full-resolution hero probe: open this song's album, sample the cache
+# while the hero is painted, go home, sample again. Set MUSIKA_MEM_HERO_SONG to a
+# song id whose album has a very large original cover.
+HERO_SONG=${MUSIKA_MEM_HERO_SONG:-}
+HERO_ALBUM=${MUSIKA_MEM_HERO_ALBUM:-hero}
+HERO_REPEAT=${MUSIKA_MEM_HERO_REPEAT:-1}
 if (( LEAVE > 0 )); then
     echo "check-ui-memory: leave phase (home, wait ${LEAVE_WAIT}s)"
     before_lines=$(frame_lines)
@@ -288,6 +294,46 @@ if (( LEAVE > 0 )); then
         done
         sample leave_settled 2 0 "" "" ""
     fi
+fi
+
+# Full-resolution hero probe: a page whose original cover is huge should show a
+# large covers_mib while open and drop back to the row-thumbnail working set
+# after `home`, without a lasting RSS step.
+if [[ -n "$HERO_SONG" ]]; then
+    echo "check-ui-memory: hero probe ($HERO_SONG / $HERO_ALBUM x $HERO_REPEAT)"
+    for ((hk = 1; hk <= HERO_REPEAT; hk++)); do
+    before_lines=$(frame_lines)
+    send_cmd "open_song_album $HERO_SONG"
+    sleep "$SETTLE"
+    # Wait passively for a fresh [musika/frame] line so covers_mib is not stale.
+    HERO_NEW=0
+    deadline=$((SECONDS + 15))
+    while (( SECONDS < deadline )); do
+        HERO_NEW=$(( $(frame_lines) - before_lines ))
+        (( HERO_NEW > 0 )) && break
+        sleep 0.1
+    done
+    sample hero "$hk" 0 "$HERO_SONG" "$HERO_ALBUM" ""
+    hero_open_rss=$(vmrss_kib "$UI_PID")
+
+    before_lines=$(frame_lines)
+    send_cmd home
+    sleep "$LEAVE_WAIT"
+    HERO_LEAVE_NEW=0
+    deadline=$((SECONDS + 15))
+    while (( SECONDS < deadline )); do
+        HERO_LEAVE_NEW=$(( $(frame_lines) - before_lines ))
+        (( HERO_LEAVE_NEW > 0 )) && break
+        sleep 0.1
+    done
+    sample hero_leave "$hk" 0 "$HERO_SONG" "$HERO_ALBUM" ""
+    # Later sample: is a very large (>budget) original's memory returned?
+    HERO_SETTLE=${MUSIKA_MEM_HERO_SETTLE:-6}
+    if (( HERO_SETTLE > 0 )); then
+        sleep "$HERO_SETTLE"
+        sample hero_settled "$hk" 0 "$HERO_SONG" "$HERO_ALBUM" ""
+    fi
+    done
 fi
 
 echo "check-ui-memory: cleanup"
@@ -346,6 +392,23 @@ if [[ -n "$leave_rss" ]]; then
     settle_img=$(awk -F, '$1 == "leave_settled" { print $15; exit }' "$CSV")
     if [[ -n "$settle_rss" ]]; then
         echo "  leave+settle: ${settle_rss} MiB, covers_mib=${settle_img:-?} (vs leave ${leave_rss} MiB)"
+    fi
+fi
+
+hero_rss=$(awk -F, '$1 == "hero" { r = $7 / 1024 } END { printf "%d", r }' "$CSV")
+if [[ -n "$hero_rss" ]]; then
+    hero_entries=$(awk -F, '$1 == "hero" { v = $14 } END { print v }' "$CSV")
+    hero_mib=$(awk -F, '$1 == "hero" { v = $15 } END { print v }' "$CSV")
+    hero_rows=$(awk -F, '$1 == "hero" { v = $12 } END { print v }' "$CSV")
+    hero_leave_rss=$(awk -F, '$1 == "hero_leave" { r = $7 / 1024 } END { printf "%d", r }' "$CSV")
+    hero_leave_entries=$(awk -F, '$1 == "hero_leave" { v = $14 } END { print v }' "$CSV")
+    hero_leave_mib=$(awk -F, '$1 == "hero_leave" { v = $15 } END { print v }' "$CSV")
+    echo "  hero probe: page open -> covers=${hero_entries:-?}/${hero_mib:-?} MiB, page_rows=${hero_rows:-?}, RSS ${hero_rss} MiB (fresh frame lines: ${HERO_NEW:-0})"
+    echo "             after home -> covers=${hero_leave_entries:-?}/${hero_leave_mib:-?} MiB, RSS ${hero_leave_rss:-?} MiB (fresh frame lines: ${HERO_LEAVE_NEW:-0})"
+    hero_settled_rss=$(awk -F, '$1 == "hero_settled" { r = $7 / 1024 } END { printf "%d", r }' "$CSV")
+    if [[ -n "$hero_settled_rss" ]]; then
+        hero_settled_mib=$(awk -F, '$1 == "hero_settled" { v = $15 } END { print v }' "$CSV")
+        echo "             +${HERO_SETTLE:-6}s later -> covers_mib=${hero_settled_mib:-?}, RSS ${hero_settled_rss} MiB"
     fi
 fi
 

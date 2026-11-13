@@ -214,6 +214,44 @@ pub(crate) fn cover_source_with_remote(url: &str, remote: &str) -> Option<CoverS
     }
 }
 
+/// Resolves the untouched provider file for a cover URL.
+///
+/// Hero surfaces (album/artist page, fullscreen cover) paint at hundreds of
+/// pixels, so a thumbnail or a resized display copy would visibly soften the
+/// image. This resolves the original file itself, never a derivative. The
+/// shared image cache still bounds decoded pixels; it is not this module's
+/// concern.
+pub(crate) fn full_cover_source(url: &str) -> Option<CoverSource> {
+    cover_path_full(url)
+        .map(CoverSource::Path)
+        .or_else(|| remote_cover(url).map(CoverSource::Remote))
+}
+
+/// [`full_cover_source`] with the provider URL as the fallback when the local
+/// original is missing or cannot be decoded.
+///
+/// A URL that is already remote is a *row-sized* streaming variant (the bridge
+/// resolves missing covers to the provider's 320 px art); a hero must not paint
+/// that shortened copy when the provider's original URL is available, so the
+/// explicit `remote` URL wins there.
+pub(crate) fn full_cover_source_with_remote(url: &str, remote: &str) -> Option<CoverSource> {
+    match cover_path_full(url) {
+        Some(path) => Some(CoverSource::Path(path).with_remote_fallback(remote)),
+        None => remote_cover(remote)
+            .or_else(|| remote_cover(url))
+            .map(CoverSource::Remote),
+    }
+}
+
+/// The untouched file for a local cover URL (`None` for remote/missing ones).
+fn cover_path_full(url: &str) -> Option<std::path::PathBuf> {
+    COVERS
+        .get_or_init(|| std::sync::Mutex::new(covers::CoverStore::new(768)))
+        .lock()
+        .ok()?
+        .original_path(url)
+}
+
 /// Resolve a batch of row covers while holding the shared cover store once.
 ///
 /// `Row` values keep their provider URLs; the resolved [`CoverSource`] is built

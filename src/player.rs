@@ -122,6 +122,54 @@ impl Repeat {
     }
 }
 
+/// ReplayGain loudness normalization mode. Off by default; Track uses the
+/// per-track gain tag, Album prefers the album gain (falling back to track).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Normalization {
+    #[default]
+    Off,
+    Track,
+    Album,
+}
+
+impl Normalization {
+    pub fn code(self) -> u8 {
+        match self {
+            Self::Off => 0,
+            Self::Track => 1,
+            Self::Album => 2,
+        }
+    }
+
+    pub fn from_code(code: u8) -> Self {
+        match code {
+            1 => Self::Track,
+            2 => Self::Album,
+            _ => Self::Off,
+        }
+    }
+
+    pub fn enabled(self) -> bool {
+        self != Self::Off
+    }
+
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Off => Self::Track,
+            Self::Track => Self::Album,
+            Self::Album => Self::Off,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Track => "track",
+            Self::Album => "album",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
     Stopped,

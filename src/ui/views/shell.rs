@@ -168,6 +168,27 @@ impl AppRoot {
                 icon("dots-fill.svg", 18.0, palette::on_surface_variant()),
                 1.0,
             ),
+            TopBarAction::Normalization => {
+                let on = self.player.normalization().enabled();
+                (
+                    div()
+                        .w(px(18.0))
+                        .h(px(18.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(13.0))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(rgb(if on {
+                            palette::primary()
+                        } else {
+                            palette::on_surface_variant()
+                        }))
+                        .child("N")
+                        .into_any_element(),
+                    1.0,
+                )
+            }
         };
         div()
             .flex_none()
@@ -431,6 +452,12 @@ impl AppRoot {
             }
             SuperiorMode::Home | SuperiorMode::Playlist => {}
         }
+        row = row.child(self.topbar_action_chip(
+            TopBarAction::Normalization,
+            Some(&page),
+            self.status_anchors.clone(),
+            cx,
+        ));
         row.into_any_element()
     }
 

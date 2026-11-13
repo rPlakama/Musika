@@ -272,6 +272,26 @@ mod gpuui {
     }
 
     #[test]
+    fn state_carries_normalization_and_crossfade_modes() {
+        use crate::player::Normalization;
+        let mut view = PlaybackView::new();
+        assert_eq!(view.normalization(), Normalization::Off);
+        assert!(!view.crossfade());
+        view.apply_state(PlaybackState {
+            reserved: 2 | crate::ipc_protocol::RESERVED_CROSSFADE,
+            ..PlaybackState::default()
+        });
+        assert_eq!(view.normalization(), Normalization::Album);
+        assert!(view.crossfade());
+        view.apply_state(PlaybackState {
+            reserved: 1,
+            ..PlaybackState::default()
+        });
+        assert_eq!(view.normalization(), Normalization::Track);
+        assert!(!view.crossfade());
+    }
+
+    #[test]
     fn move_block_bounds_match_the_core_rules() {
         assert!(move_block_allowed(5, 0, 1, 1));
         assert!(move_block_allowed(5, 1, 2, 2));

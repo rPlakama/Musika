@@ -5,7 +5,7 @@
 //! boundary, a stream error or a decoder lifecycle event wakes it immediately
 //! (see `crate::player::engine`).
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 #[derive(Debug, Clone, Default)]
@@ -62,6 +62,9 @@ pub(crate) struct Shared {
     pub(crate) boundary_frame: AtomicU64,
     pub(crate) boundary_active: AtomicBool,
     pub(crate) boundary_duration: Mutex<f64>,
+    /// Position (seconds) the gapless next track starts at; nonzero only for
+    /// a crossfade, where the next decoder has already played its fade-in.
+    pub(crate) boundary_origin: Mutex<f64>,
     pub(crate) boundary_stream_size: AtomicU64,
     /// Generation used to abort stale decoders.
     pub(crate) generation: AtomicU64,
@@ -79,6 +82,10 @@ pub(crate) struct Shared {
     /// `sink_seen` to consume each transition exactly once.
     pub(crate) sink_seq: AtomicU64,
     pub(crate) sink_seen: AtomicU64,
+    /// ReplayGain normalization mode (`Normalization::code`).
+    pub(crate) normalization: AtomicU32,
+    /// Optional crossfade between tracks.
+    pub(crate) crossfade: AtomicBool,
     /// Engine wakeup, written from the RT process callback (gapless boundary),
     /// the sink loop thread (stream status) and the decode worker (lifecycle).
     wake_fd: libc::c_int,
@@ -107,6 +114,7 @@ impl Shared {
             boundary_frame: AtomicU64::new(0),
             boundary_active: AtomicBool::new(false),
             boundary_duration: Mutex::new(0.0),
+            boundary_origin: Mutex::new(0.0),
             boundary_stream_size: AtomicU64::new(0),
             generation: AtomicU64::new(0),
             current_stop: Mutex::new(None),
@@ -115,6 +123,8 @@ impl Shared {
             sink: Mutex::new(SinkStatus::default()),
             sink_seq: AtomicU64::new(0),
             sink_seen: AtomicU64::new(0),
+            normalization: AtomicU32::new(0),
+            crossfade: AtomicBool::new(false),
             wake_fd: if wake_fd < 0 { -1 } else { wake_fd },
         }
     }

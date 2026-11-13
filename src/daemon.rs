@@ -471,6 +471,8 @@ fn query_json(snapshot: &Snapshot, command: &IpcCommand) -> String {
                 "volume": state.volume(),
                 "muted": state.muted(),
                 "loading": state.loading(),
+                "normalization": state.normalization_code(),
+                "crossfade": state.crossfade(),
                 "engine_available": snapshot.engine_available,
                 "current": snapshot
                     .queue

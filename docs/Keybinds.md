@@ -18,6 +18,8 @@ work, including the command line.
 | `-` / `=` (`+`) | Volume down / up 5%, with the same held-key counter, a direction chevron and the resulting level. |
 | `m` | Mute. A sticky toast stays on screen until you unmute. |
 | `Ctrl-R` | Cycle repeat (off → all → one) |
+| `Ctrl-F` | Toggle crossfade between tracks (off by default; the icon appears beside the repeat insight) |
+| `Ctrl-Shift-N` | Cycle loudness normalization: off → track → album. `Ctrl-N` stays next-track |
 | `r` | Sync the library |
 | `Shift-Enter` | Toggle the fullscreen player |
 | `Ctrl-Q` | Toggle the queue drawer |

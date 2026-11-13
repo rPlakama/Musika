@@ -17,6 +17,7 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use super::Normalization;
 use super::pipewire::{Native, SinkState};
 
 /// Wake cadence while audible or loading: fast enough that a boundary or a
@@ -40,6 +41,10 @@ pub(crate) enum AudioCommand {
     /// 0..=100 UI scale.
     SetVolume(f64),
     SetMuted(bool),
+    /// ReplayGain loudness normalization mode.
+    SetNormalization(Normalization),
+    /// Optional equal-length crossfade between tracks.
+    SetCrossfade(bool),
     Stop,
 }
 
@@ -58,6 +63,8 @@ pub(crate) enum EngineEvent {
     Boundary {
         duration: f64,
         stream_size: u64,
+        /// Start position in the next track (crossfade consumed this much).
+        position: f64,
     },
     /// Decoder EOF and the sink drained the ring: advance the queue.
     Ended,
@@ -291,6 +298,8 @@ fn apply_command(native: &Native, command: AudioCommand, paused: &mut bool) {
             native.set_volume(volume);
         }
         AudioCommand::SetMuted(muted) => native.set_muted(muted),
+        AudioCommand::SetNormalization(mode) => native.set_normalization(mode),
+        AudioCommand::SetCrossfade(enabled) => native.set_crossfade(enabled),
         AudioCommand::Stop => {
             native.stop();
             *paused = true;
@@ -308,10 +317,11 @@ fn pump(
 ) -> bool {
     let emit = |event: EngineEvent| -> bool { events.send(event).is_ok() };
 
-    if let Some((duration, stream_size)) = native.take_boundary_event()
+    if let Some((duration, stream_size, position)) = native.take_boundary_event()
         && !emit(EngineEvent::Boundary {
             duration,
             stream_size,
+            position,
         })
     {
         return false;

@@ -209,8 +209,9 @@ gapless handoff plus the drain/renegotiate/swap path at a rate change.
 
 Scope: an audit of `src/player/**`, `src/daemon/playback.rs`, `src/queue.rs`
 and this document, plus the questionnaire answers recorded for the playback
-roadmap. The audit describes the tree as of 2026-11; the roadmap phases are
-plans, not shipped behaviour.
+roadmap. The audit describes the tree as of 2026-11. The transition/loudness
+items from the questionnaire landed in the same month (see "Implemented after
+the audit"); the remaining roadmap phases are still plans.
 
 ### What the engine has
 
@@ -232,6 +233,14 @@ plans, not shipped behaviour.
   documented small gap.
 - Rate-scaled seek trimming; pause parking that keeps a seekable decoder open,
   and reopen on resume for non-seekable streams or pauses over 30 s.
+- A 20 ms output envelope fades pause/resume, seeks and fresh track starts
+  (RT callback, no extra thread or allocation) so transitions do not click.
+- Optional 5 s equal-length crossfade: the next decoder is preloaded at the
+  current pipeline rate, mixed with the outgoing track's tail, and the
+  boundary carries the next track's already-played offset; off by default.
+- ReplayGain loudness normalization (off/track/album, off by default) reads
+  the `replaygain_track_gain` / `replaygain_album_gain` tags captured by the
+  decoder and applies the linear gain in the decode worker with clipping.
 - Sink failure drops and rebuilds the engine, then replays the current row at
   the same playhead (`CoreCommand::Recover`); ordinary decode/track failures
   are reported and the queue advances.
@@ -266,10 +275,13 @@ or hotplug policy beyond the stream-error rebuild, and no wake-lock/inhibit
 handling. MPRIS is the only OS-facing surface; no other platform backend
 exists.
 
-**Transitions/loudness.** There is no audio fade-in/out, no crossfade and no
-loudness normalization or ReplayGain handling. The rate-change handoff keeps
-its documented small gap, and volume is node-level with a fixed-point RT
-fallback. (The animated lyric fades in the UI are visuals, not audio.)
+**Transitions/loudness.** Anti-click fades, optional crossfade and
+tag-driven ReplayGain normalization now ship (see below). Still missing: EBU
+R128 analysis/scan for untagged files, a user-configurable crossfade length,
+F32 processing headroom, and gapless closure of the rate-change gap when
+crossfade is off (the normal handoff still drains/renegotiates). Volume stays
+node-level with a fixed-point RT fallback. The animated lyric fades in the UI
+remain visuals, not audio.
 
 **Safety net/CI.** Errors are strings (`PlaybackOutput::Error(String)`,
 `last_error: Option<String>`) rather than structured codes, and there are no
@@ -286,8 +298,9 @@ machines and sinks.
 
 ### Recorded decisions (2026-11 questionnaire)
 
-These are the answers recorded for the roadmap; none of the future items is
-implemented yet.
+These are the answers recorded for the roadmap. The transitions/loudness and
+UI-control answers landed in the 2026-11 pass; the reliability, F32 and CI
+items remain roadmap work.
 
 - Reliability: the whole reliability list is in scope (network resilience,
   buffering visibility, structured errors + counters, safety-net tests and CI).
@@ -303,6 +316,34 @@ implemented yet.
   `PlaybackCore` model tests and add media fuzz tests.
 - Rejected/deferred: no configurable buffer/latency settings; no deeper
   prefetch beyond the next track.
+
+### Implemented after the audit (2026-11)
+
+- **Fades:** 20 ms linear output envelopes in the PipeWire RT callback for
+  pause, resume, seek, manual track changes/stop and the start of a fresh
+  track/load. The stream is still deactivated on pause, but only after the
+  fade-out has been consumed; gapless and crossfaded handoffs deliberately do
+  not double-fade.
+- **Crossfade:** `Ctrl+F` toggles an optional 5 s equal-length crossfade. The
+  preload worker decodes the next track at the current pipeline rate
+  (`Decoder::open_with_output_rate`), the worker mixes the tail/head with
+  complementary gains, and the boundary event now reports the next track's
+  start offset so the core, MPRIS and UI positions stay correct. With
+  crossfade on, a rate change no longer drains/renegotiates the stream; with
+  it off the old handoff behavior is unchanged.
+- **Normalization:** `Ctrl+Shift+N` cycles off → track → album. The decoder
+  captures ReplayGain tags at open (format metadata first, stream metadata
+  fallback) and the worker applies the linear gain before the ring, clipping
+  at S16. Default off; no EBU R128 scan yet.
+- **UI:** a bold `N` chip on the top bar and in fullscreen right of the repeat
+  insight, plus `transition-fade-sharp.svg` beside the repeat insight when
+  crossfade is on. Mode changes travel through `PlayerOp` and the existing
+  `PlaybackState.reserved` bits (no frame-size change). All of it is
+  session-only, like volume.
+- **Tests:** unit tests for the fade envelope, ReplayGain mode selection and
+  clipping, crossfade-aware boundary offset, protocol round-trips and core
+  state; the live ignored crossfade test asserts the boundary arrives with a
+  multi-second next-track offset.
 
 ### Roadmap
 
@@ -322,17 +363,17 @@ expected to land with tests and documentation; nothing is committed on a date.
 - **Phase 3 — F32.** Move the decode -> ring -> PipeWire path to F32 (internal
   and output only), keeping S16 only as the fallback where a sink cannot accept
   F32; no S24, resampler configuration or dither.
-- **Phase 4 — transitions/loudness/UI binds.** Close the rate-change gap, add
-  fade-in/out and optional crossfade, then loudness normalization (default
-  off); bind the crossfade control (icon, `Ctrl+F`) beside repeat and the bold
-  `N` normalization control (`Ctrl+Shift+N`) on the top bar and in fullscreen.
+- **Phase 4 — transitions/loudness/UI binds (landed 2026-11).** Shipped:
+  fades, optional crossfade, tag-driven normalization and both UI controls.
+  Remaining follow-ups here: configurable crossfade length, EBU R128 fallback
+  analysis, and F32 headroom from Phase 3.
 - **Phase 5 — docs/measurements.** Update this document and
   `docs/Keybinds.md`, extend the measurement tables with transition, latency
   and RSS numbers for the new paths, and state what remains unimplemented.
 
 ### Open notes
 
-- `src/icons/transition-fade-sharp.svg` is untracked; commit it only with the
-  Phase 4 change that references it.
+- `src/icons/transition-fade-sharp.svg` is now referenced by the fullscreen
+  crossfade control and is tracked with that change.
 - Loudness normalization ships **default off**, and ReplayGain tags are read
   first: tag-driven gain comes before any analysis or fallback policy.

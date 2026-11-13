@@ -464,6 +464,10 @@ pub enum PlayerOp {
         id: String,
         favorite: bool,
     },
+    /// Cycle the ReplayGain normalization mode (off -> track -> album).
+    CycleNormalization,
+    /// Toggle optional crossfade between tracks.
+    ToggleCrossfade,
     /// Ask the core to replay the playback state and the queue rows.
     Resync,
 }
@@ -493,6 +497,8 @@ impl PlayerOp {
             Self::ShuffleQueue => 19,
             Self::SetTrackFavorite { .. } => 20,
             Self::Resync => 21,
+            Self::CycleNormalization => 22,
+            Self::ToggleCrossfade => 23,
         }
     }
 }
@@ -528,6 +534,11 @@ pub struct PlaybackState {
     pub rate_milli: u16,
     pub reserved: u16,
 }
+
+/// `PlaybackState::reserved` layout: bits 0-1 ReplayGain normalization mode,
+/// bit 2 crossfade enabled.
+pub const RESERVED_NORMALIZATION_MASK: u16 = 0b11;
+pub const RESERVED_CROSSFADE: u16 = 1 << 2;
 
 pub const STATE_FLAG_MUTED: u32 = 1 << 0;
 pub const STATE_FLAG_LOADING: u32 = 1 << 1;
@@ -573,6 +584,15 @@ impl PlaybackState {
 
     pub fn volume(&self) -> f64 {
         f64::from(self.volume_milli) / 10.0
+    }
+
+    /// ReplayGain mode code (0 off, 1 track, 2 album).
+    pub fn normalization_code(&self) -> u8 {
+        (self.reserved & RESERVED_NORMALIZATION_MASK) as u8
+    }
+
+    pub fn crossfade(&self) -> bool {
+        self.reserved & RESERVED_CROSSFADE != 0
     }
 
     pub fn position(&self) -> f64 {
@@ -1003,6 +1023,8 @@ impl PlayerRequest {
             | PlayerOp::ToggleMute
             | PlayerOp::CycleRepeat
             | PlayerOp::ShuffleQueue
+            | PlayerOp::CycleNormalization
+            | PlayerOp::ToggleCrossfade
             | PlayerOp::Resync => {}
         }
         w.0
@@ -1051,6 +1073,8 @@ impl PlayerRequest {
                 favorite: r.u8()? != 0,
             },
             21 => PlayerOp::Resync,
+            22 => PlayerOp::CycleNormalization,
+            23 => PlayerOp::ToggleCrossfade,
             tag => {
                 return Err(ProtocolError::new(
                     ErrorCode::BadPayload,

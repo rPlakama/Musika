@@ -105,6 +105,7 @@ impl AppRoot {
                 self.open_wipe_menu();
             }
             2 => self.activate_container_download(),
+            3 => self.player.cycle_normalization(),
             4 => self.activate_container_favorite(),
             5 => self.open_page_menu(5, true),
             _ => {}

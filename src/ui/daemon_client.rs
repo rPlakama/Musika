@@ -51,7 +51,7 @@ use crate::ipc_protocol::{
     PlayerReply, PlayerRequest, QueueDelta, QueueOp, QueueRows, ReplyJson, RequestJson, Role,
     UI_FEATURES, VERSION, WireTrack,
 };
-use crate::player::{Repeat, State, Track};
+use crate::player::{Normalization, Repeat, State, Track};
 
 /// How long `Client::connect` waits for the freshly spawned daemon to bind.
 const CONNECT_STEP: Duration = Duration::from_millis(50);
@@ -750,6 +750,8 @@ pub struct PlaybackView {
     volume: f64,
     muted: bool,
     repeat: Repeat,
+    normalization: Normalization,
+    crossfade: bool,
     loading: bool,
     duration: f64,
     anchor: PlaybackState,
@@ -770,6 +772,8 @@ impl Default for PlaybackView {
             volume: crate::consts::DEFAULT_VOLUME,
             muted: false,
             repeat: Repeat::Off,
+            normalization: Normalization::Off,
+            crossfade: false,
             loading: false,
             duration: 0.0,
             anchor: PlaybackState::default(),
@@ -799,6 +803,8 @@ impl PlaybackView {
         self.anchor = state;
         self.state = state.state().into();
         self.repeat = state.repeat().into();
+        self.normalization = Normalization::from_code(state.normalization_code());
+        self.crossfade = state.crossfade();
         self.volume = state.volume();
         self.muted = state.muted();
         self.loading = state.loading();
@@ -945,6 +951,14 @@ impl PlaybackView {
 
     pub fn repeat(&self) -> Repeat {
         self.repeat
+    }
+
+    pub fn normalization(&self) -> Normalization {
+        self.normalization
+    }
+
+    pub fn crossfade(&self) -> bool {
+        self.crossfade
     }
 
     pub fn index(&self) -> usize {
@@ -1154,6 +1168,12 @@ impl PlaybackClient {
     pub fn cycle_repeat(&self) {
         self.send(PlayerOp::CycleRepeat);
     }
+    pub fn cycle_normalization(&self) {
+        self.send(PlayerOp::CycleNormalization);
+    }
+    pub fn toggle_crossfade(&self) {
+        self.send(PlayerOp::ToggleCrossfade);
+    }
     pub fn shuffle_queue(&self) {
         self.send(PlayerOp::ShuffleQueue);
     }
@@ -1213,6 +1233,12 @@ impl AppPlayer {
     }
     pub fn repeat(&self) -> Repeat {
         self.view.repeat()
+    }
+    pub fn normalization(&self) -> Normalization {
+        self.view.normalization()
+    }
+    pub fn crossfade(&self) -> bool {
+        self.view.crossfade()
     }
     pub fn index(&self) -> usize {
         self.view.index()
@@ -1320,6 +1346,12 @@ impl AppPlayer {
     }
     pub fn cycle_repeat(&self) {
         self.client.cycle_repeat();
+    }
+    pub fn cycle_normalization(&self) {
+        self.client.cycle_normalization();
+    }
+    pub fn toggle_crossfade(&self) {
+        self.client.toggle_crossfade();
     }
     pub fn shuffle_queue(&self) {
         self.client.shuffle_queue();

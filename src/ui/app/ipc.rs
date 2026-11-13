@@ -53,6 +53,8 @@ impl AppRoot {
                 PlayerOp::Seek(seconds) => self.player.seek(seconds),
                 PlayerOp::SeekRelative(offset) => self.player.seek_relative(offset),
                 PlayerOp::CycleRepeat => self.player.cycle_repeat(),
+                PlayerOp::CycleNormalization => self.player.cycle_normalization(),
+                PlayerOp::ToggleCrossfade => self.player.toggle_crossfade(),
                 PlayerOp::ShuffleQueue => self.player.shuffle_queue(),
                 PlayerOp::SetMuted(_)
                 | PlayerOp::Jump(_)

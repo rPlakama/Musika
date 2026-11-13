@@ -62,6 +62,8 @@ pub(crate) struct Ring {
     muted: AtomicBool,
     /// Volume in 1/1000 units (0..=1000).
     volume: AtomicU32,
+    /// Pending output envelope request: 0 none, 1 fade in, 2 fade out.
+    fade_request: AtomicU32,
     wake_fd: libc::c_int,
 }
 
@@ -109,6 +111,7 @@ impl Ring {
             paused: AtomicBool::new(false),
             muted: AtomicBool::new(false),
             volume: AtomicU32::new(1000),
+            fade_request: AtomicU32::new(0),
             wake_fd,
         })
     }
@@ -196,6 +199,19 @@ impl Ring {
     pub(crate) fn set_volume(&self, volume: f64) {
         let milli = (volume.clamp(0.0, 1.0) * 1000.0).round() as u32;
         self.volume.store(milli, Ordering::Relaxed);
+    }
+
+    /// Asks the RT callback to ramp the output up from silence (resume, new
+    /// track) or down to silence (pause, stop).
+    pub(crate) fn request_fade(&self, fade_in: bool) {
+        self.fade_request
+            .store(if fade_in { 1 } else { 2 }, Ordering::Release);
+        self.wake();
+    }
+
+    /// RT side: consumes the pending envelope request (0 none, 1 in, 2 out).
+    pub(crate) fn take_fade_request(&self) -> u32 {
+        self.fade_request.swap(0, Ordering::AcqRel)
     }
 
     /// Discards queued audio and rejects all writes from older epochs.
@@ -453,6 +469,16 @@ mod tests {
         ring.write(&input, epoch);
         assert_eq!(ring.read_into(&mut out, RING_FRAMES), RING_FRAMES);
         assert_eq!(&out[..16], &input[..16]);
+    }
+
+    #[test]
+    fn fade_requests_are_latched_for_the_rt_callback() {
+        let ring = Ring::new().unwrap();
+        ring.request_fade(true);
+        assert_eq!(ring.take_fade_request(), 1);
+        ring.request_fade(false);
+        assert_eq!(ring.take_fade_request(), 2);
+        assert_eq!(ring.take_fade_request(), 0, "requests are consumed once");
     }
 
     #[test]

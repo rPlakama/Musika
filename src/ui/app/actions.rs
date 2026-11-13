@@ -332,6 +332,26 @@ impl AppRoot {
         }
     }
 
+    pub(in crate::ui) fn on_crossfade_toggle(
+        &mut self,
+        _: &CrossfadeToggle,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.player.toggle_crossfade();
+        cx.notify();
+    }
+
+    pub(in crate::ui) fn on_normalization_cycle(
+        &mut self,
+        _: &NormalizationCycle,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.player.cycle_normalization();
+        cx.notify();
+    }
+
     pub(in crate::ui) fn on_repeat_cycle(
         &mut self,
         _: &RepeatCycle,

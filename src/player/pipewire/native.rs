@@ -10,6 +10,7 @@ use std::sync::atomic::Ordering;
 
 use super::sink::Sink;
 use super::status::{Shared, SinkStatus};
+use crate::player::Normalization;
 use super::worker::Worker;
 
 /// Buffered-byte thresholds for the loading-clear heuristic: a twentieth of the
@@ -84,6 +85,16 @@ impl Native {
         self.sink.set_muted(muted);
     }
 
+    pub(crate) fn set_normalization(&self, mode: Normalization) {
+        self.shared
+            .normalization
+            .store(u32::from(mode.code()), Ordering::Release);
+    }
+
+    pub(crate) fn set_crossfade(&self, enabled: bool) {
+        self.shared.crossfade.store(enabled, Ordering::Release);
+    }
+
     /// Descriptor the engine polls for boundary / stream-state / decoder
     /// wakeups. `-1` when the shared eventfd could not be created.
     pub(crate) fn wake_fd(&self) -> libc::c_int {
@@ -96,7 +107,7 @@ impl Native {
 
     /// Consumes a crossed gapless boundary, returning the next track's
     /// duration and stream size.
-    pub(crate) fn take_boundary_event(&self) -> Option<(f64, u64)> {
+    pub(crate) fn take_boundary_event(&self) -> Option<(f64, u64, f64)> {
         if !self.shared.boundary_active.load(Ordering::Acquire) {
             return None;
         }
@@ -111,6 +122,11 @@ impl Native {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let stream_size = self.shared.boundary_stream_size.load(Ordering::Acquire);
+        let origin = *self
+            .shared
+            .boundary_origin
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         {
             let mut status = self.shared.lock();
             status.duration = duration;
@@ -122,8 +138,8 @@ impl Native {
             .shared
             .clock_origin
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = 0.0;
-        Some((duration, stream_size))
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = origin;
+        Some((duration, stream_size, origin))
     }
 
     /// True once for each decoder that opened since the last call.

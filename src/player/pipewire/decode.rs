@@ -31,7 +31,7 @@ use ffmpeg::frame;
 use ffmpeg::packet::Mut as _;
 use ffmpeg::software::resampling;
 use ffmpeg::util::format::Sample;
-use ffmpeg::{ChannelLayout, Dictionary, Error, Packet, Rational};
+use ffmpeg::{ChannelLayout, Dictionary, DictionaryRef, Error, Packet, Rational};
 use ffmpeg_next as ffmpeg;
 
 use super::ring::{DEFAULT_RATE, MAX_RATE};
@@ -45,11 +45,44 @@ const TARGET_CHANNELS: i32 = 2;
 /// Packed (interleaved) S16, matching `TARGET_CHANNELS` at the source rate.
 const TARGET_SAMPLE: Sample = Sample::I16(ffmpeg::format::sample::Type::Packed);
 
+/// ReplayGain metadata keys; matched case-insensitively because containers and
+/// FFmpeg versions disagree on the casing (FFmpeg often lowercases tags).
+const REPLAYGAIN_TRACK_GAIN: &str = "replaygain_track_gain";
+const REPLAYGAIN_ALBUM_GAIN: &str = "replaygain_album_gain";
+
 /// Clamps a source rate to a pipeline-supported rate. Rates above
 /// [`MAX_PIPELINE_RATE`] are downsampled; a decoded frame rate of 0 is treated
 /// as "unknown" by the caller.
 fn pipeline_rate(rate: u32) -> u32 {
     rate.clamp(1, MAX_PIPELINE_RATE)
+}
+
+/// Parses a ReplayGain gain value such as `-7.23 dB` or `3.5`.
+///
+/// Tolerant by design: surrounding whitespace and a trailing `dB` (any casing)
+/// are ignored, malformed values and non-finite numbers (NaN/inf) yield `None`.
+fn parse_replaygain_db(value: &str) -> Option<f64> {
+    let value = value.trim();
+    let value = ["dB", "db", "Db", "DB"]
+        .into_iter()
+        .find_map(|suffix| value.strip_suffix(suffix))
+        .unwrap_or(value)
+        .trim();
+    value.parse::<f64>().ok().filter(|gain| gain.is_finite())
+}
+
+/// Extracts the ReplayGain track and album gains from one metadata dictionary.
+fn replaygain_from_metadata(metadata: &DictionaryRef<'_>) -> (Option<f64>, Option<f64>) {
+    let mut track = None;
+    let mut album = None;
+    for (key, value) in metadata.iter() {
+        if key.eq_ignore_ascii_case(REPLAYGAIN_TRACK_GAIN) {
+            track = parse_replaygain_db(value);
+        } else if key.eq_ignore_ascii_case(REPLAYGAIN_ALBUM_GAIN) {
+            album = parse_replaygain_db(value);
+        }
+    }
+    (track, album)
 }
 
 /// Network read-ahead. The transport worker streams a track instead of
@@ -169,7 +202,7 @@ fn open_input(url: &str, stop: &Arc<AtomicBool>) -> Result<format::context::Inpu
 }
 
 /// A demux/decode/resample pipeline producing interleaved S16 stereo at the
-/// source rate (capped to [`MAX_PIPELINE_RATE`]).
+/// source rate (or a caller-forced rate), capped to [`MAX_PIPELINE_RATE`].
 ///
 /// `read` never allocates from Rust: packet, decode frame, resample frame and
 /// pending PCM all live in this struct, and the caller supplies the output.
@@ -184,8 +217,12 @@ pub(crate) struct Decoder {
     stream_index: usize,
     stream_time_base: Rational,
     duration: f64,
-    /// Output PCM rate in Hz, resolved by [`Decoder::open`].
+    /// Output PCM rate in Hz, resolved by [`Decoder::open`] or forced by
+    /// [`Decoder::open_with_output_rate`].
     rate: u32,
+    /// ReplayGain tags captured from the format/audio-stream metadata at open.
+    replaygain_track_gain_db: Option<f64>,
+    replaygain_album_gain_db: Option<f64>,
     seekable: bool,
     stop: Arc<AtomicBool>,
     /// Frames currently available in `converted`, and how many were consumed.
@@ -202,7 +239,23 @@ pub(crate) struct Decoder {
 }
 
 impl Decoder {
+    /// Opens `url` and presents S16 stereo at the source's native rate.
     pub(crate) fn open(url: &str, stop: Arc<AtomicBool>) -> Result<Self, String> {
+        Self::open_with_output_rate(url, stop, None)
+    }
+
+    /// Opens `url` and presents interleaved S16 stereo at `output_rate` when it
+    /// is given, resampling the source there with the existing swresample path
+    /// (used by crossfades to keep both tracks on one pipeline rate).
+    ///
+    /// A forced rate wins over the rate FFmpeg reports for the source and is
+    /// clamped to `1..=MAX_PIPELINE_RATE`; [`Decoder::sample_rate`] reports
+    /// it. `None` adopts the source rate exactly like [`Decoder::open`].
+    pub(crate) fn open_with_output_rate(
+        url: &str,
+        stop: Arc<AtomicBool>,
+        output_rate: Option<u32>,
+    ) -> Result<Self, String> {
         initialize();
 
         if url.is_empty() {
@@ -217,7 +270,12 @@ impl Decoder {
 
         let input = open_input(url, &stop)?;
 
-        let (stream_index, stream_time_base, duration, parameters) = {
+        // ReplayGain tags are usually format-level, but some containers keep
+        // them on the audio stream. Capture both here: the metadata views
+        // borrow `input`, which is moved into `Self` below.
+        let format_gain = replaygain_from_metadata(&input.metadata());
+
+        let (stream_index, stream_time_base, duration, parameters, stream_gain) = {
             let stream = input
                 .streams()
                 .best(ffmpeg::media::Type::Audio)
@@ -239,8 +297,18 @@ impl Decoder {
                 }
             }
 
-            (index, time_base, duration.max(0.0), stream.parameters())
+            let stream_gain = replaygain_from_metadata(&stream.metadata());
+            (
+                index,
+                time_base,
+                duration.max(0.0),
+                stream.parameters(),
+                stream_gain,
+            )
         };
+        // Format-level tags take precedence; stream tags only fill the gaps.
+        let track_gain_db = format_gain.0.or(stream_gain.0);
+        let album_gain_db = format_gain.1.or(stream_gain.1);
 
         let mut codec_context = codec::Context::from_parameters(parameters).map_err(|error| {
             context_error("decoder: cannot apply audio codec parameters", error)
@@ -284,7 +352,9 @@ impl Decoder {
             stream_index,
             stream_time_base,
             duration,
-            rate: 0,
+            rate: output_rate.map_or(0, pipeline_rate),
+            replaygain_track_gain_db: track_gain_db,
+            replaygain_album_gain_db: album_gain_db,
             seekable,
             stop,
             pending_frames: 0,
@@ -304,10 +374,16 @@ impl Decoder {
     /// Resolves the output rate from the codec parameters, falling back to the
     /// first decoded frame and finally to [`DEFAULT_RATE`].
     ///
-    /// Most containers/decoders report the rate in the codec parameters, so
-    /// this does no decoding at all. When they do not, one frame is decoded and
-    /// kept pending so `read` can deliver it later.
+    /// A caller-forced rate is already set and always wins. Otherwise, most
+    /// containers/decoders report the rate in the codec parameters, so this
+    /// does no decoding at all; when they do not, one frame is decoded and kept
+    /// pending so `read` can deliver it later.
     fn resolve_rate(&mut self) -> Result<(), String> {
+        if self.rate > 0 {
+            // Forced output rate (crossfade): keep it for every frame, even if
+            // the codec's own rate disagrees; swresample converts the source.
+            return Ok(());
+        }
         let reported = self.audio.rate();
         if reported > 0 {
             self.rate = pipeline_rate(reported);
@@ -329,10 +405,22 @@ impl Decoder {
     }
 
     /// Output PCM sample rate in Hz. It is the track's source rate (so the
-    /// PipeWire graph can present it natively), clamped to
-    /// [`MAX_PIPELINE_RATE`].
+    /// PipeWire graph can present it natively) unless the caller forced one,
+    /// clamped to [`MAX_PIPELINE_RATE`].
     pub(crate) fn sample_rate(&self) -> u32 {
         self.rate
+    }
+
+    /// ReplayGain track gain in dB, captured at open from format or audio-stream
+    /// metadata. `None` when the tag is absent or malformed.
+    pub(crate) fn replaygain_track_gain_db(&self) -> Option<f64> {
+        self.replaygain_track_gain_db
+    }
+
+    /// ReplayGain album gain in dB, captured at open from format or audio-stream
+    /// metadata. `None` when the tag is absent or malformed.
+    pub(crate) fn replaygain_album_gain_db(&self) -> Option<f64> {
+        self.replaygain_album_gain_db
     }
 
     /// Byte size of the input when the protocol/container reports one,
@@ -761,6 +849,8 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use ffmpeg_next as ffmpeg;
+
     struct WavFile {
         path: PathBuf,
     }
@@ -802,7 +892,80 @@ mod tests {
         fs::write(path, bytes).expect("write test WAV");
     }
 
-    fn wav_fixture(sample_rate: u32, channels: u16, samples: &[i16]) -> WavFile {
+    /// Builds an ID3v2.3 tag with one `TXXX` frame per key/value pair.
+    fn id3v2_txxx_tag(tags: &[(&str, &str)]) -> Vec<u8> {
+        let mut frames = Vec::new();
+        for (key, value) in tags {
+            let mut payload = Vec::new();
+            payload.push(0u8); // ISO-8859-1 encoding
+            payload.extend_from_slice(key.as_bytes());
+            payload.push(0); // description terminator
+            payload.extend_from_slice(value.as_bytes());
+            payload.push(0); // value terminator
+            frames.extend_from_slice(b"TXXX");
+            frames.extend_from_slice(
+                &u32::try_from(payload.len())
+                    .expect("test tag frame too large")
+                    .to_be_bytes(),
+            );
+            frames.extend_from_slice(&[0, 0]); // frame flags
+            frames.extend_from_slice(&payload);
+        }
+        let size = u32::try_from(frames.len()).expect("test tag too large");
+        let mut tag = Vec::with_capacity(10 + frames.len());
+        tag.extend_from_slice(b"ID3");
+        tag.extend_from_slice(&[3, 0, 0]); // v2.3, no flags
+        tag.extend_from_slice(&[
+            ((size >> 21) & 0x7f) as u8,
+            ((size >> 14) & 0x7f) as u8,
+            ((size >> 7) & 0x7f) as u8,
+            (size & 0x7f) as u8,
+        ]);
+        tag.extend_from_slice(&frames);
+        tag
+    }
+
+    /// Writes a PCM WAV with an `id3 ` chunk (before `data`) carrying `tags`.
+    fn write_tagged_wav(
+        path: &Path,
+        sample_rate: u32,
+        channels: u16,
+        samples: &[i16],
+        tags: &[(&str, &str)],
+    ) {
+        let data_len = u32::try_from(samples.len() * 2).expect("test WAV too large");
+        let byte_rate = sample_rate * u32::from(channels) * 2;
+        let block_align = channels * 2;
+        let tag = id3v2_txxx_tag(tags);
+        let tag_len = u32::try_from(tag.len()).expect("test WAV tag too large");
+        let riff_len = 4 // "WAVE"
+            + 8 + 16 // fmt chunk
+            + 8 + tag_len // id3 chunk
+            + 8 + data_len; // data chunk
+        let mut bytes = Vec::with_capacity((8 + riff_len) as usize);
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&riff_len.to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // linear PCM
+        bytes.extend_from_slice(&channels.to_le_bytes());
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&byte_rate.to_le_bytes());
+        bytes.extend_from_slice(&block_align.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"id3 ");
+        bytes.extend_from_slice(&tag_len.to_le_bytes());
+        bytes.extend_from_slice(&tag);
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        for sample in samples {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        fs::write(path, bytes).expect("write tagged test WAV");
+    }
+
+    /// Unique temporary WAV path; its directory is removed by [`WavFile`].
+    fn temp_wav_path() -> PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let serial = COUNTER.fetch_add(1, Ordering::Relaxed);
         let nanos = SystemTime::now()
@@ -816,8 +979,23 @@ mod tests {
             nanos
         ));
         fs::create_dir_all(&dir).expect("create test temp dir");
-        let path = dir.join("fixture.wav");
+        dir.join("fixture.wav")
+    }
+
+    fn wav_fixture(sample_rate: u32, channels: u16, samples: &[i16]) -> WavFile {
+        let path = temp_wav_path();
         write_wav(&path, sample_rate, channels, samples);
+        WavFile { path }
+    }
+
+    fn tagged_wav_fixture(
+        sample_rate: u32,
+        channels: u16,
+        samples: &[i16],
+        tags: &[(&str, &str)],
+    ) -> WavFile {
+        let path = temp_wav_path();
+        write_tagged_wav(&path, sample_rate, channels, samples, tags);
         WavFile { path }
     }
 
@@ -957,6 +1135,107 @@ mod tests {
             (19_000..=19_400).contains(&total),
             "unexpected capped frame count: {total}"
         );
+    }
+
+    #[test]
+    fn forced_output_rate_resamples_to_the_requested_rate() {
+        let rate = 44_100u32;
+        let frames = (rate as f64 * 0.2) as usize;
+        let mut mono = Vec::with_capacity(frames);
+        for index in 0..frames {
+            let time = index as f64 / f64::from(rate);
+            let sample = 10_000.0 * (2.0 * std::f64::consts::PI * 440.0 * time).sin();
+            mono.push(sample as i16);
+        }
+        let file = wav_fixture(rate, 1, &mono);
+        let path = file.path().to_str().expect("utf-8 temp path");
+
+        let mut forced = Decoder::open_with_output_rate(path, new_stop(), Some(48_000))
+            .expect("open the 44.1 kHz fixture with a forced 48 kHz output");
+        assert_eq!(forced.sample_rate(), 48_000);
+        let mut out = vec![0i16; 2_048 * 2];
+        let mut total = 0usize;
+        loop {
+            let read = forced
+                .read(&mut out, 2_048)
+                .expect("decode forced-rate WAV");
+            if read == 0 {
+                break;
+            }
+            total += read;
+            assert!(total < 48_000, "forced-rate decoder never reached EOF");
+        }
+        // 0.2 s at the forced 48 kHz output is 9,600 frames (the 44.1 kHz
+        // source has 8,820): the length proves the resampler output rate.
+        assert!(
+            (9_400..=9_800).contains(&total),
+            "unexpected forced-rate frame count: {total}"
+        );
+
+        // `open` keeps the native rate.
+        let native = Decoder::open(path, new_stop()).expect("open the fixture natively");
+        assert_eq!(native.sample_rate(), rate);
+
+        // Forced rates are clamped to the pipeline maximum.
+        let clamped = Decoder::open_with_output_rate(path, new_stop(), Some(384_000))
+            .expect("open with an out-of-range forced rate");
+        assert_eq!(clamped.sample_rate(), super::MAX_PIPELINE_RATE);
+    }
+
+    #[test]
+    fn replaygain_db_parser_is_tolerant() {
+        assert_eq!(super::parse_replaygain_db("-7.23 dB"), Some(-7.23));
+        assert_eq!(super::parse_replaygain_db("+3.5"), Some(3.5));
+        assert_eq!(super::parse_replaygain_db("  2.50db  "), Some(2.5));
+        assert_eq!(super::parse_replaygain_db("1 DB"), Some(1.0));
+        assert_eq!(super::parse_replaygain_db("0"), Some(0.0));
+        assert_eq!(super::parse_replaygain_db(""), None);
+        assert_eq!(super::parse_replaygain_db("loud"), None);
+        assert_eq!(super::parse_replaygain_db("-7.2 dB extra"), None);
+        assert_eq!(super::parse_replaygain_db("NaN"), None);
+        assert_eq!(super::parse_replaygain_db("inf dB"), None);
+        assert_eq!(super::parse_replaygain_db("-inf"), None);
+    }
+
+    #[test]
+    fn replaygain_metadata_is_collected_case_insensitively() {
+        let mut format = ffmpeg::Dictionary::new();
+        format.set("REPLAYGAIN_TRACK_GAIN", "-7.23 dB");
+        format.set("replaygain_album_gain", "+1.5 dB");
+        assert_eq!(
+            super::replaygain_from_metadata(&format),
+            (Some(-7.23), Some(1.5))
+        );
+
+        let mut stream = ffmpeg::Dictionary::new();
+        stream.set("ReplayGain_Track_Gain", "malformed");
+        stream.set("ReplayGain_Album_Gain", "3.5");
+        assert_eq!(super::replaygain_from_metadata(&stream), (None, Some(3.5)));
+    }
+
+    #[test]
+    fn replaygain_tags_are_captured_at_open() {
+        let samples = vec![0i16; 1_000 * 2];
+        let file = tagged_wav_fixture(
+            48_000,
+            2,
+            &samples,
+            &[
+                ("REPLAYGAIN_TRACK_GAIN", "-7.2 dB"),
+                ("REPLAYGAIN_ALBUM_GAIN", "+1.5 dB"),
+            ],
+        );
+        let decoder = Decoder::open(file.path().to_str().expect("utf-8 temp path"), new_stop())
+            .expect("open tagged WAV");
+        assert_eq!(decoder.replaygain_track_gain_db(), Some(-7.2));
+        assert_eq!(decoder.replaygain_album_gain_db(), Some(1.5));
+
+        // A fixture without tags reports no gain.
+        let plain = wav_fixture(48_000, 2, &samples);
+        let decoder = Decoder::open(plain.path().to_str().expect("utf-8 temp path"), new_stop())
+            .expect("open untagged WAV");
+        assert_eq!(decoder.replaygain_track_gain_db(), None);
+        assert_eq!(decoder.replaygain_album_gain_db(), None);
     }
 
     #[test]

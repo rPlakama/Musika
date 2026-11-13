@@ -127,6 +127,8 @@ actions!(
         PasteBelow,
         PasteAbove,
         RepeatCycle,
+        CrossfadeToggle,
+        NormalizationCycle,
         SearchScopeNext,
         SearchScopePrev,
         ToggleFullscreen,
@@ -149,6 +151,8 @@ pub fn run() {
                 KeyBinding::new("ctrl-shift-k", QueueUp, Some("main")),
                 KeyBinding::new("ctrl-shift-j", QueueDown, Some("main")),
                 KeyBinding::new("ctrl-r", RepeatCycle, Some("main")),
+                KeyBinding::new("ctrl-f", CrossfadeToggle, Some("main")),
+                KeyBinding::new("ctrl-shift-n", NormalizationCycle, Some("main")),
                 KeyBinding::new("tab", SearchScopeNext, Some("main")),
                 KeyBinding::new("shift-tab", SearchScopePrev, Some("main")),
                 KeyBinding::new("shift-enter", ToggleFullscreen, Some("main")),
@@ -611,6 +615,7 @@ enum TopBarAction {
     Download,
     Favorite,
     Tool,
+    Normalization,
 }
 
 impl TopBarAction {
@@ -621,6 +626,7 @@ impl TopBarAction {
             Self::Download => 2,
             Self::Favorite => 4,
             Self::Tool => 5,
+            Self::Normalization => 3,
         }
     }
 
@@ -639,6 +645,7 @@ impl TopBarAction {
                 SuperiorMode::Home | SuperiorMode::Playlist | SuperiorMode::Radio => "Favorite",
             },
             Self::Tool => "Tool",
+            Self::Normalization => "Loudness normalization",
         }
     }
 }
@@ -690,7 +697,7 @@ fn page_actions(page: &PageBarState<'_>, artist_tool: bool) -> Vec<TopBarAction>
 
 fn topbar_actions_for(mode: SuperiorMode, page: Option<&PageBarState<'_>>) -> Vec<TopBarAction> {
     match mode {
-        SuperiorMode::Home => vec![TopBarAction::Sync],
+        SuperiorMode::Home => vec![TopBarAction::Sync, TopBarAction::Normalization],
         SuperiorMode::Album => page
             .map(|page| page_actions(page, false))
             .unwrap_or_default(),

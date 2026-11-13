@@ -61,7 +61,7 @@ printf 'queue\n' | nc -U ~/.config/musika/ipc.sock
 
 | Command | Answer (one JSON line) |
 | --- | --- |
-| `status` | `state` (`playing`/`paused`/`stopped`), `index`, `queue_rev`, `duration`, `position`, `volume`, `muted`, `loading`, `engine_available`, `current` (`{id,title,artist,album}` or `null`), `last_error` |
+| `status` | `state` (`playing`/`paused`/`stopped`), `index`, `queue_rev`, `duration`, `position`, `volume`, `muted`, `loading`, `normalization` (0 off / 1 track / 2 album), `crossfade`, `engine_available`, `current` (`{id,title,artist,album}` or `null`), `last_error` |
 | `queue` | `rev`, `index`, `len`, `ids` (queue ids in order) |
 
 Every other `ipc.sock` command stays fire-and-forget and writes no reply, which

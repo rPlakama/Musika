@@ -39,6 +39,15 @@ use super::status::{Shared, SinkState};
 /// negotiation itself happens asynchronously in the graph.
 const FORMAT_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Length of the anti-click output envelope used for pause/resume and for the
+/// start of a fresh track/seek. They are short enough not to feel like a
+/// transition, but long enough to remove the discontinuity click (~20 ms).
+const FADE_MS: f32 = 20.0;
+/// Sleep before deactivating the stream on pause so the RT callback can finish
+/// the fade-out envelope (the graph still calls it while the loop thread
+/// sleeps). The stream is deactivated afterwards exactly as before.
+const FADE_STOP_GRACE: Duration = Duration::from_millis(30);
+
 /// Logged once when PipeWire refuses a stream control (system volume/mute).
 static CONTROL_ERROR_LOGGED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -62,6 +71,69 @@ enum SinkCommand {
 struct RtContext {
     ring: Arc<Ring>,
     shared: Arc<Shared>,
+    fade: FadeState,
+}
+
+/// One linear output-gain ramp. The RT callback owns the state; requests are
+/// handed over through an atomic on the ring, so no locks or allocations run
+/// on the audio thread.
+struct FadeState {
+    from: f32,
+    to: f32,
+    remaining: u32,
+    total: u32,
+}
+
+impl FadeState {
+    fn new() -> Self {
+        Self {
+            from: 1.0,
+            to: 1.0,
+            remaining: 0,
+            total: 1,
+        }
+    }
+
+    fn active(&self) -> bool {
+        self.remaining > 0
+    }
+
+    fn current(&self) -> f32 {
+        if self.remaining == 0 {
+            self.to
+        } else {
+            let progress = self.remaining as f32 / self.total as f32;
+            self.to + (self.from - self.to) * progress
+        }
+    }
+
+    fn start(&mut self, target: f32, rate: u32) {
+        self.from = self.current();
+        self.to = target.clamp(0.0, 1.0);
+        let frames = (rate.max(1) as f32 * FADE_MS / 1000.0).round() as u32;
+        self.total = frames.max(1);
+        self.remaining = self.total;
+    }
+
+    /// Multiplies `frames` stereo frames by the ramp, advancing one step per
+    /// frame. A zero-frame callback (paused/empty ring) leaves the ramp where
+    /// it is unless the caller forces completion.
+    fn apply(&mut self, out: &mut [i16], frames: usize) {
+        if !self.active() || frames == 0 {
+            return;
+        }
+        let frames = frames.min(out.len() / ring::CHANNELS);
+        for index in 0..frames {
+            let gain = self.current();
+            for channel in 0..ring::CHANNELS {
+                let sample = f32::from(out[index * ring::CHANNELS + channel]) * gain;
+                out[index * ring::CHANNELS + channel] = sample
+                    .round()
+                    .clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16;
+            }
+            self.remaining = self.remaining.saturating_sub(1);
+        }
+    }
 }
 
 /// One connected PipeWire stream and its local listener.
@@ -151,7 +223,19 @@ impl Sink {
 
     pub(crate) fn set_paused(&self, paused: bool) {
         self.ring.set_paused(paused);
+        self.ring.request_fade(!paused);
         _ = self.commands.send(SinkCommand::SetPaused(paused));
+    }
+
+    /// Requests an output fade-in when the next PCM arrives. Used after a
+    /// load/seek reset so a fresh track starts without a click; gapless
+    /// handoffs deliberately do not call this.
+    pub(crate) fn request_fade_in(&self) {
+        self.ring.request_fade(true);
+    }
+
+    pub(crate) fn request_fade_out(&self) {
+        self.ring.request_fade(false);
     }
 
     pub(crate) fn set_muted(&self, muted: bool) {
@@ -284,6 +368,7 @@ fn build_stream<'c>(
     let listener_ctx = RtContext {
         ring: Arc::clone(ring),
         shared: Arc::clone(shared),
+        fade: FadeState::new(),
     };
     let listener = stream
         .add_local_listener_with_user_data(listener_ctx)
@@ -426,6 +511,13 @@ fn run_sink(
         for command in batch {
             match command {
                 SinkCommand::SetPaused(paused) => {
+                    if paused {
+                        // Let the RT callback consume the buffered tail
+                        // through the fade-out envelope before deactivating
+                        // the stream. The main loop may sleep here; process
+                        // callbacks run on the RT thread.
+                        std::thread::sleep(FADE_STOP_GRACE);
+                    }
                     // A failure surfaces asynchronously as a stream-state
                     // error; the engine then recovers the sink.
                     if let Err(error) = active.stream.set_active(!paused) {
@@ -501,17 +593,31 @@ fn process(stream: &pw::stream::Stream, ctx: &mut RtContext) {
     // is writable for the duration of the process callback.
     let out = unsafe { std::slice::from_raw_parts_mut(ptr, frames * ring::CHANNELS) };
     let ring = &ctx.ring;
+    match ring.take_fade_request() {
+        1 => ctx.fade.start(1.0, ring.rate()),
+        2 => ctx.fade.start(0.0, ring.rate()),
+        _ => {}
+    }
     let paused = ring.paused();
     // A deactivated PipeWire stream can still get a final/settling process
     // callback. Do not consume or advance the clock while paused; service a
     // pending reset/flush with a zero-frame read so the producer can wake.
-    if paused {
+    // While an envelope is active the callback keeps consuming the already
+    // buffered audio: this is what makes the fade-out audible before the
+    // stream is deactivated and the fade-in audible on resume.
+    if paused && !ctx.fade.active() {
         _ = ring.read_into(out, 0);
         out.fill(0);
     } else {
         let written = ring.read_into(out, frames);
         out[written * ring::CHANNELS..].fill(0);
         ring::apply_gain(out, ring.muted(), ring.volume_milli(), frames);
+        ctx.fade.apply(out, written);
+        // A paused ring with nothing buffered cannot advance a fade-out: let
+        // it finish so the next callback takes the silent paused branch.
+        if paused && written == 0 {
+            ctx.fade.remaining = 0;
+        }
     }
     // Gapless boundary as an event: the armed boundary frame lives in the same
     // absolute frame space as `played`. Wake the engine; it consumes the
@@ -530,6 +636,71 @@ fn process(stream: &pw::stream::Stream, ctx: &mut RtContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fade_out_ramps_to_silence() {
+        let mut fade = FadeState::new();
+        fade.start(0.0, 48_000);
+        assert!(fade.active());
+        let mut first = vec![i16::MAX / 2; 240 * ring::CHANNELS];
+        fade.apply(&mut first, 240);
+        assert!(
+            first.iter().all(|sample| *sample > 0),
+            "first fade-out block must be attenuated, not hard-zeroed"
+        );
+        assert!(fade.active());
+        let mut rest = vec![i16::MAX / 2; 960 * ring::CHANNELS];
+        fade.apply(&mut rest, 720);
+        assert!(!fade.active());
+        assert_eq!(fade.current(), 0.0);
+        assert!(
+            rest[..720 * ring::CHANNELS]
+                .iter()
+                .all(|sample| *sample >= 0 && *sample <= i16::MAX / 2),
+            "the fade-out is monotonically attenuated"
+        );
+        assert!(
+            rest[(720 - 8) * ring::CHANNELS..720 * ring::CHANNELS]
+                .iter()
+                .all(|sample| *sample <= 200),
+            "the tail of the fade-out is near silence"
+        );
+        let mut after = vec![i16::MAX / 2; 64 * ring::CHANNELS];
+        fade.apply(&mut after, 64);
+        assert!(
+            after.iter().all(|sample| *sample == i16::MAX / 2),
+            "once the ramp is done, the (paused) callback emits silence separately"
+        );
+    }
+
+    #[test]
+    fn fade_in_starts_at_silence_and_reaches_unity() {
+        let mut fade = FadeState::new();
+        fade.start(0.0, 48_000);
+        let mut silence = vec![i16::MAX; 960 * ring::CHANNELS];
+        fade.apply(&mut silence, 960);
+        assert_eq!(fade.current(), 0.0);
+
+        fade.start(1.0, 48_000);
+        let mut block = vec![i16::MAX; 960 * ring::CHANNELS];
+        fade.apply(&mut block, 960);
+        assert!(!fade.active());
+        assert_eq!(fade.current(), 1.0);
+        assert!(
+            block[..10].iter().all(|sample| i32::from(*sample) < 32_000),
+            "the first frames of a fade-in are near silence"
+        );
+    }
+
+    #[test]
+    fn empty_callbacks_do_not_advance_the_envelope() {
+        let mut fade = FadeState::new();
+        fade.start(0.0, 48_000);
+        let before = fade.remaining;
+        let mut empty: [i16; 0] = [];
+        fade.apply(&mut empty, 0);
+        assert_eq!(fade.remaining, before);
+    }
 
     fn sink() -> Sink {
         Sink::new(Arc::new(Shared::new())).expect("PipeWire sink")
@@ -605,9 +776,13 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(500));
         let after = sink.played_frames();
         eprintln!("paused sink played {before} -> {after}");
+        // The pause command intentionally consumes the 20 ms fade-out tail
+        // before silencing the stream; anything beyond that would be a real
+        // paused-clock advance.
+        let fade_frames = 48_000 / 1000 * 20;
         assert!(
-            after.saturating_sub(before) < 480,
-            "sink advanced {} frames while paused",
+            after.saturating_sub(before) <= fade_frames + 480,
+            "sink advanced {} frames while paused (fade budget {fade_frames})",
             after.saturating_sub(before)
         );
     }

@@ -25,7 +25,7 @@ use crate::ipc_protocol::{
 };
 use crate::player::core::{CoreCommand, Outcome, PlaybackCore};
 use crate::player::engine::{AudioCommand, EngineEvent};
-use crate::player::{Repeat, State, Track};
+use crate::player::{Normalization, Repeat, State, Track};
 
 const SECOND: u64 = 1_000_000_000;
 
@@ -103,6 +103,45 @@ fn load_starts_playing_and_resets_repeat() {
         load_url(&outcome),
         ("file:///0.flac", Some("file:///1.flac"), false)
     );
+}
+
+#[test]
+fn normalization_and_crossfade_commands_reach_the_engine_and_snapshot() {
+    let mut core = PlaybackCore::new();
+    assert_eq!(core.normalization(), Normalization::Off);
+    assert!(!core.crossfade());
+
+    let outcome = core.apply(CoreCommand::CycleNormalization);
+    assert_eq!(core.normalization(), Normalization::Track);
+    assert!(
+        outcome
+            .audio
+            .contains(&AudioCommand::SetNormalization(Normalization::Track))
+    );
+    assert!(outcome.changed);
+    let snapshot = core.snapshot(1, 0);
+    assert_eq!(snapshot.normalization_code(), 1);
+    assert!(!snapshot.crossfade());
+
+    let outcome = core.apply(CoreCommand::CycleNormalization);
+    assert_eq!(core.normalization(), Normalization::Album);
+    assert!(outcome.changed);
+    assert_eq!(core.snapshot(2, 0).normalization_code(), 2);
+
+    let outcome = core.apply(CoreCommand::ToggleCrossfade);
+    assert!(core.crossfade());
+    assert!(
+        outcome
+            .audio
+            .contains(&AudioCommand::SetCrossfade(true))
+    );
+    let snapshot = core.snapshot(3, 0);
+    assert!(snapshot.crossfade());
+    assert_eq!(snapshot.normalization_code(), 2);
+
+    let sync = core.audio_sync();
+    assert!(sync.contains(&AudioCommand::SetNormalization(Normalization::Album)));
+    assert!(sync.contains(&AudioCommand::SetCrossfade(true)));
 }
 
 #[test]
@@ -363,6 +402,7 @@ fn boundary_advances_into_the_gapless_row() {
         EngineEvent::Boundary {
             duration: 42.5,
             stream_size: 1_000,
+            position: 0.0,
         },
         5 * SECOND,
     );
@@ -381,6 +421,26 @@ fn boundary_advances_into_the_gapless_row() {
 }
 
 #[test]
+fn boundary_reports_the_crossfade_offset_as_the_new_position() {
+    let mut core = playing_core(3);
+    let outcome = core.on_engine(
+        EngineEvent::Boundary {
+            duration: 40.0,
+            stream_size: 1_000,
+            position: 4.5,
+        },
+        5 * SECOND,
+    );
+    assert_eq!(core.index(), 1);
+    assert!(outcome.audio.is_empty());
+    assert!(
+        (core.position_at(5 * SECOND) - 4.5).abs() < 1e-9,
+        "the next row begins at the crossfade offset"
+    );
+    assert!((core.position_at(6 * SECOND) - 5.5).abs() < 1e-9);
+}
+
+#[test]
 fn boundary_while_paused_keeps_the_transport_paused() {
     let mut core = PlaybackCore::new();
     _ = core.load(tracks(2), 0, true);
@@ -388,6 +448,7 @@ fn boundary_while_paused_keeps_the_transport_paused() {
         EngineEvent::Boundary {
             duration: 10.0,
             stream_size: 0,
+            position: 0.0,
         },
         SECOND,
     );
@@ -1309,6 +1370,53 @@ fn drain_events(
         }
     }
     false
+}
+
+#[test]
+#[ignore = "requires a running PipeWire session"]
+fn engine_crossfade_reports_the_next_track_offset() {
+    use crate::player::engine::Engine;
+    let (first_path, first_url) = wav_url("crossfade-a", 48_000 * 7);
+    let (second_path, second_url) = wav_url("crossfade-b", 48_000 * 10);
+    let (event_tx, event_rx) = std::sync::mpsc::channel();
+    let engine = Engine::new(event_tx).expect("PipeWire engine");
+    engine.send(AudioCommand::SetCrossfade(true));
+    engine.send(AudioCommand::Load {
+        url: first_url,
+        next_url: Some(second_url),
+        paused: false,
+        generation: 1,
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut boundary = None;
+    while std::time::Instant::now() < deadline {
+        match event_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(EngineEvent::Boundary {
+                position,
+                duration,
+                ..
+            }) => {
+                boundary = Some((position, duration));
+                break;
+            }
+            Ok(EngineEvent::Failed { message }) => panic!("crossfade failed: {message}"),
+            Ok(_) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    let (position, duration) = boundary.expect("crossfade boundary did not arrive");
+    assert!(
+        position > 1.0,
+        "crossfade should start the next row several seconds in, got {position}"
+    );
+    assert!(
+        (duration - 10.0).abs() < 0.5,
+        "boundary must describe the next row, got {duration}"
+    );
+    engine.shutdown();
+    _ = std::fs::remove_file(first_path);
+    _ = std::fs::remove_file(second_path);
 }
 
 #[test]

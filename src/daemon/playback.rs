@@ -516,6 +516,7 @@ fn publish(
     let identity_changed = state.state != published.state
         || state.index != published.index
         || state.repeat != published.repeat
+        || state.reserved != published.reserved
         || state.volume_milli != published.volume_milli
         || state.flags != published.flags
         || state.duration_ms != published.duration_ms
@@ -581,6 +582,8 @@ fn core_command(op: &PlayerOp) -> Option<CoreCommand> {
             delta: *delta,
         },
         P::CycleRepeat => CoreCommand::CycleRepeat,
+        P::CycleNormalization => CoreCommand::CycleNormalization,
+        P::ToggleCrossfade => CoreCommand::ToggleCrossfade,
         P::ShuffleQueue => CoreCommand::ShuffleQueue,
         P::SetTrackFavorite { id, favorite } => CoreCommand::SetTrackFavorite {
             id: id.clone(),

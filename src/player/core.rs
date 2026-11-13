@@ -17,7 +17,7 @@ use crate::ipc_protocol::{
     PlaybackState, QueueDelta, QueueOp, STATE_FLAG_GAPLESS_ARMED, STATE_FLAG_LOADING,
     STATE_FLAG_MUTED, WireTrack,
 };
-use crate::player::{Repeat, State, Track};
+use crate::player::{Normalization, Repeat, State, Track};
 
 use super::engine::{AudioCommand, EngineEvent};
 
@@ -57,6 +57,8 @@ pub(crate) enum CoreCommand {
     },
     CycleRepeat,
     ShuffleQueue,
+    CycleNormalization,
+    ToggleCrossfade,
     SetTrackFavorite {
         id: String,
         favorite: bool,
@@ -92,6 +94,8 @@ pub(crate) struct PlaybackCore {
     index: usize,
     state: State,
     repeat: Repeat,
+    normalization: Normalization,
+    crossfade: bool,
     volume: f64,
     muted: bool,
     /// Row revision; bumped by every queue-row mutation.
@@ -124,6 +128,8 @@ impl PlaybackCore {
             index: 0,
             state: State::Stopped,
             repeat: Repeat::Off,
+            normalization: Normalization::Off,
+            crossfade: false,
             volume: crate::consts::DEFAULT_VOLUME,
             muted: false,
             revision: 0,
@@ -158,6 +164,14 @@ impl PlaybackCore {
 
     pub(crate) fn repeat(&self) -> Repeat {
         self.repeat
+    }
+
+    pub(crate) fn normalization(&self) -> Normalization {
+        self.normalization
+    }
+
+    pub(crate) fn crossfade(&self) -> bool {
+        self.crossfade
     }
 
     pub(crate) fn index(&self) -> usize {
@@ -214,6 +228,8 @@ impl PlaybackCore {
         vec![
             AudioCommand::SetVolume(self.volume),
             AudioCommand::SetMuted(self.muted),
+            AudioCommand::SetNormalization(self.normalization),
+            AudioCommand::SetCrossfade(self.crossfade),
         ]
     }
 
@@ -246,7 +262,12 @@ impl PlaybackCore {
             state: self.state_byte(),
             repeat: self.repeat.code() as u8,
             rate_milli: 1000,
-            reserved: 0,
+            reserved: u16::from(self.normalization.code())
+                | if self.crossfade {
+                    crate::ipc_protocol::RESERVED_CROSSFADE
+                } else {
+                    0
+                },
         }
     }
 
@@ -285,6 +306,18 @@ impl PlaybackCore {
             CoreCommand::Move { from, to } => self.move_item(from, to, &mut outcome),
             CoreCommand::MoveBlock { start, len, delta } => {
                 self.move_block(start, len, delta, &mut outcome)
+            }
+            CoreCommand::CycleNormalization => {
+                self.normalization = self.normalization.cycle();
+                outcome
+                    .audio
+                    .push(AudioCommand::SetNormalization(self.normalization));
+                outcome.changed = true;
+            }
+            CoreCommand::ToggleCrossfade => {
+                self.crossfade = !self.crossfade;
+                outcome.audio.push(AudioCommand::SetCrossfade(self.crossfade));
+                outcome.changed = true;
             }
             CoreCommand::CycleRepeat => {
                 self.repeat = self.repeat.cycle();
@@ -364,7 +397,8 @@ impl PlaybackCore {
             EngineEvent::Boundary {
                 duration,
                 stream_size,
-            } => self.boundary(duration, stream_size, now_ns, &mut outcome),
+                position,
+            } => self.boundary(duration, stream_size, position, now_ns, &mut outcome),
             EngineEvent::Ended => self.advance_after_error(&mut outcome),
             EngineEvent::Failed { message } => {
                 let title = self
@@ -584,7 +618,14 @@ impl PlaybackCore {
         }
     }
 
-    fn boundary(&mut self, duration: f64, stream_size: u64, now_ns: u64, outcome: &mut Outcome) {
+    fn boundary(
+        &mut self,
+        duration: f64,
+        stream_size: u64,
+        position: f64,
+        now_ns: u64,
+        outcome: &mut Outcome,
+    ) {
         let Some(next) = self.gapless_next.take() else {
             return;
         };
@@ -595,9 +636,10 @@ impl PlaybackCore {
         self.duration = duration.max(0.0);
         self.stream_size = stream_size;
         self.loading = false;
-        // The worker already swapped decoders: the next track starts at 0 and
-        // keeps playing (or stays paused) without a new load.
-        self.anchor_position = 0.0;
+        // The worker already swapped decoders: the next track starts at 0 for
+        // a gapless handoff, or at the crossfade offset when the next track's
+        // head was mixed into the old track's tail.
+        self.anchor_position = position.max(0.0);
         self.anchor_ns = now_ns;
         self.rebase = false;
         outcome.changed = true;

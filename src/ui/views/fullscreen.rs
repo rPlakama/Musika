@@ -161,6 +161,9 @@ impl AppRoot {
         } else {
             0.0
         };
+        let crossfade_on = self.player.crossfade();
+        let normalization_on = self.player.normalization().enabled();
+        let effect_width = |on: bool| if on { 18.0 + mark_gap } else { 0.0 };
         let (title_width, artist_width) = identity_widths(
             identity_inner,
             line_width(window, &title, title_size, 700.0),
@@ -169,7 +172,10 @@ impl AppRoot {
             } else {
                 line_width(window, &artist, 12.0, 400.0)
             },
-            marks_width + repeat_width,
+            marks_width
+                + repeat_width
+                + effect_width(crossfade_on)
+                + effect_width(normalization_on),
         );
         let cover_focus = self.fullscreen_focus == FullscreenFocus::Cover;
         let title_focus = self.fullscreen_focus == FullscreenFocus::Title;
@@ -421,6 +427,37 @@ impl AppRoot {
                                                 .text_size(px(12.0))
                                                 .text_color(rgb(palette::primary()))
                                                 .child(repeat_text),
+                                        )
+                                    })
+                                    .when(crossfade_on, |this| {
+                                        this.child(
+                                            div()
+                                                .flex_none()
+                                                .w(px(18.0))
+                                                .h(px(18.0))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .child(icon(
+                                                    "transition-fade-sharp.svg",
+                                                    16.0,
+                                                    palette::primary(),
+                                                )),
+                                        )
+                                    })
+                                    .when(normalization_on, |this| {
+                                        this.child(
+                                            div()
+                                                .flex_none()
+                                                .w(px(18.0))
+                                                .h(px(18.0))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .text_size(px(13.0))
+                                                .font_weight(gpui::FontWeight::BOLD)
+                                                .text_color(rgb(palette::primary()))
+                                                .child("N"),
                                         )
                                     })
                                     .child(div().flex_1().min_w(px(8.0)))

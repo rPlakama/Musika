@@ -3,6 +3,23 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.7.3 - _F32 pipeline and float headroom_
+
+- **F32 end-to-end audio:** the decoder/swresampler now emits packed F32
+  stereo normalised to [-1, 1], the lock-free ring stores F32 (16 MiB for the
+  same 2,097,152 frames / ~10.9 s at 192 kHz), and PipeWire negotiates
+  `F32LE`. Volume, mute, the anti-click envelopes, crossfade mixing and
+  ReplayGain normalization all run in float; normalization no longer clips
+  samples to S16 before the sink, so gain staging has real headroom. The
+  graph/device performs final clipping.
+- **Verification:** a monitor capture during the live crossfade test decoded
+  768,000 F32 samples and was non-silent (peak 0.056 / RMS 0.003 at the
+  default volume). The previous 16-bit ring was 8 MiB; the extra 8 MiB is the
+  fixed cost of keeping the same buffer duration in float.
+- **Known follow-up:** there is no S16 fallback negotiation if a graph refuses
+  F32LE (PipeWire graphs normally accept it); final-device clipping remains
+  the graph's job.
+
 ## 0.7.2 - _Goodies and more goodies_
 
 - **Audible polish:** pause, resume, seek, manual track changes and fresh

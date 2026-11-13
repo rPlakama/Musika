@@ -267,6 +267,8 @@ fn every_player_op_round_trips() {
         PlayerOp::Resync,
         PlayerOp::CycleNormalization,
         PlayerOp::ToggleCrossfade,
+        PlayerOp::SetNormalization(2),
+        PlayerOp::SetCrossfade(true),
     ];
     for (index, op) in ops.into_iter().enumerate() {
         let request = PlayerRequest {

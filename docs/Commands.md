@@ -291,6 +291,8 @@ Rules:
 | `seek_forward` | `seek_forward` | Seek forward 5 seconds. |
 | `seek` | `seek <seconds>` | Seek to an absolute position. |
 | `seek_relative` | `seek_relative <±seconds>` | Seek relative to the playhead. |
+| `crossfade` | `crossfade [on\|off]` | Toggle or explicitly set the optional 5 s track crossfade. |
+| `normalize` | `normalize [off\|track\|album]` | Cycle or explicitly set ReplayGain loudness normalization (default off). |
 | `toggle_fullscreen` | `toggle_fullscreen` | Toggle fullscreen playback (`fullscreen`). |
 | `lyrics_overlay` | `lyrics_overlay` | Toggle the fullscreen lyrics overlay (`lyrics`). |
 | `show` | `show` | Spawn/raise the GPUI window (core keeps running headless). |

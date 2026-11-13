@@ -55,6 +55,10 @@ impl AppRoot {
                 PlayerOp::CycleRepeat => self.player.cycle_repeat(),
                 PlayerOp::CycleNormalization => self.player.cycle_normalization(),
                 PlayerOp::ToggleCrossfade => self.player.toggle_crossfade(),
+                PlayerOp::SetNormalization(code) => {
+                    self.player.set_normalization(crate::player::Normalization::from_code(code));
+                }
+                PlayerOp::SetCrossfade(enabled) => self.player.set_crossfade(enabled),
                 PlayerOp::ShuffleQueue => self.player.shuffle_queue(),
                 PlayerOp::SetMuted(_)
                 | PlayerOp::Jump(_)
@@ -71,6 +75,9 @@ impl AppRoot {
             return;
         }
         match command {
+            IpcCommand::Crossfade(_) | IpcCommand::Normalize(_) => {
+                unreachable!("IPC playback mapping returned a playback op")
+            }
             IpcCommand::Sync(mode) => self.start_sync(mode),
             IpcCommand::Wipe(scope) => {
                 if self.syncing {

@@ -416,6 +416,17 @@ mod ipc_toast_tests {
             "IPC · playlist add queue; \"Mix\""
         );
     }
+
+    #[test]
+    fn audio_mode_commands_use_their_dedicated_toast() {
+        assert!(AppRoot::ipc_state_has_dedicated_toast("crossfade"));
+        assert!(AppRoot::ipc_state_has_dedicated_toast("crossfade off"));
+        assert!(AppRoot::ipc_state_has_dedicated_toast("normalize album"));
+        assert!(!AppRoot::ipc_state_has_dedicated_toast("volume_up"));
+        assert!(!AppRoot::ipc_state_has_dedicated_toast(
+            "playlist add queue; \"Mix\""
+        ));
+    }
 }
 
 mod fullscreen_identity_tests {

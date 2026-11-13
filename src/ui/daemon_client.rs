@@ -1174,6 +1174,12 @@ impl PlaybackClient {
     pub fn toggle_crossfade(&self) {
         self.send(PlayerOp::ToggleCrossfade);
     }
+    pub fn set_crossfade(&self, enabled: bool) {
+        self.send(PlayerOp::SetCrossfade(enabled));
+    }
+    pub fn set_normalization(&self, mode: Normalization) {
+        self.send(PlayerOp::SetNormalization(mode.code()));
+    }
     pub fn shuffle_queue(&self) {
         self.send(PlayerOp::ShuffleQueue);
     }
@@ -1352,6 +1358,12 @@ impl AppPlayer {
     }
     pub fn toggle_crossfade(&self) {
         self.client.toggle_crossfade();
+    }
+    pub fn set_crossfade(&self, enabled: bool) {
+        self.client.set_crossfade(enabled);
+    }
+    pub fn set_normalization(&self, mode: Normalization) {
+        self.client.set_normalization(mode);
     }
     pub fn shuffle_queue(&self) {
         self.client.shuffle_queue();

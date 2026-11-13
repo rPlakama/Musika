@@ -584,6 +584,10 @@ fn core_command(op: &PlayerOp) -> Option<CoreCommand> {
         P::CycleRepeat => CoreCommand::CycleRepeat,
         P::CycleNormalization => CoreCommand::CycleNormalization,
         P::ToggleCrossfade => CoreCommand::ToggleCrossfade,
+        P::SetNormalization(code) => {
+            CoreCommand::SetNormalization(crate::player::Normalization::from_code(*code))
+        }
+        P::SetCrossfade(enabled) => CoreCommand::SetCrossfade(*enabled),
         P::ShuffleQueue => CoreCommand::ShuffleQueue,
         P::SetTrackFavorite { id, favorite } => CoreCommand::SetTrackFavorite {
             id: id.clone(),

@@ -110,7 +110,22 @@ impl AppRoot {
     /// Echoes one executed IPC/`:` command: the command line and the core both
     /// route through here so the toast format cannot drift.
     pub(in crate::ui) fn toast_ipc(&mut self, command: &str) {
+        // Crossfade/normalization commands get a dedicated toast from the
+        // playback-state change; echoing the raw `IPC · …` line as well would
+        // stack two toasts for one toggle.
+        if Self::ipc_state_has_dedicated_toast(command) {
+            return;
+        }
         self.push_toast(Self::ipc_toast_text(command), ToastKind::Notice, None);
+    }
+
+    /// Commands whose effect is announced by a dedicated state toast instead of
+    /// the generic `IPC · <command>` echo.
+    pub(in crate::ui) fn ipc_state_has_dedicated_toast(command: &str) -> bool {
+        matches!(
+            command.split_whitespace().next(),
+            Some("crossfade" | "normalize")
+        )
     }
 
     /// The toast text for one executed IPC command.

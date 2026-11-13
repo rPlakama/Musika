@@ -59,6 +59,8 @@ pub(crate) enum CoreCommand {
     ShuffleQueue,
     CycleNormalization,
     ToggleCrossfade,
+    SetNormalization(Normalization),
+    SetCrossfade(bool),
     SetTrackFavorite {
         id: String,
         favorite: bool,
@@ -308,17 +310,15 @@ impl PlaybackCore {
                 self.move_block(start, len, delta, &mut outcome)
             }
             CoreCommand::CycleNormalization => {
-                self.normalization = self.normalization.cycle();
-                outcome
-                    .audio
-                    .push(AudioCommand::SetNormalization(self.normalization));
-                outcome.changed = true;
+                let next = self.normalization.cycle();
+                self.set_normalization(next, &mut outcome);
             }
             CoreCommand::ToggleCrossfade => {
-                self.crossfade = !self.crossfade;
-                outcome.audio.push(AudioCommand::SetCrossfade(self.crossfade));
-                outcome.changed = true;
+                let next = !self.crossfade;
+                self.set_crossfade(next, &mut outcome);
             }
+            CoreCommand::SetNormalization(mode) => self.set_normalization(mode, &mut outcome),
+            CoreCommand::SetCrossfade(enabled) => self.set_crossfade(enabled, &mut outcome),
             CoreCommand::CycleRepeat => {
                 self.repeat = self.repeat.cycle();
                 outcome.changed = true;
@@ -543,6 +543,24 @@ impl PlaybackCore {
         self.index = index;
         outcome.changed = true;
         self.start_current(false, outcome);
+    }
+
+    fn set_normalization(&mut self, mode: Normalization, outcome: &mut Outcome) {
+        let changed = mode != self.normalization;
+        self.normalization = mode;
+        outcome.audio.push(AudioCommand::SetNormalization(mode));
+        if changed {
+            outcome.changed = true;
+        }
+    }
+
+    fn set_crossfade(&mut self, enabled: bool, outcome: &mut Outcome) {
+        let changed = enabled != self.crossfade;
+        self.crossfade = enabled;
+        outcome.audio.push(AudioCommand::SetCrossfade(enabled));
+        if changed {
+            outcome.changed = true;
+        }
     }
 
     fn set_volume(&mut self, volume: f64, outcome: &mut Outcome) {

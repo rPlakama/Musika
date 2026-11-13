@@ -26,6 +26,23 @@ pub enum QuickDirection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrackCommand { Next, Previous }
 
+/// Three-state crossfade control for the text/IPC command surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CrossfadeCommand {
+    Toggle,
+    On,
+    Off,
+}
+
+/// Loudness-normalization control for the text/IPC command surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NormalizeCommand {
+    Cycle,
+    Off,
+    Track,
+    Album,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum IpcCommand {
     Sync(SyncMode),
@@ -107,6 +124,8 @@ pub enum IpcCommand {
     PasteAbove,
     DeleteRow,
     RepeatCycle,
+    Crossfade(CrossfadeCommand),
+    Normalize(NormalizeCommand),
     ToggleFullscreen,
     LyricsOverlay,
     PaneCycle {
@@ -190,7 +209,9 @@ impl IpcCommand {
             | Self::SeekForward
             | Self::Seek(_)
             | Self::SeekRelative(_)
-            | Self::RepeatCycle => T::CorePlayback,
+            | Self::RepeatCycle
+            | Self::Crossfade(_)
+            | Self::Normalize(_) => T::CorePlayback,
             // `shuffle queue` is playback; album/artist shuffles build a queue
             // from the library through the bridge.
             Self::Shuffle {
@@ -308,6 +329,17 @@ impl IpcCommand {
             I::SeekForward => P::SeekRelative(5.0),
             I::SeekRelative(offset) => P::SeekRelative(*offset),
             I::RepeatCycle => P::CycleRepeat,
+            I::Crossfade(crossfade) => match crossfade {
+                CrossfadeCommand::Toggle => P::ToggleCrossfade,
+                CrossfadeCommand::On => P::SetCrossfade(true),
+                CrossfadeCommand::Off => P::SetCrossfade(false),
+            },
+            I::Normalize(normalize) => match normalize {
+                NormalizeCommand::Cycle => P::CycleNormalization,
+                NormalizeCommand::Off => P::SetNormalization(crate::player::Normalization::Off.code()),
+                NormalizeCommand::Track => P::SetNormalization(crate::player::Normalization::Track.code()),
+                NormalizeCommand::Album => P::SetNormalization(crate::player::Normalization::Album.code()),
+            },
             I::Shuffle {
                 target: ShuffleTarget::Queue,
             } => P::ShuffleQueue,
@@ -745,6 +777,27 @@ pub const COMMANDS: &[CommandSpec] = &[
         usage: "repeat_cycle",
         description: "Cycle repeat mode",
         form: CommandForm::Bare(IpcCommand::RepeatCycle),
+    },
+    CommandSpec {
+        name: "crossfade",
+        usage: "crossfade [on|off]",
+        description: "Toggle or set the optional track crossfade",
+        form: CommandForm::Exact(&[
+            ("", IpcCommand::Crossfade(CrossfadeCommand::Toggle)),
+            ("on", IpcCommand::Crossfade(CrossfadeCommand::On)),
+            ("off", IpcCommand::Crossfade(CrossfadeCommand::Off)),
+        ]),
+    },
+    CommandSpec {
+        name: "normalize",
+        usage: "normalize [off|track|album]",
+        description: "Cycle or set ReplayGain loudness normalization",
+        form: CommandForm::Exact(&[
+            ("", IpcCommand::Normalize(NormalizeCommand::Cycle)),
+            ("off", IpcCommand::Normalize(NormalizeCommand::Off)),
+            ("track", IpcCommand::Normalize(NormalizeCommand::Track)),
+            ("album", IpcCommand::Normalize(NormalizeCommand::Album)),
+        ]),
     },
     CommandSpec {
         name: "toggle_fullscreen",
@@ -2621,6 +2674,13 @@ mod tests {
             "paste_above",
             "delete_row",
             "repeat_cycle",
+            "crossfade",
+            "crossfade on",
+            "crossfade off",
+            "normalize",
+            "normalize off",
+            "normalize track",
+            "normalize album",
             "toggle_fullscreen",
             "lyrics_overlay",
             "pane_cycle",
@@ -2671,6 +2731,43 @@ mod tests {
                 "round trip for {sample}"
             );
         }
+    }
+
+    #[test]
+    fn crossfade_and_normalize_commands_are_core_playback() {
+        assert_eq!(
+            parse("crossfade").unwrap(),
+            IpcCommand::Crossfade(CrossfadeCommand::Toggle)
+        );
+        assert_eq!(
+            parse("crossfade off").unwrap(),
+            IpcCommand::Crossfade(CrossfadeCommand::Off)
+        );
+        assert_eq!(
+            canonical_string(&parse("crossfade on").unwrap()),
+            "crossfade on"
+        );
+        assert_eq!(
+            parse("normalize").unwrap(),
+            IpcCommand::Normalize(NormalizeCommand::Cycle)
+        );
+        assert_eq!(
+            parse("normalize album").unwrap(),
+            IpcCommand::Normalize(NormalizeCommand::Album)
+        );
+        assert_eq!(
+            canonical_string(&parse("normalize track").unwrap()),
+            "normalize track"
+        );
+        for sample in ["crossfade", "normalize album"] {
+            assert_eq!(
+                parse(sample).unwrap().target(),
+                CommandTarget::CorePlayback,
+                "{sample}"
+            );
+        }
+        assert!(parse("normalize loud").is_err());
+        assert!(parse("crossfade maybe").is_err());
     }
 
     #[test]

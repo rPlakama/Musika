@@ -468,6 +468,10 @@ pub enum PlayerOp {
     CycleNormalization,
     /// Toggle optional crossfade between tracks.
     ToggleCrossfade,
+    /// Set the normalization mode by code (0 off, 1 track, 2 album).
+    SetNormalization(u8),
+    /// Enable/disable crossfade explicitly.
+    SetCrossfade(bool),
     /// Ask the core to replay the playback state and the queue rows.
     Resync,
 }
@@ -499,6 +503,8 @@ impl PlayerOp {
             Self::Resync => 21,
             Self::CycleNormalization => 22,
             Self::ToggleCrossfade => 23,
+            Self::SetNormalization(_) => 24,
+            Self::SetCrossfade(_) => 25,
         }
     }
 }
@@ -1026,6 +1032,8 @@ impl PlayerRequest {
             | PlayerOp::CycleNormalization
             | PlayerOp::ToggleCrossfade
             | PlayerOp::Resync => {}
+            PlayerOp::SetNormalization(code) => w.u8(*code),
+            PlayerOp::SetCrossfade(enabled) => w.u8(u8::from(*enabled)),
         }
         w.0
     }
@@ -1075,6 +1083,8 @@ impl PlayerRequest {
             21 => PlayerOp::Resync,
             22 => PlayerOp::CycleNormalization,
             23 => PlayerOp::ToggleCrossfade,
+            24 => PlayerOp::SetNormalization(r.u8()?),
+            25 => PlayerOp::SetCrossfade(r.u8()? != 0),
             tag => {
                 return Err(ProtocolError::new(
                     ErrorCode::BadPayload,

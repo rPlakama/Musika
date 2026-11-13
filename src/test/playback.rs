@@ -142,6 +142,26 @@ fn normalization_and_crossfade_commands_reach_the_engine_and_snapshot() {
     let sync = core.audio_sync();
     assert!(sync.contains(&AudioCommand::SetNormalization(Normalization::Album)));
     assert!(sync.contains(&AudioCommand::SetCrossfade(true)));
+
+    // Explicit setters are idempotent and only mark the state changed when the
+    // mode actually moves (the text `crossfade on|off` / `normalize album`
+    // commands map here).
+    let outcome = core.apply(CoreCommand::SetNormalization(Normalization::Album));
+    assert!(!outcome.changed);
+    let outcome = core.apply(CoreCommand::SetNormalization(Normalization::Off));
+    assert!(outcome.changed);
+    assert_eq!(core.normalization(), Normalization::Off);
+    assert!(
+        outcome
+            .audio
+            .contains(&AudioCommand::SetNormalization(Normalization::Off))
+    );
+    let outcome = core.apply(CoreCommand::SetCrossfade(true));
+    assert!(!outcome.changed);
+    let outcome = core.apply(CoreCommand::SetCrossfade(false));
+    assert!(outcome.changed);
+    assert!(!core.crossfade());
+    assert!(outcome.audio.contains(&AudioCommand::SetCrossfade(false)));
 }
 
 #[test]

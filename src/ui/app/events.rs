@@ -777,7 +777,7 @@ impl AppRoot {
     fn reset_for_account(&mut self) {
         // The queue and transport belong to the core; an account switch makes
         // it replay a fresh state/queue rather than mutating the view here.
-        self.player_bar_cover.clear();
+        self.current_cover.clear();
         self.playback_error = None;
         self.view = ViewState::default();
         self.generation = 0;

@@ -63,11 +63,10 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn sync_palette(&mut self) {
-        let cover = self
-            .player
-            .current()
-            .map(|track| track.cover_art.clone())
-            .unwrap_or_default();
+        // Use the cover identity's stable art id: per-song ids can differ or be
+        // empty inside one album, and a change here would rebuild the palette
+        // on every track skip even though the artwork did not change.
+        let cover = self.current_cover.cover_art().to_string();
         if self.palette_cover.as_deref() == Some(cover.as_str()) {
             return;
         }

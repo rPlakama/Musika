@@ -118,13 +118,18 @@ impl AppRoot {
                                                     this.player.jump(index);
                                                     cx.notify();
                                                 }))
-                                                .child(RetainedCover::new(
+                                                .child(CoverImage::new(
                                                     "retained-cover-queue",
                                                     index,
                                                     cover,
                                                     this.image_cache.clone(),
-                                                    this.queue_scroll_modal.row_h * OVERLAY_ROW_COVER_RATIO,
+                                                    this.queue_scroll_modal.row_h
+                                                        * OVERLAY_ROW_COVER_RATIO,
+                                                    this.queue_scroll_modal.row_h
+                                                        * OVERLAY_ROW_COVER_RATIO,
                                                     cover_scale,
+                                                    gpui::ObjectFit::Contain,
+                                                    4.0,
                                                 ))
                                                 .child(
                                                     div()

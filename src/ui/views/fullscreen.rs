@@ -119,13 +119,13 @@ impl AppRoot {
     ) -> gpui::Div {
         let track = self.player.current().cloned();
         let (title, artist, cover) = match &track {
-            Some(track) => {
-                // The fullscreen cover is the largest art in the app; paint the
-                // original file here, never the thumbnail/display derivative.
-                let cover =
-                    full_cover_source_with_remote(&track.cover_url, &track.cover_remote);
-                (track.title.clone(), track.artist.clone(), cover)
-            }
+            // Identity-cached full source: a same-album track change reuses
+            // the exact same cover (no re-resolve, no reload, no refade).
+            Some(track) => (
+                track.title.clone(),
+                track.artist.clone(),
+                self.current_cover.full(),
+            ),
             None => ("No track playing".to_string(), String::new(), None),
         };
         let title_size = (metrics::font_size("headline", self.win_h)
@@ -259,7 +259,24 @@ impl AppRoot {
                                     cover_anchor_slot.borrow_mut().cover = Some((x, y));
                                 }
                             })
-                            .child(art(cover, cover_side)),
+                            .child(self.cover_view_fading(
+                                "fullscreen-cover",
+                                0,
+                                cover,
+                                cover_side,
+                                cover_side,
+                                gpui::ObjectFit::Contain,
+                                4.0,
+                                self.current_cover.changed().then(|| {
+                                    gpui::SharedString::from(format!(
+                                        "cover-fade:fullscreen:{}",
+                                        self.current_cover
+                                            .full()
+                                            .as_ref()
+                                            .map_or_else(|| "none".to_string(), |source| source.key())
+                                    ))
+                                }),
+                            )),
                     )
                     .child(
                         div()

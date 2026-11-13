@@ -54,22 +54,21 @@ mod visuals;
 mod widgets;
 
 use self::text_modal::TextModal;
-use self::widgets::marquee::{MarqueeText, line_width};
+use self::widgets::marquee::{MarqueeText, line_width, marquee_offset};
+use self::widgets::cover_image::CoverImage;
 use self::widgets::media::{
-    CoverSource, FAVORITE_GOLD, RowMarks, art, collage_art_from_sources, cover_element,
-    cover_source_with_remote, format_time, full_cover_source_with_remote,
-    highlighted_text, icon, icon_rotated, loading_placeholder, loading_skeleton, page_key,
-    repeat_label, progress_bar, row_mark_icons, spinning_icon,
-    transport_controls, volume_meter,
+    CoverSource, FAVORITE_GOLD, RowMarks, collage_art_from_sources, cover_source_with_remote,
+    format_time, full_cover_source_with_remote, highlighted_text, icon, icon_rotated,
+    loading_placeholder, loading_skeleton, page_key, repeat_label, progress_bar,
+    row_mark_icons, spinning_icon, transport_controls, volume_meter,
 };
-use self::widgets::retained_cover::RetainedCover;
 use self::widgets::retained_icon::RetainedIcon;
 use self::widgets::retained_text::RetainedText;
 
 use gpui::{
     Animation, AnimationExt, App, Application, AssetSource, Bounds, Context, FocusHandle,
     HighlightStyle, KeyBinding, Render, StyledText, UniformListScrollHandle, Window, WindowBounds,
-    WindowOptions, actions, div, img, prelude::*, px, relative, rgb, size, svg, uniform_list,
+    WindowOptions, actions, div, prelude::*, px, relative, rgb, size, svg, uniform_list,
 };
 
 use crate::bridge::{Event, SyncMode};
@@ -876,6 +875,8 @@ struct AppRoot {
     /// Cover-cache diagnostics for `MUSIKA_FRAME_STATS` (refreshed once per frame).
     image_cache_entries: usize,
     image_cache_bytes: usize,
+    image_cache_hits: u64,
+    image_cache_misses: u64,
     row_scales:
         std::cell::RefCell<std::collections::HashMap<(LineSurface, usize, usize), RowEmphasis>>,
     library_hover_fill: anim::ColorBehavior,
@@ -887,7 +888,7 @@ struct AppRoot {
     awaiting_core: bool,
     /// Reconnect banner text (transport lost, reconnecting).
     reconnecting: Option<String>,
-    player_bar_cover: views::shell::PlayerBarCover,
+    current_cover: views::shell::CurrentCover,
     playback_error: Option<String>,
     queue_open: bool,
     queue_list: state::ListState,
@@ -964,6 +965,11 @@ struct AppRoot {
     alt_was_typing: bool,
     win_w: f32,
     win_h: f32,
+    /// Horizontal viewport for the top-bar identity (auto marquee when the
+    /// title/subtitle/meta row is wider than the bar).
+    topbar_scroll: gpui::ScrollHandle,
+    topbar_marquee_started: std::time::Instant,
+    topbar_identity_signature: u64,
     resize_last_size: Option<(f32, f32)>,
     resize_recenter: bool,
     marks: MarksState,
@@ -1162,13 +1168,15 @@ impl AppRoot {
             image_cache: image_cache::new_cache(cx),
             image_cache_entries: 0,
             image_cache_bytes: 0,
+            image_cache_hits: 0,
+            image_cache_misses: 0,
             row_scales: std::cell::RefCell::new(std::collections::HashMap::new()),
             library_hover_fill: anim::ColorBehavior::new(palette::surface()),
             page_hover_fill: anim::ColorBehavior::new(palette::surface()),
             awaiting_core: startup_notice.is_some(),
             reconnecting: startup_notice,
             player,
-            player_bar_cover: views::shell::PlayerBarCover::default(),
+            current_cover: views::shell::CurrentCover::default(),
             playback_error: None,
             queue_open: false,
             queue_list: state::ListState::default(),
@@ -1243,6 +1251,9 @@ impl AppRoot {
             alt_was_typing: false,
             win_w: 1200.0,
             win_h: 800.0,
+            topbar_scroll: gpui::ScrollHandle::new(),
+            topbar_marquee_started: std::time::Instant::now(),
+            topbar_identity_signature: 0,
             resize_last_size: None,
             resize_recenter: false,
             marks: MarksState::default(),

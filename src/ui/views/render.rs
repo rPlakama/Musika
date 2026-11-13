@@ -83,8 +83,10 @@ impl Render for AppRoot {
         if !self.palette_motion.settled(&self.clock) {
             perf::request_frame(window, "palette");
         }
+        // Cover identity first: the palette follows the identity's stable
+        // cover-art id, so same-album track changes do not reset it.
+        self.refresh_current_cover();
         self.sync_palette();
-        self.refresh_player_bar_cover();
         let playback_index = self.player.index();
         if playback_index != self.last_player_index {
             self.last_player_index = playback_index;
@@ -333,6 +335,7 @@ impl Render for AppRoot {
         if following {
             perf::request_frame(window, "follow");
         }
+        self.refresh_topbar_marquee(window);
         let top = self.top_bar(&*cx);
         let body = if self.page.is_some() {
             self.page_view(&*cx).into_any_element()
@@ -496,6 +499,9 @@ impl Render for AppRoot {
             let cache = self.image_cache.read(cx);
             self.image_cache_entries = cache.len();
             self.image_cache_bytes = cache.used_bytes();
+            let stats = cache.stats();
+            self.image_cache_hits = stats.hits;
+            self.image_cache_misses = stats.misses;
         }
         perf::record_frame(frame_started, &*self);
         #[cfg(debug_assertions)]

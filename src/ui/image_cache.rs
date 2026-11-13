@@ -90,6 +90,10 @@ fn budget_mib_from(raw: Option<&str>) -> usize {
 pub(crate) struct CacheStats {
     pub entries: usize,
     pub bytes: usize,
+    /// Loads served by an existing entry (the decode was reused).
+    pub hits: u64,
+    /// Loads that had to start a decode.
+    pub misses: u64,
 }
 
 impl CacheStats {
@@ -102,6 +106,10 @@ impl CacheStats {
 pub(crate) struct BoundedImageCache {
     lru: LruBudget,
     entries: HashMap<u64, Entry>,
+    /// Decode cache hit/miss counters: one miss per distinct cover resource,
+    /// every other surface painting the same cover is a hit.
+    hits: u64,
+    misses: u64,
     /// Monotonic render-frame counter. A cache entity sees one `begin_frame`
     /// per rendered frame; loads during that frame mark their image as painted.
     frame: u64,
@@ -118,6 +126,8 @@ impl BoundedImageCache {
         Self {
             lru: LruBudget::new(budget_bytes),
             entries: HashMap::new(),
+            hits: 0,
+            misses: 0,
             frame: 0,
         }
     }
@@ -144,6 +154,8 @@ impl BoundedImageCache {
         CacheStats {
             entries: self.entries.len(),
             bytes: self.lru.used,
+            hits: self.hits,
+            misses: self.misses,
         }
     }
 
@@ -165,6 +177,11 @@ impl BoundedImageCache {
         // bytes and never qualify for eviction.
         self.settle_loading();
         let key = hash(resource);
+        if self.entries.contains_key(&key) {
+            self.hits = self.hits.saturating_add(1);
+        } else {
+            self.misses = self.misses.saturating_add(1);
+        }
         if let Some(entry) = self.entries.get_mut(&key) {
             entry.last_used = self.frame;
             let loaded = entry.item.get();

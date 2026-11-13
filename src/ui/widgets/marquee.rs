@@ -15,6 +15,30 @@ const INITIAL_PAUSE: f32 = 0.8;
 const END_PAUSE: f32 = 1.0;
 const SPEED: f32 = 36.0;
 
+/// Ping-pong scroll offset for a line overflowing its viewport by `overflow`
+/// pixels after `elapsed` seconds. Shared by the bottom-bar `MarqueeText` and
+/// the top-bar identity viewport so both surfaces move identically.
+pub(crate) fn marquee_offset(overflow: f32, elapsed: f32) -> f32 {
+    let overflow = overflow.max(0.0);
+    if overflow <= 0.0 {
+        return 0.0;
+    }
+    let travel = overflow / SPEED;
+    let cycle = INITIAL_PAUSE + travel + END_PAUSE + travel;
+    let mut phase = elapsed.max(0.0) % cycle;
+    if phase < INITIAL_PAUSE {
+        0.0
+    } else if phase < INITIAL_PAUSE + travel {
+        phase -= INITIAL_PAUSE;
+        phase * SPEED
+    } else if phase < INITIAL_PAUSE + travel + END_PAUSE {
+        overflow
+    } else {
+        phase -= INITIAL_PAUSE + travel + END_PAUSE;
+        overflow - phase * SPEED
+    }
+}
+
 #[derive(Clone, PartialEq)]
 struct MarqueeKey {
     text: SharedString,
@@ -74,24 +98,8 @@ impl MarqueeCache {
     }
 
     fn offset_at(&self, now: Instant) -> f32 {
-        if self.overflow <= 0.0 {
-            return 0.0;
-        }
-        let travel = self.overflow / SPEED;
-        let cycle = INITIAL_PAUSE + travel + END_PAUSE + travel;
         let elapsed = now.saturating_duration_since(self.started).as_secs_f32();
-        let mut phase = elapsed % cycle;
-        if phase < INITIAL_PAUSE {
-            0.0
-        } else if phase < INITIAL_PAUSE + travel {
-            phase -= INITIAL_PAUSE;
-            phase * SPEED
-        } else if phase < INITIAL_PAUSE + travel + END_PAUSE {
-            self.overflow
-        } else {
-            phase -= INITIAL_PAUSE + travel + END_PAUSE;
-            self.overflow - phase * SPEED
-        }
+        marquee_offset(self.overflow, elapsed)
     }
 }
 
@@ -242,5 +250,34 @@ impl Element for MarqueeText {
             bounds.origin.y + (bounds.size.height - line_height) * 0.5,
         );
         _ = paint.line.paint(origin, line_height, window, cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn marquee_offset_starts_paused_then_travels_and_returns() {
+        assert_eq!(marquee_offset(0.0, 0.0), 0.0);
+        assert_eq!(marquee_offset(0.0, 10.0), 0.0);
+        // Initial pause keeps the line at rest.
+        assert_eq!(marquee_offset(72.0, 0.4), 0.0);
+        // 72 px at 36 px/s: 2 s forward, 1 s end pause, 2 s back, 0.8 s start.
+        assert!((marquee_offset(72.0, INITIAL_PAUSE + 1.0) - 36.0).abs() < 0.01);
+        assert!((marquee_offset(72.0, INITIAL_PAUSE + 2.0) - 72.0).abs() < 0.01);
+        assert!((marquee_offset(72.0, INITIAL_PAUSE + 2.7) - 72.0).abs() < 0.01);
+        assert!((marquee_offset(72.0, INITIAL_PAUSE + 3.5) - 54.0).abs() < 0.01);
+        // After the full cycle the line is resting again.
+        let cycle = INITIAL_PAUSE + 2.0 + END_PAUSE + 2.0;
+        assert_eq!(marquee_offset(72.0, cycle), marquee_offset(72.0, 0.0));
+    }
+
+    #[test]
+    fn marquee_offset_is_bounded() {
+        for step in 0..200 {
+            let value = marquee_offset(120.0, step as f32 * 0.1);
+            assert!((0.0..=120.0 + f32::EPSILON).contains(&value), "{value}");
+        }
     }
 }

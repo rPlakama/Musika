@@ -240,13 +240,17 @@ impl AppRoot {
                 | LineSurface::Lyrics
                 | LineSurface::Status => "retained-cover",
             };
-            body = body.child(div().mr_3().child(RetainedCover::new(
+            let cover_side = paint.height * 0.78;
+            body = body.child(div().mr_3().child(CoverImage::new(
                 id_name,
                 paint.index,
                 cover.cloned(),
                 self.image_cache.clone(),
-                paint.height * 0.78,
+                cover_side,
+                cover_side,
                 paint.cover_scale,
+                gpui::ObjectFit::Contain,
+                4.0,
             )));
         }
         let id_name = match paint.surface {

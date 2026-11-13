@@ -99,9 +99,22 @@ impl AppRoot {
                                 )
                             })
                             .collect();
-                        collage_art_from_sources(sources, cover_art_side)
+                        collage_art_from_sources(
+                            sources,
+                            cover_art_side,
+                            self.image_cache.clone(),
+                        )
                     } else {
-                        art(cover, cover_art_side)
+                        self.cover_view(
+                            "page-hero",
+                            0,
+                            cover,
+                            cover_art_side,
+                            cover_art_side,
+                            1.0,
+                            gpui::ObjectFit::Contain,
+                            4.0,
+                        )
                     }),
             )
             .child(div().w_full().h(px(header_h)))

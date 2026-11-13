@@ -110,13 +110,16 @@ impl AppRoot {
                 }
                 this.activate_search_result(cx);
             }))
-            .child(RetainedCover::new(
+            .child(CoverImage::new(
                 "retained-cover-search",
                 index,
                 cover,
                 self.image_cache.clone(),
                 row_h * OVERLAY_ROW_COVER_RATIO,
+                row_h * OVERLAY_ROW_COVER_RATIO,
                 cover_scale,
+                gpui::ObjectFit::Contain,
+                4.0,
             ))
             .child(
                 div()

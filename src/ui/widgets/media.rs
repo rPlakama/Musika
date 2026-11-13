@@ -1,7 +1,7 @@
 //! Shared icon, cover and text/presentation helpers.
 
 use super::super::*;
-use gpui::{SharedString, StyledImage as _};
+use gpui::SharedString;
 
 fn transport_button(
     icon_name: &str,
@@ -348,27 +348,15 @@ pub(crate) fn icon_favorite() -> SharedString {
 }
 
 /// Playlist/Radio mosaic: golden-ratio panes for any number of distinct
-/// covers. The first split mirrors `PlaylistCollage.qml`; deeper splits keep
-/// subdividing the remaining tail, so there is no fixed cover cap.
-pub(crate) fn collage_art(urls: &[String], remotes: &[String], side: f32) -> gpui::AnyElement {
-    let sources: Vec<Option<CoverSource>> = urls
-        .iter()
-        .enumerate()
-        .filter(|(_, url)| !url.trim().is_empty())
-        .map(|(index, url)| {
-            cover_source_with_remote(
-                url,
-                remotes.get(index).map(String::as_str).unwrap_or_default(),
-            )
-        })
-        .collect();
-    collage_art_from_sources(sources, side)
-}
-
+/// covers. Each pane paints through the shared [`CoverImage`] element, so a
+/// cover repeated elsewhere in the UI uses the same decoded cache instance.
 pub(crate) fn collage_art_from_sources(
     sources: Vec<Option<CoverSource>>,
     side: f32,
+    cache: gpui::Entity<crate::ui::image_cache::BoundedImageCache>,
 ) -> gpui::AnyElement {
+    use crate::ui::widgets::cover_image::CoverImage;
+
     let mut mosaic = div()
         .relative()
         .size(px(side))
@@ -390,25 +378,24 @@ pub(crate) fn collage_art_from_sources(
         return mosaic.into_any_element();
     }
 
-    for (pane, source) in collage::panes(side, sources.len()).into_iter().zip(sources) {
+    for (index, (pane, source)) in collage::panes(side, sources.len())
+        .into_iter()
+        .zip(sources)
+        .enumerate()
+    {
         let content = match source {
-            Some(CoverSource::Fallback { path, remote }) => {
-                let fallback = remote.clone();
-                img(path)
-                    .size_full()
-                    .object_fit(gpui::ObjectFit::Cover)
-                    .with_fallback(move || {
-                        img(fallback.clone())
-                            .size_full()
-                            .object_fit(gpui::ObjectFit::Cover)
-                            .into_any_element()
-                    })
-                    .into_any_element()
-            }
-            Some(source) => img(source.image())
-                .size_full()
-                .object_fit(gpui::ObjectFit::Cover)
-                .into_any_element(),
+            Some(source) => CoverImage::new(
+                "collage-pane",
+                index,
+                Some(std::sync::Arc::new(source)),
+                cache.clone(),
+                pane.w,
+                pane.h,
+                1.0,
+                gpui::ObjectFit::Cover,
+                0.0,
+            )
+            .into_any_element(),
             None => div()
                 .size_full()
                 .bg(rgb(palette::surface_container_highest()))
@@ -426,85 +413,6 @@ pub(crate) fn collage_art_from_sources(
         );
     }
     mosaic.into_any_element()
-}
-
-pub(crate) fn art_scaled(source: Option<CoverSource>, base: f32, scale: f32) -> gpui::AnyElement {
-    let size = base * scale;
-    let offset = (size - base) * 0.5;
-    div()
-        .w(px(size))
-        .h(px(size))
-        .ml(px(-offset))
-        .mr(px(-offset))
-        .mt(px(-offset))
-        .mb(px(-offset))
-        .child(cover_element(source, size, false))
-        .into_any_element()
-}
-
-pub(crate) fn art(source: Option<CoverSource>, size: f32) -> gpui::AnyElement {
-    cover_element(source, size, true)
-}
-
-pub(crate) fn cover_element(
-    source: Option<CoverSource>,
-    size: f32,
-    fade: bool,
-) -> gpui::AnyElement {
-    match source {
-        Some(CoverSource::Fallback { path, remote }) => {
-            let id = gpui::SharedString::from(format!(
-                "cover-fade:{}|{remote}:{size:.0}",
-                path.display()
-            ));
-            let fallback_url = remote;
-            let image = img(path)
-                .size(px(size))
-                .rounded_sm()
-                .bg(rgb(palette::surface_container_highest()))
-                .with_fallback(move || {
-                    img(fallback_url.clone())
-                        .size(px(size))
-                        .rounded_sm()
-                        .bg(rgb(palette::surface_container_highest()))
-                        .into_any_element()
-                });
-            if fade {
-                image
-                    .with_animation(
-                        id,
-                        Animation::new(std::time::Duration::from_millis(120)),
-                        |this, delta| this.opacity(delta),
-                    )
-                    .into_any_element()
-            } else {
-                image.into_any_element()
-            }
-        }
-        Some(source) => {
-            let image = img(source.image())
-                .size(px(size))
-                .rounded_sm()
-                .bg(rgb(palette::surface_container_highest()));
-            if fade {
-                let id = gpui::SharedString::from(format!("cover-fade:{}:{size:.0}", source.key()));
-                image
-                    .with_animation(
-                        id,
-                        Animation::new(std::time::Duration::from_millis(120)),
-                        |this, delta| this.opacity(delta),
-                    )
-                    .into_any_element()
-            } else {
-                image.into_any_element()
-            }
-        }
-        None => div()
-            .size(px(size))
-            .rounded_md()
-            .bg(rgb(palette::surface_container_highest()))
-            .into_any_element(),
-    }
 }
 
 pub(crate) fn page_key(descriptor: &PageDescriptor) -> String {

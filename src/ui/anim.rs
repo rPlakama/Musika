@@ -27,7 +27,7 @@ pub enum Curve {
     Standard,
     Decelerate,
     Accelerate,
-    /// Qt-clamped `[0.34,1.56,0.64,1]` (Theme.js bounce).
+    /// Gentle overshoot (~3%): a small settle past the target, then back.
     Bounce,
     /// legacy UI `Easing.OutBack` with overshoot 1.7 (PopFx).
     OutBack,
@@ -43,7 +43,7 @@ impl Curve {
             Curve::Standard => cubic(0.2, 0.0, 0.0, 1.0, t),
             Curve::Decelerate => cubic(0.05, 0.7, 0.1, 1.0, t),
             Curve::Accelerate => cubic(0.3, 0.0, 0.8, 0.15, t),
-            Curve::Bounce => cubic(0.34, 1.56, 0.64, 1.0, t).min(1.0),
+            Curve::Bounce => cubic(0.3, 1.3, 0.64, 1.0, t),
             Curve::OutBack => {
                 let c1 = 1.7;
                 let c3 = c1 + 1.0;
@@ -193,6 +193,20 @@ mod tests {
         let out_back = Curve::OutBack.sample(0.6);
         assert!(out_back > 1.0, "OutBack overshoot at the crest: {out_back}");
         assert!((Curve::OutCubic.sample(0.5) - 0.875).abs() < 1e-5);
+
+        // Bounce is a slight overshoot now: the press feedback settles instead
+        // of snapping through a clamped 156% control point.
+        let crest = (0..=100)
+            .map(|step| Curve::Bounce.sample(step as f32 / 100.0))
+            .fold(0.0_f32, f32::max);
+        assert!(
+            (1.0..1.05).contains(&crest),
+            "Bounce should overshoot slightly, crest {crest}"
+        );
+        assert!(
+            (Curve::Bounce.sample(1.0) - 1.0).abs() < 1e-5,
+            "Bounce must settle on the target"
+        );
     }
 
     #[test]

@@ -1,37 +1,61 @@
 //! Top bar, status bar, player bar and login view.
 
 use super::super::*;
+use gpui::StatefulInteractiveElement;
 
-/// Bottom-bar cover identity cache: the same album must keep the same cover
-/// source (and skip the fade/reload) across its tracks.
+/// Identity of the currently playing cover. The same album keeps the same
+/// thumb and full-resolution sources (and skips every reload/fade) across its
+/// tracks, even when per-song cover ids/URLs differ.
 #[derive(Default)]
-pub(in crate::ui) struct PlayerBarCover {
+pub(in crate::ui) struct CurrentCover {
     key: Option<String>,
-    source: Option<CoverSource>,
+    thumb: Option<CoverSource>,
+    full: Option<CoverSource>,
+    /// Stable cover-art id used by the palette; filled from the first track of
+    /// the identity that carries one.
+    cover_art: String,
     changed: bool,
 }
 
-impl PlayerBarCover {
-    /// Returns the cover and whether the album/cover identity changed. A
-    /// repeated key reuses the source and never re-runs the resolver.
+impl CurrentCover {
+    /// Resolves the current identity. Both resolvers run only when the key
+    /// changed; a repeated key reuses both sources and reports `false`.
+    ///
+    /// Some songs in one album have no `cover_art`; when that happens for a
+    /// repeated identity the id is adopted later without invalidating the
+    /// sources (the palette updates once, the cover does not reload).
     pub(in crate::ui) fn resolve(
         &mut self,
         key: String,
-        resolve: impl FnOnce() -> Option<CoverSource>,
-    ) -> Option<CoverSource> {
+        cover_art: &str,
+        resolve_thumb: impl FnOnce() -> Option<CoverSource>,
+        resolve_full: impl FnOnce() -> Option<CoverSource>,
+    ) -> bool {
         if self.key.as_deref() == Some(key.as_str()) {
+            if self.cover_art.is_empty() && !cover_art.is_empty() {
+                self.cover_art = cover_art.to_string();
+            }
             self.changed = false;
-            return self.source.clone();
+            return false;
         }
-        let source = resolve();
+        self.thumb = resolve_thumb();
+        self.full = resolve_full();
         self.key = Some(key);
-        self.source = source.clone();
+        self.cover_art = cover_art.to_string();
         self.changed = true;
-        source
+        true
     }
 
-    pub(in crate::ui) fn source(&self) -> Option<CoverSource> {
-        self.source.clone()
+    pub(in crate::ui) fn thumb(&self) -> Option<CoverSource> {
+        self.thumb.clone()
+    }
+
+    pub(in crate::ui) fn full(&self) -> Option<CoverSource> {
+        self.full.clone()
+    }
+
+    pub(in crate::ui) fn cover_art(&self) -> &str {
+        &self.cover_art
     }
 
     pub(in crate::ui) fn changed(&self) -> bool {
@@ -40,8 +64,24 @@ impl PlayerBarCover {
 
     pub(in crate::ui) fn clear(&mut self) {
         self.key = None;
-        self.source = None;
+        self.thumb = None;
+        self.full = None;
+        self.cover_art.clear();
         self.changed = false;
+    }
+}
+
+/// Cover identity for the playing track: the album wins so every track of one
+/// album shares one cover; singles fall back to the cover-art id/URL.
+pub(in crate::ui) fn current_cover_key(track: &crate::player::Track) -> String {
+    if !track.album_id.is_empty() {
+        format!("album:{}", track.album_id)
+    } else if !track.cover_art.is_empty() {
+        format!("cover-art:{}", track.cover_art)
+    } else if !track.album.is_empty() {
+        format!("album-name:{}|{}", track.album, track.artist)
+    } else {
+        format!("cover:{}|{}", track.cover_url, track.cover_remote)
     }
 }
 
@@ -211,16 +251,18 @@ impl AppRoot {
             .px_4()
             .child(
                 div().flex().flex_1().min_w_0().items_center().child(
-                    div()
-                        .text_size(px(19.0))
-                        .text_color(rgb(if offline {
+                    div().w_full().overflow_hidden().child(MarqueeText::new(
+                        "topbar-welcome",
+                        0,
+                        welcome,
+                        19.0,
+                        400.0,
+                        if offline {
                             palette::tertiary()
                         } else {
                             palette::on_surface_variant()
-                        }))
-                        .whitespace_nowrap()
-                        .text_ellipsis()
-                        .child(welcome),
+                        },
+                    )),
                 ),
             )
             .child(
@@ -295,23 +337,18 @@ impl AppRoot {
         } else {
             page.title.to_string()
         };
-        let mut identity = div()
-            .flex()
-            .flex_1()
-            .min_w_0()
-            .overflow_hidden()
-            .items_center()
-            .gap_2()
-            .child(
-                div()
-                    .flex_none()
-                    .text_size(px(19.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(rgb(palette::on_surface()))
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(title),
-            );
+        // Natural-width identity row inside a clipped horizontal viewport;
+        // the marquee offset is driven once per render by
+        // `refresh_topbar_marquee`. Action chips below stay pinned right.
+        let mut identity = div().flex().flex_none().items_center().gap_2().child(
+            div()
+                .flex_none()
+                .text_size(px(19.0))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(rgb(palette::on_surface()))
+                .whitespace_nowrap()
+                .child(title),
+        );
         if !page.subtitle.is_empty() {
             identity = identity.child(self.bar_separator()).child(
                 div()
@@ -319,7 +356,6 @@ impl AppRoot {
                     .text_size(px(14.0))
                     .text_color(rgb(palette::on_surface_variant()))
                     .whitespace_nowrap()
-                    .text_ellipsis()
                     .child(page.subtitle.to_string()),
             );
         }
@@ -334,10 +370,21 @@ impl AppRoot {
                     .text_size(px(14.0))
                     .text_color(rgb(palette::on_surface_variant()))
                     .whitespace_nowrap()
-                    .text_ellipsis()
                     .child(page.meta.to_string()),
             );
         }
+        let identity_viewport = div()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .child(
+                div()
+                    .id("topbar-identity-scroll")
+                    .overflow_x_scroll()
+                    .scrollbar_width(px(0.0))
+                    .track_scroll(&self.topbar_scroll)
+                    .child(identity),
+            );
         let mut row = div()
             .flex()
             .items_center()
@@ -345,7 +392,7 @@ impl AppRoot {
             .h_full()
             .px_4()
             .gap_2()
-            .child(identity);
+            .child(identity_viewport);
         match mode {
             SuperiorMode::Album | SuperiorMode::Artist => {
                 if page.starred {
@@ -387,6 +434,51 @@ impl AppRoot {
         row.into_any_element()
     }
 
+    /// Hashes the identity the top bar shows; a change restarts the marquee.
+    fn topbar_identity_signature(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        if let Some(page) = self.page_bar() {
+            page.kind.label().hash(&mut hasher);
+            page.title.hash(&mut hasher);
+            page.subtitle.hash(&mut hasher);
+            page.meta.hash(&mut hasher);
+        } else {
+            self.header
+                .as_ref()
+                .map(|header| header.username.as_str())
+                .unwrap_or("")
+                .hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    /// Drives the top-bar identity viewport. Short identities stay at offset
+    /// zero; an overflowing one slides exactly like the bottom-bar marquee.
+    pub(in crate::ui) fn refresh_topbar_marquee(&mut self, window: &gpui::Window) {
+        let signature = self.topbar_identity_signature();
+        if signature != self.topbar_identity_signature {
+            self.topbar_identity_signature = signature;
+            self.topbar_marquee_started = std::time::Instant::now();
+            self.topbar_scroll
+                .set_offset(gpui::point(px(0.0), px(0.0)));
+            // The content width is only known after this frame's layout.
+            perf::request_frame(window, "topbar-marquee");
+            return;
+        }
+        let overflow = f32::from(self.topbar_scroll.max_offset().width);
+        if overflow <= 0.5 {
+            self.topbar_scroll
+                .set_offset(gpui::point(px(0.0), px(0.0)));
+            return;
+        }
+        let elapsed = self.topbar_marquee_started.elapsed().as_secs_f32();
+        let offset = marquee_offset(overflow, elapsed);
+        self.topbar_scroll
+            .set_offset(gpui::point(px(-offset), px(0.0)));
+        perf::request_frame(window, "topbar-marquee");
+    }
+
     pub(in crate::ui) fn top_bar(&self, cx: &Context<Self>) -> impl IntoElement {
         let mode = self.superior_mode();
         let content = if mode.is_page() {
@@ -413,25 +505,97 @@ impl AppRoot {
             )
     }
 
-    /// Refreshes the bottom-bar cover identity once per render, before any
-    /// immutable view borrows. Same-album skips reuse the previous source and
-    /// do not replay the fade animation.
-    pub(in crate::ui) fn refresh_player_bar_cover(&mut self) {
+    /// Refreshes the playing-cover identity once per render, before any
+    /// immutable view borrows. Same-album track changes reuse both the thumb
+    /// and the full-resolution source; neither surface reloads or refades.
+    pub(in crate::ui) fn refresh_current_cover(&mut self) {
         let Some(track) = self.player.current().cloned() else {
-            self.player_bar_cover.clear();
+            self.current_cover.clear();
             return;
         };
-        let key = if !track.album_id.is_empty() {
-            format!("album:{}", track.album_id)
-        } else if !track.album.is_empty() {
-            format!("album-name:{}|{}", track.album, track.artist)
-        } else {
-            format!("cover:{}|{}", track.cover_url, track.cover_remote)
-        };
+        let key = current_cover_key(&track);
         let url = track.cover_url.clone();
         let remote = track.cover_remote.clone();
-        self.player_bar_cover
-            .resolve(key, || cover_source_with_remote(&url, &remote));
+        self.current_cover.resolve(
+            key,
+            &track.cover_art,
+            || cover_source_with_remote(&url, &remote),
+            || full_cover_source_with_remote(&url, &remote),
+        );
+    }
+
+    /// One cover-painting element for every surface. The shared image cache is
+    /// the instance store: the same cover decodes once and every view paints
+    /// the same `Arc<RenderImage>`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the helper bridges the cover geometry to CoverImage; a builder would obscure it"
+    )]
+    pub(in crate::ui) fn cover_view(
+        &self,
+        id_name: &'static str,
+        index: usize,
+        source: Option<CoverSource>,
+        width: f32,
+        height: f32,
+        scale: f32,
+        fit: gpui::ObjectFit,
+        radius: f32,
+    ) -> gpui::AnyElement {
+        CoverImage::new(
+            id_name,
+            index,
+            source.map(std::sync::Arc::new),
+            self.image_cache.clone(),
+            width,
+            height,
+            scale,
+            fit,
+            radius,
+        )
+        .into_any_element()
+    }
+
+    /// [`AppRoot::cover_view`] wrapped in a one-shot fade when the cover
+    /// identity changed; a same-album track change passes `fade_id: None` and
+    /// paints the stable instance without replaying the animation.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the helper bridges the cover geometry and optional fade identity"
+    )]
+    pub(in crate::ui) fn cover_view_fading(
+        &self,
+        id_name: &'static str,
+        index: usize,
+        source: Option<CoverSource>,
+        width: f32,
+        height: f32,
+        fit: gpui::ObjectFit,
+        radius: f32,
+        fade_id: Option<gpui::SharedString>,
+    ) -> gpui::AnyElement {
+        let image = CoverImage::new(
+            id_name,
+            index,
+            source.map(std::sync::Arc::new),
+            self.image_cache.clone(),
+            width,
+            height,
+            1.0,
+            fit,
+            radius,
+        );
+        match fade_id {
+            Some(id) => div()
+                .child(image)
+                .with_animation(
+                    id,
+                    Animation::new(std::time::Duration::from_millis(120)),
+                    |this, delta| this.opacity(delta),
+                )
+                .into_any_element(),
+            None => image.into_any_element(),
+        }
     }
 
     pub(in crate::ui) fn player_bar(&self) -> impl IntoElement {
@@ -445,8 +609,8 @@ impl AppRoot {
         } else {
             0.0
         };
-        let cover = self.player_bar_cover.source();
-        let cover_changed = self.player_bar_cover.changed();
+        let cover = self.current_cover.thumb();
+        let cover_changed = self.current_cover.changed();
         let (title, artist) = match &track {
             Some(track) => (track.title.clone(), track.artist.clone()),
             None => ("Nothing playing".to_string(), String::new()),
@@ -480,7 +644,24 @@ impl AppRoot {
                             .flex_1()
                             .min_w_0()
                             .overflow_hidden()
-                            .child(cover_element(cover, m.cover_side, cover_changed))
+                            .child(self.cover_view_fading(
+                                "player-cover",
+                                0,
+                                cover,
+                                m.cover_side,
+                                m.cover_side,
+                                gpui::ObjectFit::Contain,
+                                4.0,
+                                cover_changed.then(|| {
+                                    gpui::SharedString::from(format!(
+                                        "cover-fade:player:{}",
+                                        self.current_cover
+                                            .thumb()
+                                            .as_ref()
+                                            .map_or_else(|| "none".to_string(), |source| source.key())
+                                    ))
+                                }),
+                            ))
                             .child(
                                 div()
                                     .flex()
@@ -624,35 +805,126 @@ mod cover_cache_tests {
         CoverSource::Path(std::path::PathBuf::from(path))
     }
 
-    #[test]
-    fn same_album_reuses_cover_without_resolving() {
-        let mut cache = PlayerBarCover::default();
-        let mut calls = 0;
-        let first = cache.resolve("album:a".into(), || {
-            calls += 1;
-            Some(source("/a.jpg"))
-        });
-        assert!(cache.changed());
-        assert_eq!(first.as_ref().map(CoverSource::key), Some("/a.jpg".into()));
-        let second = cache.resolve("album:a".into(), || {
-            calls += 1;
-            Some(source("/different.jpg"))
-        });
-        assert!(!cache.changed());
-        assert_eq!(second.as_ref().map(CoverSource::key), Some("/a.jpg".into()));
-        assert_eq!(calls, 1);
+    fn track(album_id: &str, cover_art: &str, cover_url: &str) -> crate::player::Track {
+        let mut track = crate::player::Track {
+            item: crate::model::ItemMeta {
+                id: "s".into(),
+                title: String::new(),
+                cover_url: cover_url.into(),
+                cover_remote: String::new(),
+                album_id: album_id.into(),
+            },
+            artist: String::new(),
+            album: "Album".into(),
+            favorite: false,
+            duration: 0.0,
+            url: String::new(),
+            cover_art: cover_art.into(),
+        };
+        track.item.cover_url = cover_url.into();
+        track
     }
 
     #[test]
-    fn new_album_fades_and_clears() {
-        let mut cache = PlayerBarCover::default();
-        let _ = cache.resolve("album:a".into(), || Some(source("/a.jpg")));
-        let b = cache.resolve("album:b".into(), || Some(source("/b.jpg")));
+    fn cover_key_prefers_album_then_art_then_name_then_url() {
+        assert_eq!(
+            current_cover_key(&track("a1", "art", "/song.jpg")),
+            "album:a1"
+        );
+        assert_eq!(
+            current_cover_key(&track("", "art", "/song.jpg")),
+            "cover-art:art"
+        );
+        assert_eq!(
+            current_cover_key(&track("", "", "/song.jpg")),
+            "album-name:Album|"
+        );
+        let mut no_album = track("", "", "/song.jpg");
+        no_album.album.clear();
+        assert_eq!(current_cover_key(&no_album), "cover:/song.jpg|");
+    }
+
+    #[test]
+    fn same_album_reuses_thumb_and_full_without_resolving() {
+        let mut cache = CurrentCover::default();
+        let mut thumb_calls = 0;
+        let mut full_calls = 0;
+        assert!(cache.resolve(
+            "album:a".into(),
+            "art-a",
+            || {
+                thumb_calls += 1;
+                Some(source("/a.thumb.jpg"))
+            },
+            || {
+                full_calls += 1;
+                Some(source("/a.jpg"))
+            },
+        ));
         assert!(cache.changed());
-        assert_eq!(b.as_ref().map(CoverSource::key), Some("/b.jpg".into()));
+        assert_eq!(cache.thumb().as_ref().map(CoverSource::key), Some("/a.thumb.jpg".into()));
+        assert_eq!(cache.full().as_ref().map(CoverSource::key), Some("/a.jpg".into()));
+
+        // A different track of the same album has a different per-song URL:
+        // neither source may be re-resolved.
+        assert!(!cache.resolve(
+            "album:a".into(),
+            "art-a",
+            || {
+                thumb_calls += 1;
+                Some(source("/b.thumb.jpg"))
+            },
+            || {
+                full_calls += 1;
+                Some(source("/b.jpg"))
+            },
+        ));
+        assert!(!cache.changed());
+        assert_eq!(cache.thumb().as_ref().map(CoverSource::key), Some("/a.thumb.jpg".into()));
+        assert_eq!(cache.full().as_ref().map(CoverSource::key), Some("/a.jpg".into()));
+        assert_eq!((thumb_calls, full_calls), (1, 1));
+    }
+
+    #[test]
+    fn new_album_resolves_both_sources_and_fades() {
+        let mut cache = CurrentCover::default();
+        let _ = cache.resolve(
+            "album:a".into(),
+            "art-a",
+            || Some(source("/a.thumb.jpg")),
+            || Some(source("/a.jpg")),
+        );
+        assert!(cache.resolve(
+            "album:b".into(),
+            "art-b",
+            || Some(source("/b.thumb.jpg")),
+            || Some(source("/b.jpg")),
+        ));
+        assert!(cache.changed());
+        assert_eq!(cache.thumb().as_ref().map(CoverSource::key), Some("/b.thumb.jpg".into()));
+        assert_eq!(cache.full().as_ref().map(CoverSource::key), Some("/b.jpg".into()));
         cache.clear();
         assert!(!cache.changed());
-        let _ = cache.resolve("album:b".into(), || Some(source("/b.jpg")));
-        assert!(cache.changed());
+        assert!(cache.thumb().is_none() && cache.full().is_none());
+    }
+
+    #[test]
+    fn late_cover_art_updates_the_palette_id_without_reloading() {
+        let mut cache = CurrentCover::default();
+        let _ = cache.resolve(
+            "album:a".into(),
+            "",
+            || Some(source("/a.thumb.jpg")),
+            || Some(source("/a.jpg")),
+        );
+        assert_eq!(cache.cover_art(), "");
+        let _ = cache.resolve(
+            "album:a".into(),
+            "art-a",
+            || panic!("same identity must not re-resolve the thumb"),
+            || panic!("same identity must not re-resolve the full cover"),
+        );
+        assert_eq!(cache.cover_art(), "art-a");
+        assert!(!cache.changed());
     }
 }

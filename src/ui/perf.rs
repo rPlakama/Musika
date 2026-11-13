@@ -167,11 +167,13 @@ pub(crate) fn record_frame(started: Instant, root: &AppRoot) {
     let scales = root.row_scales.borrow().len();
     let toasts = root.toasts.len();
     eprintln!(
-        "[musika/frame] frames={frames} fps={fps:.1} interval_ms(mean={mean_interval:.2} p95={p95_interval:.2}) render_ms(mean={mean_render:.2} p95={p95_render:.2}) rows={rows} live_start={} count={} page_rows={page_rows} scales={scales} covers={} covers_mib={:.1} toasts={toasts} shapes+={shapes_delta} win={:.0}x{:.0} state={:?} loading={} syncing={} queue={} fullscreen={} active={} rss={:.0}MiB",
+        "[musika/frame] frames={frames} fps={fps:.1} interval_ms(mean={mean_interval:.2} p95={p95_interval:.2}) render_ms(mean={mean_render:.2} p95={p95_render:.2}) rows={rows} live_start={} count={} page_rows={page_rows} scales={scales} covers={} covers_mib={:.1} cover_hits={} cover_misses={} toasts={toasts} shapes+={shapes_delta} win={:.0}x{:.0} state={:?} loading={} syncing={} queue={} fullscreen={} active={} rss={:.0}MiB",
         root.view.rows.live_start,
         root.view.rows.count,
         root.image_cache_entries,
         root.image_cache_bytes as f64 / (1024.0 * 1024.0),
+        root.image_cache_hits,
+        root.image_cache_misses,
         root.win_w,
         root.win_h,
         root.player.state(),

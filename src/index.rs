@@ -234,6 +234,9 @@ where
     )
     .await?;
 
+    // Cached radio orders point at song ids from the previous catalog.
+    crate::radio::clear_cache();
+
     // The provider date moved: drop cached descriptions/lyrics older than the
     // provider copy so the next read fetches the current text.
     let provider_secs = provider_secs(indexes.last_modified);

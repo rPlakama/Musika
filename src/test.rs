@@ -48,6 +48,8 @@ mod api;
 
 mod radio;
 
+mod recommend;
+
 mod artist_user;
 
 mod browse;

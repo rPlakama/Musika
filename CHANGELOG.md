@@ -3,6 +3,18 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## Unreleased
+
+- **Local radio:** `radio song|album` now expands entirely from `library.db`
+  instead of calling the server's `getSimilarSongs`. Similar artists come from
+  the `getArtistInfo2` graph cached with the artist biography when available,
+  otherwise from local metadata (IDF-weighted genre tokens, era, playlist
+  co-occurrence, catalog support); top songs use Navidrome's fallback weights,
+  with genre/era/random top-ups. Radio works offline and lists only downloaded
+  songs in that mode; page and queue share one cached order, and the cache is
+  dropped after a library sync. The `getSimilarSongs` client wrapper remains
+  but has no radio call site.
+
 ## 0.7.3 - _F32 pipeline and float headroom_
 
 - **F32 end-to-end audio:** the decoder/swresampler now emits packed F32

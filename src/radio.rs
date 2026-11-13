@@ -14,8 +14,13 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Similar-song radio (ARC-RS-1): one seed row, expanded through
-//! `getSimilarSongs` into the RadioEntry page and its playback queue.
+//! Similar-song radio (ARC-RS-1): one seed row expanded locally by
+//! [`crate::recommend`] into the RadioEntry page and its playback queue.
+//!
+//! The expansion is offline-first: it never calls the server's
+//! `getSimilarSongs`. A cached Navidrome similar-artist graph is preferred
+//! when present; metadata similarity fills the rest. Page and queue share the
+//! same cached order, and `offline` restricts both to downloaded songs.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -54,25 +59,6 @@ fn cached_rows(kind: &str, id: &str) -> Option<Vec<SongRow>> {
         .cloned()
 }
 
-fn song_rows(children: &[crate::api::Child]) -> Vec<SongRow> {
-    children
-        .iter()
-        .enumerate()
-        .map(|(index, child)| SongRow {
-            id: child.id.clone(),
-            title: child.title.clone(),
-            artist: child.artist.clone(),
-            album: child.album.clone(),
-            album_id: child.album_id.clone(),
-            track: Some(index as i32 + 1),
-            duration: child.duration,
-            suffix: child.suffix.clone(),
-            cover_art: child.cover_art.clone(),
-            starred: child.starred.clone(),
-        })
-        .collect()
-}
-
 /// Result of the Tool > Save Radio action. Local save is authoritative; the
 /// remote playlist is best-effort and reports its failure without losing the
 /// local copy.
@@ -84,7 +70,7 @@ pub struct SavedRadio {
 }
 
 /// The generated rows for a radio seed: the cached page order when available,
-/// otherwise a fresh `getSimilarSongs` expansion recorded for playback.
+/// otherwise a fresh local expansion recorded for playback.
 pub async fn radio_rows(
     dbs: &crate::db::Dbs,
     seed_kind: &str,
@@ -97,9 +83,15 @@ pub async fn radio_rows(
     if let Some(rows) = cached_rows(seed_kind, seed_id) {
         return Ok(rows);
     }
-    let seed = resolve_seed(dbs, seed_kind, seed_id).await?;
-    let children = similar_songs(dbs, &seed).await?;
-    let mut rows = song_rows(&children);
+    let mut rows = crate::recommend::similar_songs(
+        dbs,
+        seed_kind,
+        seed_id,
+        crate::recommend::RADIO_COUNT,
+        false,
+        crate::consts::now_nanos() as u64,
+    )
+    .await?;
     let song_ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
     let album_covers = crate::library::song_cover_ids(&dbs.library, &song_ids).await?;
     for row in &mut rows {
@@ -111,8 +103,16 @@ pub async fn radio_rows(
     Ok(rows)
 }
 
+/// Drops every cached radio order. Called after a library sync so a removed or
+/// re-tagged song cannot linger in a cached expansion.
+pub(crate) fn clear_cache() {
+    RADIO_ROWS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+}
+
 struct Seed {
-    song_id: String,
     title: String,
     subtitle: String,
     cover_art: Option<String>,
@@ -132,43 +132,31 @@ async fn resolve_seed(dbs: &crate::db::Dbs, kind: &str, id: &str) -> Result<Seed
                 .next()
                 .ok_or_else(|| anyhow!("radio seed album has no songs"))?;
             Ok(Seed {
-                song_id: first.id.clone(),
                 title: album.title,
                 subtitle: album.artist.unwrap_or_default(),
                 cover_art: album.cover_art.or(first.cover_art),
             })
         }
-        // A song row can be a server-only track (radio or playlist rows), so
-        // the local lookup decorates the seed when possible and otherwise
-        // still seeds the API by id.
+        // Local radio needs local metadata. A server-only row that never made
+        // it into the synced library cannot be expanded offline; say so
+        // instead of silently falling back to the network.
         "song" => {
-            if let Some(song) = crate::library::song(&dbs.library, id).await? {
-                return Ok(Seed {
-                    song_id: song.id,
-                    title: song.title,
-                    subtitle: song.artist.unwrap_or_default(),
-                    cover_art: song.cover_art,
-                });
-            }
+            let song = crate::library::song(&dbs.library, id)
+                .await?
+                .ok_or_else(|| anyhow!("this song is not in the local library"))?;
             Ok(Seed {
-                song_id: id.to_string(),
-                title: "Radio".to_string(),
-                subtitle: String::new(),
-                cover_art: None,
+                title: song.title,
+                subtitle: song.artist.unwrap_or_default(),
+                cover_art: song.cover_art,
             })
         }
         other => Err(anyhow!("unknown radio seed kind: {other}")),
     }
 }
 
-async fn similar_songs(dbs: &crate::db::Dbs, seed: &Seed) -> Result<Vec<crate::api::Child>> {
-    let client = crate::session::client(dbs).await?;
-    client.get_similar_songs(&seed.song_id, Some(100)).await
-}
-
 /// The RadioEntry payload: seed identity, similar-song rows and a cover
-/// collage. Offline still returns the seed identity so the page can say why
-/// it is empty.
+/// collage. Offline radio lists only downloaded songs; the seed identity stays
+/// visible even when that subset is empty.
 pub async fn page(
     dbs: &crate::db::Dbs,
     seed_kind: &str,
@@ -178,7 +166,11 @@ pub async fn page(
     use crate::model::{PageHeader, Row, RowKind};
     let seed = resolve_seed(dbs, seed_kind, seed_id).await?;
     let subtitle = if offline {
-        "Radio needs a connection".to_string()
+        if seed.subtitle.is_empty() {
+            "Radio (offline)".to_string()
+        } else {
+            format!("Radio (offline) · {}", seed.subtitle)
+        }
     } else if seed.subtitle.is_empty() {
         "Radio".to_string()
     } else {
@@ -188,7 +180,7 @@ pub async fn page(
         |collage: Vec<String>, collage_remote: Vec<String>, collage_art: Vec<String>| PageHeader {
             title: seed.title.clone(),
             subtitle: subtitle.clone(),
-            meta: "Similar songs".to_string(),
+            meta: "Similar songs · local".to_string(),
             cover_url: collage.first().cloned().unwrap_or_default(),
             cover_remote: collage_remote.first().cloned().unwrap_or_default(),
             collage,
@@ -198,13 +190,12 @@ pub async fn page(
             rating: 0,
             starred: false,
         };
-    if offline {
-        return Ok((header(Vec::new(), Vec::new(), Vec::new()), Vec::new()));
-    }
-
     // The page and the playback queue must share one expansion. `radio_rows`
-    // caches under a fetch lock; use it here instead of fetching again.
-    let rows = radio_rows(dbs, seed_kind, seed_id).await?;
+    // caches under a fetch lock; use it here instead of fetching again. The
+    // cache holds the full local mix; offline filtering happens per read so
+    // flipping the flag never changes the cached order.
+    let mut rows = radio_rows(dbs, seed_kind, seed_id).await?;
+    crate::offline::retain_songs(dbs, offline, &mut rows).await?;
     let cover_ids = std::iter::once(&seed.cover_art).chain(rows.iter().map(|row| &row.cover_art));
     let covers = crate::covers::url_map_for(dbs, cover_ids.clone()).await?;
     let remotes = crate::covers::remote_map_for(dbs, cover_ids).await?;
@@ -273,15 +264,18 @@ pub async fn page(
     Ok((header(collage, collage_remote, collage_art), page_rows))
 }
 
-/// The radio queue: the same similar-song list, in server order. The clicked
-/// row becomes the queue start.
+/// The radio queue: the same local mix, in the cached page order. The clicked
+/// row becomes the queue start; the queue applies the same offline filter as
+/// [`page`], so the page row index maps to the same queue index.
 pub async fn tracks(
     dbs: &crate::db::Dbs,
     seed_kind: &str,
     seed_id: &str,
     start: i64,
+    offline: bool,
 ) -> Result<(Vec<crate::player::Track>, i64)> {
-    let songs = radio_rows(dbs, seed_kind, seed_id).await?;
+    let mut songs = radio_rows(dbs, seed_kind, seed_id).await?;
+    crate::offline::retain_songs(dbs, offline, &mut songs).await?;
     let start = start.clamp(0, songs.len().saturating_sub(1) as i64);
     Ok((crate::queue::tracks(dbs, songs).await?, start))
 }

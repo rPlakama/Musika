@@ -21,12 +21,27 @@ use sqlx::sqlite::SqlitePool;
 
 use super::sync::upsert_meta;
 
+/// One entry of the provider's similar-artist list (`getArtistInfo2`).
+///
+/// The IDs come from the same server as the library, so they are joinable
+/// against `artists`; names are kept for display/debugging and as a fallback
+/// when a server returns an artist the local sync has not seen yet.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SimilarArtist {
+    pub id: String,
+    pub name: String,
+}
+
 /// Cached artist biography + external URL (ARC-42, `artist_info` table).
 #[derive(Debug, Clone, Default, PartialEq, Eq, sqlx::FromRow, serde::Serialize)]
 pub struct ArtistInfoRow {
     pub artist_id: String,
     pub biography: String,
     pub url: String,
+    /// JSON array of [`SimilarArtist`]; empty when fetched but none matched.
+    pub similar: String,
+    /// Unix seconds of the graph fetch, separate from the biography timestamp.
+    pub similar_fetched_at: String,
     pub fetched_at: String,
 }
 
@@ -55,10 +70,45 @@ pub async fn upsert_artist_info(
     Ok(())
 }
 
+/// Stores the provider's similar-artist list for one artist.
+///
+/// Dedicated from [`upsert_artist_info`] so the biography fetch and the radio
+/// graph refresh can write independently: an insert starts with empty
+/// biography/URL, and an update never overwrites them.
+pub async fn upsert_artist_similar(
+    pool: &SqlitePool,
+    artist_id: &str,
+    similar: &[SimilarArtist],
+) -> Result<()> {
+    let json = serde_json::to_string(similar).unwrap_or_default();
+    sqlx::query(
+        "INSERT INTO artist_info (artist_id, biography, url, similar, similar_fetched_at, fetched_at)
+         VALUES (?1, '', '', ?2, ?3, '')
+         ON CONFLICT(artist_id) DO UPDATE SET
+             similar            = excluded.similar,
+             similar_fetched_at = excluded.similar_fetched_at",
+    )
+    .bind(artist_id)
+    .bind(json)
+    .bind(crate::consts::now_secs().to_string())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Parses the cached similar-artist list leniently: malformed JSON or rows
+/// written by an older schema degrade to "no graph" instead of failing radio.
+pub fn similar_artists(row: &ArtistInfoRow) -> Vec<SimilarArtist> {
+    if row.similar.trim().is_empty() {
+        return Vec::new();
+    }
+    serde_json::from_str(&row.similar).unwrap_or_default()
+}
+
 /// The cached biography for one artist; `None` when never fetched.
 pub async fn artist_info(pool: &SqlitePool, artist_id: &str) -> Result<Option<ArtistInfoRow>> {
     let row = sqlx::query_as::<_, ArtistInfoRow>(
-        "SELECT artist_id, biography, url, fetched_at
+        "SELECT artist_id, biography, url, similar, similar_fetched_at, fetched_at
          FROM artist_info WHERE artist_id = ?1",
     )
     .bind(artist_id)

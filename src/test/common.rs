@@ -17,6 +17,16 @@ pub use std::sync::Arc;
 pub use std::time::{Duration, Instant};
 pub use tokio::sync::mpsc;
 
+/// Serializes tests that use the process-wide offline downloaded-catalog
+/// cache (`crate::offline::load`). The cache is intentionally one per process
+/// in production, so parallel tests with different databases would otherwise
+/// observe each other's filter.
+static OFFLINE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+pub(crate) async fn lock_offline_catalog() -> tokio::sync::MutexGuard<'static, ()> {
+    OFFLINE_TEST_LOCK.lock().await
+}
+
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------

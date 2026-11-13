@@ -89,18 +89,56 @@ impl Bridge {
                     return;
                 }
             }
-            let fresh = match crate::session::client(&dbs).await {
-                Ok(client) => match client.get_artist_info2(&artist_id, Some(10), None).await {
-                    Ok(info) => info.info.biography.unwrap_or_default(),
-                    Err(_) => client
-                        .get_artist_info(&artist_id, Some(10), None)
-                        .await
-                        .ok()
-                        .and_then(|info| info.info.biography)
-                        .unwrap_or_default(),
+            // One request feeds both caches: the biography shown on the page
+            // and the similar-artist graph the local radio engine prefers.
+            // `getArtistInfo2` is the ID3 variant; `getArtistInfo` is the
+            // legacy fallback. `includeNotPresent=false` keeps the graph to
+            // artists this server can actually return songs for.
+            let (fresh, similar) = match crate::session::client(&dbs).await {
+                Ok(client) => match client
+                    .get_artist_info2(&artist_id, Some(15), Some(false))
+                    .await
+                {
+                    Ok(info) => (
+                        info.info.biography.unwrap_or_default(),
+                        Some(
+                            info.similar_artist
+                                .into_iter()
+                                .map(|artist| crate::library::SimilarArtist {
+                                    id: artist.id,
+                                    name: artist.name,
+                                })
+                                .collect::<Vec<_>>(),
+                        ),
+                    ),
+                    Err(_) => match client.get_artist_info(&artist_id, Some(15), None).await {
+                        Ok(info) => (
+                            info.info.biography.unwrap_or_default(),
+                            Some(
+                                info.similar_artist
+                                    .into_iter()
+                                    .map(|artist| crate::library::SimilarArtist {
+                                        id: artist.id,
+                                        name: artist.name,
+                                    })
+                                    .collect::<Vec<_>>(),
+                            ),
+                        ),
+                        Err(_) => (String::new(), None),
+                    },
                 },
-                Err(_) => String::new(),
+                Err(_) => (String::new(), None),
             };
+            if let Some(similar) = similar
+                && let Err(err) = crate::library::upsert_artist_similar(
+                    &dbs.library,
+                    &artist_id,
+                    &similar,
+                )
+                .await
+            {
+                crate::debug_log!("GPUI: artist similar graph cache failed: {err:#}");
+            }
             if !fresh.is_empty() {
                 _ =
                     crate::library::upsert_artist_info(&dbs.library, &artist_id, &fresh, "").await;

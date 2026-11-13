@@ -75,6 +75,7 @@ mod player;
 mod playlists;
 mod queue;
 mod radio;
+mod recommend;
 mod rows;
 mod scroll_memory;
 mod search;

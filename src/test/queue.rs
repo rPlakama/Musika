@@ -93,6 +93,7 @@ fn snapshot_start_survives_dropped_ids() {
 
 #[tokio::test]
 async fn offline_filter_keeps_only_downloaded_songs() {
+    let _offline = lock_offline_catalog().await;
     let dbs = test_dbs().await;
     crate::download::set_state(&dbs.download, "s1", crate::download::DONE, None)
         .await

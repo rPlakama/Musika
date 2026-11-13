@@ -212,7 +212,11 @@ playlist rm "Rated R"; Rated R Mix
 | `radio` | `radio [current|album|song] [name]` |
 | `radio save` | `radio save [--offline]` |
 
-`radio` starts a radio queue:
+`radio` starts a radio queue. The expansion is local: it reads `library.db`,
+never calls the server's `getSimilarSongs`, and therefore also works offline
+(with only downloaded songs). The seed artist's similar-artist graph is used
+when it has already been cached from an artist page; otherwise the expansion
+falls back to local genre/era/playlist metadata.
 
 ```text
 radio                 # currently playing track
@@ -221,6 +225,8 @@ radio album           # current album page, or pass a name
 radio album "Kid A"
 radio song "Idioteque"
 ```
+
+See [`Radio.md`](Radio.md) for the ranking signals and the offline rules.
 
 `radio save` saves the currently open radio page. It requires a radio page to
 be open; the M3U is named from that page's origin title. By default it also

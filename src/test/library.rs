@@ -452,6 +452,57 @@ async fn artist_info_round_trips_and_purges_with_the_artist() {
 }
 
 #[tokio::test]
+async fn similar_artist_graph_round_trips_and_stays_with_the_biography() {
+    let pool = library_pool().await;
+    sqlx::query("INSERT INTO artists (id, name) VALUES ('a1', 'Pixies')")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let similar = vec![
+        SimilarArtist {
+            id: "a2".to_string(),
+            name: "The Breeders".to_string(),
+        },
+        SimilarArtist {
+            id: "a3".to_string(),
+            name: "Throwing Muses".to_string(),
+        },
+    ];
+    upsert_artist_similar(&pool, "a1", &similar).await.unwrap();
+    let row = artist_info(&pool, "a1").await.unwrap().unwrap();
+    assert_eq!(similar_artists(&row), similar);
+
+    // A biography refetch keeps the graph: separate writers share one row.
+    upsert_artist_info(&pool, "a1", "Boston band.", "")
+        .await
+        .unwrap();
+    let row = artist_info(&pool, "a1").await.unwrap().unwrap();
+    assert_eq!(row.biography, "Boston band.");
+    assert_eq!(similar_artists(&row), similar);
+
+    // A graph refresh keeps the biography.
+    upsert_artist_similar(&pool, "a1", &similar[..1]).await.unwrap();
+    let row = artist_info(&pool, "a1").await.unwrap().unwrap();
+    assert_eq!(row.biography, "Boston band.");
+    assert_eq!(similar_artists(&row), similar[..1].to_vec());
+
+    // Malformed cached JSON degrades to "no graph" instead of failing radio.
+    sqlx::query("UPDATE artist_info SET similar = 'not json' WHERE artist_id = 'a1'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let row = artist_info(&pool, "a1").await.unwrap().unwrap();
+    assert!(similar_artists(&row).is_empty());
+
+    // Artist changes/removal invalidate the graph with the biography row.
+    invalidate_artist_info(&pool, &["a1".to_string()])
+        .await
+        .unwrap();
+    assert!(artist_info(&pool, "a1").await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn artist_song_ids_and_file_info_feed_the_downloader() {
     let pool = library_pool().await;
     sqlx::query(

@@ -9,11 +9,12 @@ impl Bridge {
 
     pub fn play_radio(&self, kind: String, id: String, start_index: usize) {
         let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             emit_queue_pair(
                 &tx,
-                crate::radio::tracks(&dbs, &kind, &id, start_index as i64)
+                crate::radio::tracks(&dbs, &kind, &id, start_index as i64, offline)
                     .await
                     .map(|(tracks, start)| (tracks, start as usize)),
                 "Could not start radio",
@@ -90,9 +91,11 @@ impl Bridge {
     /// already playing.
     pub fn queue_add_radio(&self, seed_kind: String, seed_id: String) {
         let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            let tracks = match crate::radio::tracks(&dbs, &seed_kind, &seed_id, 0).await {
+            let tracks = match crate::radio::tracks(&dbs, &seed_kind, &seed_id, 0, offline).await
+            {
                 Ok((tracks, _)) => tracks,
                 Err(err) => {
                     _ = tx.send(Event::Error(format!(
@@ -185,6 +188,7 @@ impl Bridge {
     /// Resolve an album/song name through the search engine, then start radio.
     pub fn play_radio_query(&self, kind: String, query: String, start_index: usize) {
         let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let scope = if kind == "album" {
@@ -200,7 +204,7 @@ impl Bridge {
                         id.clone(),
                     ),
                 });
-                crate::radio::tracks(&dbs, &kind, &id, start_index as i64)
+                crate::radio::tracks(&dbs, &kind, &id, start_index as i64, offline)
                     .await
                     .map(|(tracks, start)| (tracks, start as usize))
             }

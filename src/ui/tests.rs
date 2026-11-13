@@ -407,6 +407,10 @@ mod ipc_toast_tests {
             AppRoot::ipc_toast_text("playlist add selected; \"Mix\""),
             "IPC · playlist add selected; \"Mix\""
         );
+        assert_eq!(
+            AppRoot::ipc_toast_text("playlist add queue; \"Mix\""),
+            "IPC · playlist add queue; \"Mix\""
+        );
     }
 }
 

@@ -83,6 +83,27 @@ impl Bridge {
 }
 
 impl Bridge {
+    /// Append the playing queue to a playlist (`playlist add queue; <playlist>`).
+    /// The ids come from the caller's playback snapshot/mirror; this is the
+    /// resolved-id append path, so duplicates collapse like every other
+    /// `playlist add` target.
+    pub fn playlist_add_ids(&self, ids: Vec<String>, playlist: String) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            match crate::playlists::add_queue_to_playlist(&dbs, &playlist, &ids).await {
+                Ok((name, rows)) => {
+                    _ = tx.send(PlaylistSave::ok(name).rows(rows).into());
+                }
+                Err(err) => {
+                    _ = tx.send(PlaylistSave::failed(playlist, format!("{err:#}")).into());
+                }
+            }
+        });
+    }
+}
+
+impl Bridge {
     /// Append the UI's current selection to an existing playlist
     /// (`playlist add selected; <playlist>`). The selection lives in the UI
     /// process, so the UI sends one row kind plus the selected ids; album and

@@ -110,6 +110,7 @@ macro_rules! for_each_bridge_rpc {
                 current_song_id: Option<String>
             ),
             playlist_add_selected(kind: String, ids: Vec<String>, playlist: String),
+            playlist_add_ids(ids: Vec<String>, playlist: String),
             playlist_remove(
                 targets: Vec<String>,
                 playlist: String,

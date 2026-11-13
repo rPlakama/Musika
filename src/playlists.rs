@@ -1114,6 +1114,33 @@ pub async fn add_song_ids_to_playlist(
     Ok(display_playlist_name(&playlist.name))
 }
 
+/// Append the playing queue to a playlist (`playlist add queue; <playlist>`).
+///
+/// The queue ids are supplied by the caller that owns the playback snapshot
+/// (the daemon) or its UI mirror; they are playback state, not a library query.
+/// Blank ids are dropped and the resolved-id append path is reused, so
+/// duplicates collapse exactly like the other `playlist add` targets.
+///
+/// Returns the playlist name and the number of tracks the append covers.
+pub async fn add_queue_to_playlist(
+    dbs: &Dbs,
+    playlist_query: &str,
+    queue_song_ids: &[String],
+) -> Result<(String, usize)> {
+    let ids: Vec<String> = queue_song_ids
+        .iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
+    if ids.is_empty() {
+        return Err(anyhow!("The queue is empty; nothing to save."));
+    }
+    let playlist = resolve_playlist(dbs, playlist_query).await?;
+    let rows = dedup_keep_last(&ids).len();
+    append_resolved(dbs, &playlist, &ids).await?;
+    Ok((display_playlist_name(&playlist.name), rows))
+}
+
 /// Append an already-selected set of rows to a playlist (the
 /// `playlist add selected; <playlist>` path). The UI sends its selection as
 /// one row kind plus the selected ids: songs are added as-is, albums and

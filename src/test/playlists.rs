@@ -1505,3 +1505,97 @@ async fn delete_playlist_removes_a_server_playlist() {
         "{requests:?}"
     );
 }
+
+/// `playlist add queue;` saves the queue through the resolved-id append path:
+/// order follows the queue, blank ids are ignored, duplicates collapse (the
+/// same rule every other `playlist add` target gets), and an empty queue is an
+/// error instead of a no-op rewrite.
+#[tokio::test]
+async fn add_queue_appends_in_order_and_collapses_duplicates() {
+    let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
+    let library = playlist_pool().await;
+    sqlx::migrate!("./migrations_library")
+        .run(&library)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO artists (id, name, album_count) VALUES ('ar1', 'Artist', 1);
+         INSERT INTO albums (id, artist_id, name, artist, song_count)
+             VALUES ('al1', 'ar1', 'Album', 'Artist', 2);
+         INSERT INTO songs
+             (id, album_id, artist_id, title, artist, album, track, disc_number, duration, path)
+         VALUES
+             ('s1', 'al1', 'ar1', 'First', 'Artist', 'Album', 1, 1, 100, 'Music/first.flac'),
+             ('s2', 'al1', 'ar1', 'Second', 'Artist', 'Album', 2, 1, 200, 'Music/second.flac');",
+    )
+    .execute(&library)
+    .await
+    .unwrap();
+    let playlist = playlist_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    let dbs = playlist_dbs(&library, &playlist);
+    let root = std::env::temp_dir().join(format!("musika-queue-save-{}", std::process::id()));
+    _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    crate::db::set_data_root(root.clone());
+
+    let path = create_local(&dbs, "Queue Mix", &["s1".into()]).await.unwrap();
+    let paths = |text: &str| {
+        parse_m3u(text)
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect::<Vec<_>>()
+    };
+
+    // Queue [s2, s1, s2] collapses to [s1, s2] (duplicates keep their last
+    // position, like every other target) and the blank id is ignored.
+    let (name, rows) = add_queue_to_playlist(
+        &dbs,
+        "Queue Mix",
+        &["s2".into(), "s1".into(), "s2".into(), String::new()],
+    )
+    .await
+    .unwrap();
+    assert_eq!((name.as_str(), rows), ("Queue Mix", 2));
+    assert_eq!(
+        paths(&std::fs::read_to_string(&path).unwrap()),
+        vec!["Music/first.flac", "Music/second.flac"]
+    );
+
+    // Saving the same queue again does not duplicate the playlist rows.
+    let (_, rows) = add_queue_to_playlist(&dbs, "Queue Mix", &["s1".into(), "s2".into()])
+        .await
+        .unwrap();
+    assert_eq!(rows, 2);
+    assert_eq!(
+        paths(&std::fs::read_to_string(&path).unwrap()),
+        vec!["Music/first.flac", "Music/second.flac"]
+    );
+
+    // An empty queue and an unknown destination are reported, not written.
+    assert!(
+        add_queue_to_playlist(&dbs, "Queue Mix", &[])
+            .await
+            .is_err()
+    );
+    assert!(
+        add_queue_to_playlist(&dbs, "Queue Mix", &[String::new(), "  ".into()])
+            .await
+            .is_err()
+    );
+    assert!(
+        add_queue_to_playlist(&dbs, "Missing", &["s1".into()])
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        paths(&std::fs::read_to_string(&path).unwrap()),
+        vec!["Music/first.flac", "Music/second.flac"],
+        "failed saves must not rewrite the playlist"
+    );
+
+    _ = std::fs::remove_dir_all(root);
+}

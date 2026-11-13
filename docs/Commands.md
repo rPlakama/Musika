@@ -116,7 +116,7 @@ mpris_position:5000000
 | Command | Usage |
 | --- | --- |
 | `playlist create` | `playlist create <name> [--offline]` |
-| `playlist add` | `playlist add <target>...; <playlist>` or `playlist add selected; <playlist>` |
+| `playlist add` | `playlist add <target>...; <playlist>`, `playlist add selected; <playlist>` or `playlist add queue; <playlist>` |
 | `playlist rm` | `playlist rm <target>...; <playlist>` or `playlist rm; <playlist>` |
 
 `playlist create` creates a playlist containing the currently playing track.
@@ -135,7 +135,14 @@ resolved through the same search engine as the Search overlay:
 - an album expands to all of its tracks;
 - a track adds that one song;
 - the literal `current` adds the currently playing track;
-- the literal `selected` adds the rows currently selected in the UI.
+- the literal `selected` adds the rows currently selected in the UI;
+- the literal `queue` saves the entire current playback queue, in queue order.
+
+`queue` is resolved from the core's authoritative playback queue, so it also
+works over `ipc.sock` with no window attached (an attached UI forwards its
+mirror of the same queue). It is appended through the same resolved-id path as
+every other target, so a song that appears several times in the queue keeps
+only its last position, exactly like a repeated name target.
 
 `selected` is the one target that is not resolved by name: it uses the live
 selection of the active surface. The floating search's range wins when the
@@ -154,13 +161,14 @@ target may itself contain `;`). The legacy form without a cutoff — playlist is
 the last argument — is still accepted.
 
 Command-line suggestions follow the cutoff: before `;` you get `current`,
-`selected` plus search hits for the targets, after `;` only existing playlist
-names (matched against the name typed so far, so a two-word name completes in
+`selected`, `queue` plus search hits for the targets, after `;` only existing
+playlist names (matched against the name typed so far, so a two-word name completes in
 one Tab).
 
 ```text
 playlist add current; "Rated R Mix"
 playlist add selected; "Rated R Mix"
+playlist add queue; "Rated R Mix"
 playlist add "Pink Floyd", "King Crimson"; Road Trip
 playlist add "Rated R" "Leg of Lamb"; Rated R Mix
 # legacy form, still accepted:
@@ -351,6 +359,7 @@ printf 'shuffle album "Rated R"\n' | nc -U "$socket"
 printf 'radio album "Kid A"\n' | nc -U "$socket"
 printf 'playlist add current; "Road Trip"\n' | nc -U "$socket"
 printf 'playlist add selected; "Road Trip"\n' | nc -U "$socket" # needs an attached window
+printf 'playlist add queue; "Road Trip"\n' | nc -U "$socket"   # works headless
 printf 'playlist create "Road Trip" --offline\n' | nc -U "$socket"
 printf 'radio save --offline\n' | nc -U "$socket"
 printf 'download "Pink Floyd" album "Atom Heart Mother"\n' | nc -U "$socket"

@@ -49,6 +49,13 @@ pub enum IpcCommand {
     PlaylistAddSelected {
         playlist: String,
     },
+    /// Append the whole playback queue to a playlist, in queue order:
+    /// `playlist add queue; <playlist>`. The queue is core state, so the daemon
+    /// resolves it from its playback snapshot; an attached UI forwards its
+    /// mirror of the same queue.
+    PlaylistAddQueue {
+        playlist: String,
+    },
     PlaylistRemove {
         targets: Vec<String>,
         playlist: String,
@@ -199,6 +206,7 @@ impl IpcCommand {
             | Self::RemoveAccount { .. }
             | Self::PlaylistCreate { .. }
             | Self::PlaylistAdd { .. }
+            | Self::PlaylistAddQueue { .. }
             | Self::PlaylistRemove { .. }
             | Self::PlaylistDelete { .. }
             | Self::Radio { .. }
@@ -513,7 +521,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "playlist",
         usage: "playlist <create|add|rm> ...",
-        description: "Create, add/remove targets or delete a playlist (playlist rm <target...>; <name>, playlist add selected; <name>, playlist rm <name>)",
+        description: "Create, add/remove targets or delete a playlist (playlist add queue; <name>, playlist add selected; <name>, playlist rm <name>)",
         form: CommandForm::Advanced(ArgHints::Values(&["create", "add", "rm"])),
     },
     CommandSpec {
@@ -1400,11 +1408,18 @@ fn parse_playlist(rest: &str) -> Result<IpcCommand, CommandError> {
                 Ok(IpcCommand::PlaylistRemove { targets, playlist })
             } else if targets.len() == 1 && is_selected_target(&targets[0]) {
                 Ok(IpcCommand::PlaylistAddSelected { playlist })
+            } else if targets.len() == 1 && is_queue_target(&targets[0]) {
+                Ok(IpcCommand::PlaylistAddQueue { playlist })
             } else if targets.iter().any(|target| is_selected_target(target)) {
                 // `selected` names the UI's live selection, so it cannot be
                 // mixed with free-form targets (those resolve in the daemon).
                 Err(CommandError(
                     "usage: playlist add selected; <playlist>".to_string(),
+                ))
+            } else if targets.iter().any(|target| is_queue_target(target)) {
+                // `queue` names the whole playback queue, not a search phrase.
+                Err(CommandError(
+                    "usage: playlist add queue; <playlist>".to_string(),
                 ))
             } else {
                 Ok(IpcCommand::PlaylistAdd { targets, playlist })
@@ -1417,6 +1432,11 @@ fn parse_playlist(rest: &str) -> Result<IpcCommand, CommandError> {
 /// The `selected` target keyword of `playlist add selected; <playlist>`.
 fn is_selected_target(value: &str) -> bool {
     value.eq_ignore_ascii_case("selected")
+}
+
+/// The `queue` target keyword of `playlist add queue; <playlist>`.
+fn is_queue_target(value: &str) -> bool {
+    value.eq_ignore_ascii_case("queue")
 }
 
 pub(crate) fn quote_arg(value: &str) -> String {
@@ -1522,6 +1542,9 @@ fn advanced_canonical(command: &IpcCommand) -> String {
         }
         PlaylistAddSelected { playlist } => {
             format!("playlist add selected; {}", quote_arg(playlist))
+        }
+        PlaylistAddQueue { playlist } => {
+            format!("playlist add queue; {}", quote_arg(playlist))
         }
         PlaylistDelete { playlist } => format!("playlist rm; {}", quote_arg(playlist)),
 
@@ -1889,6 +1912,18 @@ fn playlist_suggestions(
             label: "selected".to_string(),
             description: "Add the visual selection (or the cursor row)".to_string(),
             completion: Some("selected".to_string()),
+        });
+    }
+    if !playlist_only
+        && before.get(1).copied() == Some("add")
+        && "queue".starts_with(&prefix_lower)
+    {
+        out.push(Suggestion {
+            start,
+            end,
+            label: "queue".to_string(),
+            description: "Add the current playback queue".to_string(),
+            completion: Some("queue".to_string()),
         });
     }
     for row in context.rows.iter().filter(|row| row.kind == "playlist") {
@@ -2270,16 +2305,25 @@ mod tests {
             all.iter()
                 .any(|s| s.label == "selected" && s.completion.as_deref() == Some("selected"))
         );
+        assert!(
+            all.iter()
+                .any(|s| s.label == "queue" && s.completion.as_deref() == Some("queue"))
+        );
         let prefixed = suggestions_with("playlist add sel", "playlist add sel".len(), &context);
         assert_eq!(prefixed.len(), 1);
         assert_eq!(prefixed[0].completion.as_deref(), Some("selected"));
-        // `playlist rm` has no selected-target form.
+        let queue_prefixed = suggestions_with("playlist add que", "playlist add que".len(), &context);
+        assert_eq!(queue_prefixed.len(), 1);
+        assert_eq!(queue_prefixed[0].completion.as_deref(), Some("queue"));
+        // `playlist rm` has no selected/queue target form.
         let rm = suggestions_with("playlist rm ", "playlist rm ".len(), &context);
         assert!(!rm.iter().any(|s| s.label == "selected"));
+        assert!(!rm.iter().any(|s| s.label == "queue"));
         // After the cutoff only playlist names are offered.
         let input = "playlist add selected; ";
         let after = suggestions_with(input, input.len(), &context);
         assert!(!after.iter().any(|s| s.label == "selected"));
+        assert!(!after.iter().any(|s| s.label == "queue"));
     }
 
     #[test]
@@ -2419,6 +2463,39 @@ mod tests {
         assert_eq!(
             canonical_string(&parse("playlist add selected; \"Road Trip\"").unwrap()),
             "playlist add selected; \"Road Trip\""
+        );
+        // `queue` saves the whole playback queue, in queue order.
+        assert_eq!(
+            parse("playlist add queue; \"Road Trip\""),
+            Ok(IpcCommand::PlaylistAddQueue {
+                playlist: "Road Trip".into()
+            })
+        );
+        assert_eq!(
+            parse("playlist add QUEUE; Road Trip"),
+            Ok(IpcCommand::PlaylistAddQueue {
+                playlist: "Road Trip".into()
+            })
+        );
+        assert_eq!(
+            parse("playlist add queue \"Road Trip\""),
+            Ok(IpcCommand::PlaylistAddQueue {
+                playlist: "Road Trip".into()
+            }),
+            "the legacy last-token form accepts queue too"
+        );
+        assert!(
+            parse("playlist add queue \"Pink Floyd\"; Road Trip").is_err(),
+            "queue cannot be mixed with free-form targets"
+        );
+        assert!(
+            parse("playlist add selected queue; Road Trip").is_err(),
+            "queue cannot be mixed with selected either"
+        );
+        assert!(parse("playlist add queue;").is_err());
+        assert_eq!(
+            canonical_string(&parse("playlist add queue; \"Road Trip\"").unwrap()),
+            "playlist add queue; \"Road Trip\""
         );
         assert_eq!(
             parse("radio save"),

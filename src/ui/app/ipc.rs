@@ -125,6 +125,31 @@ impl AppRoot {
                     None,
                 ),
             },
+            IpcCommand::PlaylistAddQueue { playlist } => {
+                let rows = self.player.queue();
+                let ids: Vec<String> = rows
+                    .iter()
+                    .map(|track| track.id.clone())
+                    .filter(|id| !id.is_empty())
+                    .collect();
+                if rows.is_empty() {
+                    self.push_toast(
+                        "The queue is empty; nothing to save.".to_string(),
+                        ToastKind::Notice,
+                        None,
+                    );
+                } else if ids.len() != rows.len() {
+                    // Queue bodies arrive in bounded chunks; a placeholder row
+                    // would silently drop tracks from the saved playlist.
+                    self.push_toast(
+                        "The queue is still loading; try again.".to_string(),
+                        ToastKind::Notice,
+                        None,
+                    );
+                } else {
+                    self.bridge.playlist_add_ids(ids, playlist);
+                }
+            }
             IpcCommand::PlaylistRemove { targets, playlist } => {
                 let current = self.player.current().map(|track| track.id.clone());
                 self.bridge.playlist_remove(targets, playlist, current);

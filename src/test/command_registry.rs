@@ -33,6 +33,7 @@ const SAMPLES: &[(&str, &str)] = &[
     ("playlist create \"My Mix\" --offline", "playlist create My Mix --offline"),
     ("playlist add a1 b2; P", "playlist add a1 b2; P"),
     ("playlist add selected; P", "playlist add selected; P"),
+    ("playlist add queue; P", "playlist add queue; P"),
     ("playlist rm; P", "playlist rm; P"),
     ("playlist rm a1; P", "playlist rm a1; P"),
     ("shuffle queue", "shuffle queue"),

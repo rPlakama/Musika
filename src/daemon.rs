@@ -519,6 +519,21 @@ fn dispatch_core_bridge(services: &Services, command: &IpcCommand) {
             let current_id = current.map(|track| track.id.clone());
             bridge.playlist_add(targets.clone(), playlist.clone(), current_id);
         }
+        IpcCommand::PlaylistAddQueue { playlist } => {
+            // The queue is playback state, so the core resolves it from the
+            // same snapshot the transport uses; no UI attachment required.
+            let ids: Vec<String> = snapshot
+                .queue
+                .iter()
+                .map(|track| track.id.clone())
+                .filter(|id| !id.is_empty())
+                .collect();
+            if ids.is_empty() {
+                bridge.error("The queue is empty; nothing to save.");
+            } else {
+                bridge.playlist_add_ids(ids, playlist.clone());
+            }
+        }
         IpcCommand::PlaylistRemove { targets, playlist } => {
             let current_id = current.map(|track| track.id.clone());
             bridge.playlist_remove(targets.clone(), playlist.clone(), current_id);
@@ -995,6 +1010,13 @@ mod tests {
         );
         assert_eq!(
             ipc_command::parse("playlist add current; Mix")
+                .unwrap()
+                .target(),
+            CommandTarget::CoreBridge
+        );
+        // The queue lives in the core, so saving it is core-owned work.
+        assert_eq!(
+            ipc_command::parse("playlist add queue; Mix")
                 .unwrap()
                 .target(),
             CommandTarget::CoreBridge

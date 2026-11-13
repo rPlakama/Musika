@@ -204,3 +204,135 @@ native-rate decoding (44.1 kHz), the 192 kHz cap, rate-scaled seek trimming and
 the ring's rate-scaled usable limit; the ignored sink test covers a live stream
 rebuild to 44.1/96 kHz, and the ignored worker tests cover a live same-rate
 gapless handoff plus the drain/renegotiate/swap path at a rate change.
+
+## Gap audit and roadmap (2026-11)
+
+Scope: an audit of `src/player/**`, `src/daemon/playback.rs`, `src/queue.rs`
+and this document, plus the questionnaire answers recorded for the playback
+roadmap. The audit describes the tree as of 2026-11; the roadmap phases are
+plans, not shipped behaviour.
+
+### What the engine has
+
+- PipeWire output as packed S16 stereo at the track's native rate. Sources
+  above **192 kHz** are resampled down to `MAX_PIPELINE_RATE`; the sink rebuilds
+  its stream per track rate before PCM for that track is written.
+- A lock-free SPSC ring allocated with **8 MiB** (2,097,152 frames) up front,
+  so the rate-scaled usable limit stays a constant ~10.9 s at any rate.
+- An event-driven RT engine: the engine thread blocks on an eventfd written by
+  the RT callback, the sink loop and the decode worker, with only a poll
+  timeout as a safety net. There is no `pump()`/10 Hz poll.
+- FFmpeg demux/decode/resample with a **32 MiB** AVIO read-ahead, a 1 MiB/1 s
+  probe plus a defaults retry for exotic files, `+fastseek`, and a **120 s**
+  read/write timeout.
+- Local-first URLs: a cached media blob is handed to the decoder as a
+  `file://` URL and only a cold row uses the provider stream URL.
+- Same-rate gapless handoff with a preloaded decoder; at a rate change the
+  worker drains the ring and renegotiates the stream, which leaves the
+  documented small gap.
+- Rate-scaled seek trimming; pause parking that keeps a seekable decoder open,
+  and reopen on resume for non-seekable streams or pauses over 30 s.
+- Sink failure drops and rebuilds the engine, then replays the current row at
+  the same playhead (`CoreCommand::Recover`); ordinary decode/track failures
+  are reported and the queue advances.
+- MPRIS 2.2 plus the IPC `status`/`queue` snapshots; a pure, deterministic
+  `PlaybackCore` policy model covered by 49 tests in `src/test/playback.rs`.
+- Live PipeWire tests exist but are `#[ignore]`d, and CI runs
+  `cargo test --lib` without an audio device.
+
+### Gaps
+
+**Network resilience.** A transient HTTP open/read failure is not retried:
+`open_input` returns the error, `EngineEvent::Failed` stores `last_error` and
+the queue advances. There is no bounded retry/backoff, no
+reconnect-at-position after a network hiccup, and no offline/latch handling
+inside playback. Long tracks are protected by the 7/8-to-2 s ring
+drain/reopen policy and the 120 s rw timeout, not by retrying a failed request.
+
+**Buffering visibility.** The published snapshot exposes `loading` and
+`last_error` only (IPC `status` adds state/position/duration/volume/muted/
+engine_available/current). There is no buffered span, ring fill, decode lead,
+underrun/dropout count or first-PCM/seek latency exposed. `Status` carries
+`level`/`peak` internally for metering, but they do not reach the snapshot, UI
+or IPC.
+
+**Output/format.** The pipeline presents packed S16 stereo only. There is no
+F32 path, no S24, no configurable resampler and no dither; swresample converts
+to S16 and the sink has no other sample format to negotiate.
+
+**OS/device integration.** Output is PipeWire-only. There is no output-device
+enumeration or selection (streams target the default node), no suspend/resume
+or hotplug policy beyond the stream-error rebuild, and no wake-lock/inhibit
+handling. MPRIS is the only OS-facing surface; no other platform backend
+exists.
+
+**Transitions/loudness.** There is no audio fade-in/out, no crossfade and no
+loudness normalization or ReplayGain handling. The rate-change handoff keeps
+its documented small gap, and volume is node-level with a fixed-point RT
+fallback. (The animated lyric fades in the UI are visuals, not audio.)
+
+**Safety net/CI.** Errors are strings (`PlaybackOutput::Error(String)`,
+`last_error: Option<String>`) rather than structured codes, and there are no
+playback counters for underruns, decode lead or transition gaps. Media demux
+paths have no fuzz harness. Audio cannot be exercised in CI: live PipeWire
+tests are ignored and `ci.yml` runs `cargo test --lib` on runners without an
+audio session, so graph-negotiation or RT regressions are only caught by
+manual runs.
+
+**Fixed latency-config.** Ring capacity (8 MiB / 2,097,152 frames), the ~20 ms
+worker chunk and the parking thresholds are compiled in. There is no
+configurable buffer size, target latency or clock policy for different
+machines and sinks.
+
+### Recorded decisions (2026-11 questionnaire)
+
+These are the answers recorded for the roadmap; none of the future items is
+implemented yet.
+
+- Reliability: the whole reliability list is in scope (network resilience,
+  buffering visibility, structured errors + counters, safety-net tests and CI).
+- Format: **F32 internal and output only**. Rejected: S24, a configurable
+  resampler, and dither.
+- Transitions/loudness: close the rate-change gap, add fade-in/out, optional
+  crossfade, and loudness normalization.
+- Crossfade UI: a control beside repeat, using the provided
+  `src/icons/transition-fade-sharp.svg`, bound to `Ctrl+F`.
+- Normalization UI: a bold `N` on the top bar and in fullscreen to the right of
+  repeat, bound to `Ctrl+Shift+N`. `Ctrl+N` stays next-track.
+- Engineering: playback counters plus structured errors; extend the
+  `PlaybackCore` model tests and add media fuzz tests.
+- Rejected/deferred: no configurable buffer/latency settings; no deeper
+  prefetch beyond the next track.
+
+### Roadmap
+
+The phase order below is the planned implementation order. Each phase is
+expected to land with tests and documentation; nothing is committed on a date.
+
+- **Phase 0 — safety net.** Structured playback errors and counters
+  (underruns, decode lead, first-PCM/seek latency, transition gaps), media fuzz
+  tests, and the test/CI hooks needed to catch regressions before behaviour
+  changes.
+- **Phase 1 — network resilience.** Bounded retry/backoff and
+  reconnect-at-position for transient HTTP failures without skipping the track;
+  surface the buffering fields added in Phase 0.
+- **Phase 2 — device/system.** Output-device enumeration and selection,
+  follow-default handling, suspend/resume and hotplug recovery, and an explicit
+  wake/inhibit policy on top of the existing stream-error rebuild.
+- **Phase 3 — F32.** Move the decode -> ring -> PipeWire path to F32 (internal
+  and output only), keeping S16 only as the fallback where a sink cannot accept
+  F32; no S24, resampler configuration or dither.
+- **Phase 4 — transitions/loudness/UI binds.** Close the rate-change gap, add
+  fade-in/out and optional crossfade, then loudness normalization (default
+  off); bind the crossfade control (icon, `Ctrl+F`) beside repeat and the bold
+  `N` normalization control (`Ctrl+Shift+N`) on the top bar and in fullscreen.
+- **Phase 5 — docs/measurements.** Update this document and
+  `docs/Keybinds.md`, extend the measurement tables with transition, latency
+  and RSS numbers for the new paths, and state what remains unimplemented.
+
+### Open notes
+
+- `src/icons/transition-fade-sharp.svg` is untracked; commit it only with the
+  Phase 4 change that references it.
+- Loudness normalization ships **default off**, and ReplayGain tags are read
+  first: tag-driven gain comes before any analysis or fallback policy.

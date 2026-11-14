@@ -20,6 +20,11 @@
       ];
       fontDataDirs = pkgs.lib.makeSearchPath "share" fonts;
 
+      # Headless FFmpeg for the core: drops GUI-only dependencies (X11/XCB, SDL, VDPAU, Pulse) while keeping every
+      # audio decoder, demuxer and TLS path the player uses. A stricter
+      # audio-only override (dropping video codecs/encoders and capture libs)
+      # is a packaging follow-up; it requires a from-source FFmpeg build.
+      ffmpegAudio = pkgs.ffmpeg-headless;
 
       musika = pkgs.rustPlatform.buildRustPackage {
         pname = "musika";
@@ -48,9 +53,13 @@
 
         # Packaging is the release profile only. Tests run in the dev shell/CI;
         # skipping the test-profile rebuild keeps nix builds fast.
+        #
+        # The shipped core is a long-lived process: fat LTO / one codegen unit
+        # is the repo's release profile and produces a much smaller, faster
+        # starting binary than thin/4. The extra link time is paid once here.
         doCheck = false;
-        CARGO_PROFILE_RELEASE_LTO = "thin";
-        CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "4";
+        CARGO_PROFILE_RELEASE_LTO = "fat";
+        CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "1";
 
         nativeBuildInputs = [
           pkgs.pkg-config
@@ -67,7 +76,7 @@
         buildInputs = [
           pkgs.openssl
           pkgs.pipewire
-          pkgs.ffmpeg
+          ffmpegAudio
           pkgs.sqlite
           pkgs.libglvnd
           # GPUI display/font/Vulkan dependencies.
@@ -179,6 +188,8 @@
           rustfmt
           libglvnd
           pipewire
+          # Dev shells stay on the full closure for fast local iteration; the
+          # packaged core uses `ffmpegAudio` above.
           ffmpeg
           openssl
           sqlx-cli

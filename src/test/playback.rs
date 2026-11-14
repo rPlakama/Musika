@@ -1399,7 +1399,10 @@ fn engine_crossfade_reports_the_next_track_offset() {
     let (first_path, first_url) = wav_url("crossfade-a", 48_000 * 7);
     let (second_path, second_url) = wav_url("crossfade-b", 48_000 * 10);
     let (event_tx, event_rx) = std::sync::mpsc::channel();
-    let engine = Engine::new(event_tx).expect("PipeWire engine");
+    let events: crate::player::engine::EventSink = std::sync::Arc::new(move |event| {
+        event_tx.send(event).is_ok()
+    });
+    let engine = Engine::new(events).expect("PipeWire engine");
     engine.send(AudioCommand::SetCrossfade(true));
     engine.send(AudioCommand::Load {
         url: first_url,
@@ -1445,7 +1448,10 @@ fn engine_pause_resume_keeps_progress_and_shuts_down() {
     use crate::player::engine::Engine;
     let (path, url) = wav_url("pause", 96_000 * 30);
     let (event_tx, event_rx) = std::sync::mpsc::channel();
-    let engine = Engine::new(event_tx).expect("PipeWire engine");
+    let events: crate::player::engine::EventSink = std::sync::Arc::new(move |event| {
+        event_tx.send(event).is_ok()
+    });
+    let engine = Engine::new(events).expect("PipeWire engine");
     engine.send(AudioCommand::Load {
         url,
         next_url: None,

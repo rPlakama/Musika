@@ -69,7 +69,7 @@ pub fn pool() -> Option<SqlitePool> {
 }
 
 /// Every core the machine has. Scope switches are user-initiated bulk reads,
-/// so their row shaping runs on the full-core rayon pool; the quarter-core
+/// so their row shaping may use the full core count; the quarter-core
 /// [`worker_limit`] budget is for background work, not a foreground switch.
 pub(crate) fn all_cores() -> usize {
     std::thread::available_parallelism()
@@ -89,7 +89,11 @@ pub fn runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
     RT.get_or_init(|| {
         match tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(worker_limit())
+            // A music daemon is not a compute server: four async workers are
+            // plenty even on a many-core desktop, and a small blocking pool
+            // bounds the spawn_blocking bursts (palette/cover/search work).
+            .worker_threads(worker_limit().min(8))
+            .max_blocking_threads(8)
             .enable_all()
             .build()
         {

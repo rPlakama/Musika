@@ -7,7 +7,7 @@ impl Bridge {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let event = match crate::app::dbs() {
-                Some(dbs) => match crate::accounts::active_account() {
+                Some(dbs) => match crate::accounts::active_identity() {
                     Some(account) => {
                         let status = crate::library::status(&dbs.library).await.ok();
                         Event::Header {

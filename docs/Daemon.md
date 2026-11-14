@@ -29,6 +29,62 @@ is open, or raises the existing one, against the still-running core.
   tray/MPRIS/audio, closes the child, removes both sockets, and exits.
 - Closing the window with the compositor close action is **not** a quit: it
   only ends `musika-ui`.
+- `musika --ui` is a development convenience: the launcher `exec`s the sibling
+  `musika-ui` instead of linking the front end into the core binary.
+
+## Construction budget
+
+The core is a long-lived, constructed-once process. Its startup footprint is
+kept bounded so an idle daemon does not keep audio/GPU/UI machinery or polling
+loops alive. Measured on the development host with a sandboxed config and a
+private session bus (release build; `Rss` includes shared clean library pages):
+
+| metric | before (0.7.3) | now |
+| --- | ---: | ---: |
+| packaged core binary | 53.5 MB | 22.9 MB |
+| `ldd` shared libraries | 83 | 74 |
+| threads while idle (restored real session) | 20 | 16 |
+| idle wakeups (per-thread `/proc` census) | ~65/s | ~4.3/s |
+| idle CPU | ~0 % (one decode poll tick) | 0 ticks / 15 s |
+| `VmRSS` (restored real snapshot) | 95.3 MB | 89.2 MB |
+| `VmRSS` (empty/minimal config, no restored session) | 44.1 MB | 36.9 MB |
+| mappings | 598 | 545 |
+| SQLite workers after settling | 4 | 3 |
+| `musika --version` p50 | ~11.6 ms | ~10.0 ms |
+| PipeWire node while idle (no restored session) | `running` | `suspended` |
+
+The restored-snapshot numbers include the queued track objects, the warm
+SQLite/TLS state and the cover cache metadata of a real session; the smaller
+fresh-config numbers are the pure construction footprint. The socket-ready
+number is dominated by the one-time oversized-cover migration on a freshly
+copied cache (800-1050 ms on both sides), so it is not a construction metric.
+
+What changed:
+
+- the core binary no longer contains the GPUI front end (`--ui` execs
+  `musika-ui`); the packaged FFmpeg closure is the headless variant (audio
+  decoders kept, GUI/capture dependencies dropped);
+- the PipeWire stream starts suspended and is activated by `Load`/`Resume`, so
+  idle playback does not schedule the RT callback at graph rate;
+- engine events go straight into the playback service channel (no forwarding
+  thread); the playback, engine and decode loops block on their channels when
+  there is nothing time-based to do;
+- the MPRIS position tick only runs while playing;
+- the FTS search pool opens lazily, and eager SQLite pools keep one connection
+  but reap burst connections after 60 s idle (up to two reaper periods);
+- large one-shot buffers are returned to the kernel after sync/cover/search
+  bursts (`malloc_trim`), and the database warm-up uses kernel readahead
+  instead of a 1 MiB userspace copy;
+- the text control socket runs on Tokio tasks (no persistent reader/dispatcher
+  threads), the async runtime bounds its worker/blocking pools, and spawned
+  child processes inherit no non-stdio descriptors (close-on-exec).
+
+`MUSIKA_STARTUP_TRACE=1` prints the construction marks (`main`,
+`accounts.root`, `db.library`, `db.media`, `db.sync`, `db.legacy`, `db.init`,
+`accounts.migrate`, `db.ready`, `db.warm.done`, `ipc.socket`, `daemon.start`,
+`daemon.ipc`, `daemon.cap`, `daemon.socket`, `daemon.services`,
+`status.restore`, `engine.ready`, `playback.ready`, `daemon.ready`); with the
+variable unset every mark is a cached boolean check.
 
 ## Sockets
 
@@ -157,6 +213,11 @@ Environment=MUSIKA_DAEMON_SOCKET=%t/musika/daemon.sock
 [Install]
 WantedBy=default.target
 ```
+
+For a lean always-on core, optional unit hints are `Nice=5`,
+`IOSchedulingClass=idle`, `CPUWeight=50` and `MemoryHigh=256M`; avoid a hard
+`MemoryMax` (the core should not be OOM-killed mid-track). The daemon already
+demotes its sync/warm workers and keeps its idle wakeups bounded.
 
 Start the UI with `musika` (or the desktop entry) after the service is up.
 

@@ -555,5 +555,8 @@ async fn rebuild_locked(pool: &SqlitePool) -> Result<()> {
         return Ok(());
     }
     *slot().write().unwrap_or_else(|error| error.into_inner()) = Some(Arc::new(index));
+    // The build allocated the catalog plus streaming rows; trim only the
+    // allocator's free pages, never the index itself.
+    crate::linux::malloc_trim();
     Ok(())
 }

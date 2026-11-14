@@ -396,6 +396,19 @@ struct CrossfadeState {
     next_failed: bool,
 }
 
+/// Whether the decode loop has time-based work that a command cannot wake it
+/// for. Keep this in step with the bottom of the loop: parked HTTP reopen,
+/// pending rate handoff, preload and crossfade all advance on their own.
+fn needs_timed_wait(current: &Current) -> bool {
+    // A paused decoder produces no PCM and is woken by Resume/Seek, so it
+    // blocks too; only work that advances without a command keeps polling.
+    current.parked_url.is_some()
+        || current.pending_handoff.is_some()
+        || current.preload.is_some()
+        || current.preload_requested
+        || current.crossfade.is_some()
+}
+
 fn worker_thread(
     rx: Receiver<Command>,
     preload_rx: Receiver<PreloadResult>,
@@ -426,11 +439,19 @@ fn worker_thread(
                 Err(TryRecvError::Empty) => None,
                 Err(TryRecvError::Disconnected) => break,
             }
-        } else {
+        } else if needs_timed_wait(&current) {
+            // A parked HTTP decoder, a pending rate handoff or an in-flight
+            // preload makes time (not just a command) the thing to wait on.
             match rx.recv_timeout(Duration::from_millis(20)) {
                 Ok(command) => Some(command),
                 Err(RecvTimeoutError::Timeout) => None,
                 Err(RecvTimeoutError::Disconnected) => break,
+            }
+        } else {
+            // Nothing loaded and nothing parked: block until the next command.
+            match rx.recv() {
+                Ok(command) => Some(command),
+                Err(_) => break,
             }
         };
 
@@ -620,6 +641,13 @@ fn worker_thread(
                     if generation != shared.generation.load(Ordering::Acquire) {
                         continue;
                     }
+                    // Apply the pause/active state before opening: a paused
+                    // restore then leaves the PipeWire node suspended for the
+                    // whole (possibly slow) network open instead of burning
+                    // graph wakeups until `start_decoder` returns.
+                    current.paused = paused;
+                    current.paused_at = None;
+                    sink.set_paused(paused);
                     start_decoder(
                         &mut current,
                         url,
@@ -630,9 +658,6 @@ fn worker_thread(
                         &shared,
                         &sink,
                     );
-                    current.paused = paused;
-                    current.paused_at = None;
-                    sink.set_paused(paused);
                     continue;
                 }
             }
@@ -1603,5 +1628,33 @@ mod tests {
             !sink.failed(),
             "sink reported a stream error during the handoff"
         );
+    }
+
+    #[test]
+    fn idle_transport_blocks_instead_of_polling() {
+        // A freshly started or stopped transport has no decoder and nothing
+        // parked, so the worker may sleep on its command channel.
+        let current = Current::default();
+        assert!(!needs_timed_wait(&current));
+
+        // A paused decoder is woken by Resume/Seek, not by time.
+        let current = Current {
+            paused: true,
+            ..Current::default()
+        };
+        assert!(!needs_timed_wait(&current));
+
+        // Every field below advances on its own even without a command.
+        let current = Current {
+            parked_url: Some("https://example.invalid/track".to_string()),
+            ..Current::default()
+        };
+        assert!(needs_timed_wait(&current));
+
+        let current = Current {
+            preload_requested: true,
+            ..Current::default()
+        };
+        assert!(needs_timed_wait(&current));
     }
 }

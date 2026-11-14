@@ -185,6 +185,27 @@ pub fn active_account() -> Option<Account> {
     guard.active().and_then(|stored| to_account(stored).ok())
 }
 
+/// One account's non-secret identity fields.
+///
+/// Status flushes and header refreshes only need these; they must not pay the
+/// AES-GCM password decrypt (or allocate a password) just to show a name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Identity {
+    pub server_url: String,
+    pub username: String,
+    pub server_type: String,
+}
+
+/// The active account without decrypting or copying its password.
+pub fn active_identity() -> Option<Identity> {
+    let guard = registry().read().unwrap_or_else(|e| e.into_inner());
+    guard.active().map(|stored| Identity {
+        server_url: stored.server_url.clone(),
+        username: stored.username.clone(),
+        server_type: stored.server_type.clone(),
+    })
+}
+
 pub fn last_account() -> Option<Account> {
     let guard = registry().read().unwrap_or_else(|e| e.into_inner());
     guard

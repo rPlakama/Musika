@@ -82,6 +82,23 @@ impl AppRoot {
             .bg(gpui::black().opacity(self.visuals.motion.lyrics_scrim * progress))
             .opacity(progress.clamp(0.0, 1.0))
             .on_scroll_wheel(cx.listener(Self::on_lyrics_wheel))
+            // The keybind insight is chrome: it must stay put while the lyric
+            // column glides, so it lives outside the shifted child.
+            .child(
+                div()
+                    .absolute()
+                    .top(px(12.0))
+                    .left_0()
+                    .w_full()
+                    .flex()
+                    .justify_center()
+                    .text_size(px(10.0))
+                    .text_color(rgb(palette::on_surface_variant()))
+                    .child(format!(
+                        "Lyrics · {} · j/k scroll · ? closes",
+                        lyrics.source
+                    )),
+            )
             .child(
                 div()
                     .w(relative(0.72))
@@ -97,15 +114,6 @@ impl AppRoot {
                     .opacity(self.lyrics_track_fade.value(&self.clock))
                     .relative()
                     .top(px(self.lyrics_shift.value(&self.clock)))
-                    .child(
-                        div()
-                            .text_size(px(10.0))
-                            .text_color(rgb(palette::on_surface_variant()))
-                            .child(format!(
-                                "Lyrics · {} · j/k scroll · ? closes",
-                                lyrics.source
-                            )),
-                    )
                     .children(self.lyric_line_elements(layout, &lyrics.lines, lyrics.synced)),
             )
             .into_any_element()
@@ -305,11 +313,23 @@ impl AppRoot {
                                 palette::outline_variant()
                             }))
                             .overflow_hidden()
+                            .relative()
                             .on_scroll_wheel(cx.listener(Self::on_lyrics_wheel))
                             // The follow glide moves only the lyric column
                             // inside the pane: the highlighted (focused) pane
-                            // itself stays put, so scrolling cannot bounce the
-                            // border and the whole box.
+                            // and its keybind insight stay put.
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top(px(6.0))
+                                    .left_0()
+                                    .w_full()
+                                    .flex()
+                                    .justify_center()
+                                    .text_size(px(10.0))
+                                    .text_color(rgb(palette::on_surface_variant()))
+                                    .child(lyrics_label),
+                            )
                             .child(
                                 div()
                                     .w_full()
@@ -322,12 +342,6 @@ impl AppRoot {
                                     .gap(px(lyric_gap))
                                     .relative()
                                     .top(px(self.lyrics_shift.value(&self.clock)))
-                                    .child(
-                                        div()
-                                            .text_size(px(10.0))
-                                            .text_color(rgb(palette::on_surface_variant()))
-                                            .child(lyrics_label),
-                                    )
                                     .children(lyric_children),
                             ),
                     ),

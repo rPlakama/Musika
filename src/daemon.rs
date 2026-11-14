@@ -98,6 +98,7 @@ fn acquire_instance_lock() -> Option<std::fs::File> {
 }
 
 async fn run_async() {
+    crate::startup::trace("daemon.start");
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<Event>();
     let bridge = Arc::new(Bridge::new(event_tx.clone()));
 
@@ -122,6 +123,7 @@ async fn run_async() {
             dispatch_text(&services, &line, true)
         });
     }
+    crate::startup::trace("daemon.ipc");
 
     // Local maintenance before the UI can attach: cap pathological cached
     // originals once (no network). This keeps the very first page open from
@@ -136,6 +138,8 @@ async fn run_async() {
         }
         _ => eprintln!("covers: oversized-original migration skipped (databases not ready)"),
     }
+    crate::startup::trace("daemon.cap");
+    crate::linux::malloc_trim();
 
     let (server_tx, mut server_rx) = mpsc::unbounded_channel::<ServerEvent>();
     clients::spawn(
@@ -143,10 +147,12 @@ async fn run_async() {
         server_tx,
         crate::consts::now_nanos() as u64,
     );
+    crate::startup::trace("daemon.socket");
 
     crate::tray::start();
     let (mpris_tx, mut mpris_rx) = mpsc::unbounded_channel::<String>();
     crate::mpris::init(mpris_tx);
+    crate::startup::trace("daemon.services");
 
     let mut page: LastPage = None;
     let mut header: Option<Event> = None;
@@ -155,12 +161,15 @@ async fn run_async() {
     let mut ui_child: Option<std::process::Child> = None;
     let mut status_dirty = true;
     let status_inflight = Arc::new(AtomicBool::new(false));
+    let restore_started = Instant::now();
     restore_status(&playback_control, &mut page).await;
+    crate::startup::trace_elapsed("status.restore", restore_started.elapsed());
 
     let mut ticker = tokio::time::interval(Duration::from_secs(1));
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut last_status = Instant::now();
     let mut quit = false;
+    crate::startup::trace("daemon.ready");
 
     while !quit {
         tokio::select! {
@@ -330,7 +339,13 @@ async fn run_async() {
                 {
                     ui_child = None;
                 }
-                publish_mpris(&playback_control.snapshot());
+                // While playing the 1 s tick keeps the MPRIS position current;
+                // paused/stopped position is frozen and every state change
+                // already published from `handle_playback_output`.
+                let snapshot = playback_control.snapshot();
+                if snapshot.state.state() == proto::StateWire::Playing {
+                    publish_mpris(&snapshot);
+                }
                 if status_dirty
                     && last_status.elapsed() >= Duration::from_secs(5)
                     && !status_inflight.swap(true, Ordering::AcqRel)
@@ -849,7 +864,7 @@ fn publish_mpris(snapshot: &Snapshot) {
 }
 
 fn build_status(snapshot: &Snapshot, page: &LastPage) -> crate::status::SessionStatus {
-    let account = crate::accounts::active_account();
+    let account = crate::accounts::active_identity();
     let current = current_track(snapshot);
     let queue: Vec<&str> = snapshot.queue.iter().map(|track| track.id.as_str()).collect();
     let queue = serde_json::to_string(&queue).unwrap_or_default();
@@ -922,24 +937,43 @@ fn show_window(ui_clients: &mut HashMap<u64, UiClient>, ui_child: &mut Option<st
     }
 }
 
+/// The GPUI child binary: `MUSIKA_UI_BIN`, else the `musika-ui` sibling of the
+/// current executable (the installed wrapper and cargo target dirs both put it
+/// next to `musika`). Shared with `musika --ui`, which execs the same path.
+pub(crate) fn ui_binary_path() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("MUSIKA_UI_BIN") {
+        return Some(PathBuf::from(path));
+    }
+    std::env::current_exe()
+        .ok()
+        .map(|exe| exe.with_file_name("musika-ui"))
+}
+
 fn ensure_ui_child(child: &mut Option<std::process::Child>) {
     if let Some(child) = child.as_mut()
         && child.try_wait().ok().flatten().is_none()
     {
         return;
     }
-    let Ok(exe) = std::env::current_exe() else {
+    let Some(ui) = ui_binary_path() else {
         eprintln!("daemon: cannot locate the UI binary");
         return;
     };
-    let ui = std::env::var_os("MUSIKA_UI_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| exe.with_file_name("musika-ui"));
     let log = crate::db::config_dir()
         .ok()
         .map(|dir| dir.join("musika-ui.log"));
     let mut command = std::process::Command::new(&ui);
     command.stdin(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: `pre_exec` runs in the forked child; the closure only calls
+        // `close_range(CLOEXEC)` (async-signal-safe, no allocation) and returns
+        // an integer error.
+        unsafe {
+            command.pre_exec(crate::linux::close_inherited_fds);
+        }
+    }
     if let Some(log) = log
         && let Ok(file) = std::fs::OpenOptions::new()
             .create(true)

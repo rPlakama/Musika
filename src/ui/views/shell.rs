@@ -487,22 +487,43 @@ impl AppRoot {
         if signature != self.topbar_identity_signature {
             self.topbar_identity_signature = signature;
             self.topbar_marquee_started = std::time::Instant::now();
+            self.topbar_manual_scroll = None;
+            self.topbar_last_offset = 0.0;
             self.topbar_scroll
                 .set_offset(gpui::point(px(0.0), px(0.0)));
             // The content width is only known after this frame's layout.
             perf::request_frame(window, "topbar-marquee");
             return;
         }
+        // GPUI's x-overflow listener already maps wheel/trackpad deltas to the
+        // horizontal viewport; the marquee is what used to overwrite them.
+        // A difference from our previous write therefore means the user
+        // scrolled, so pause the marquee for a short grace window.
+        let current = f32::from(self.topbar_scroll.offset().x);
+        if (current - self.topbar_last_offset).abs() > 0.5 {
+            self.topbar_manual_scroll = Some(std::time::Instant::now());
+            self.topbar_last_offset = current;
+        }
+        if self
+            .topbar_manual_scroll
+            .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(2))
+        {
+            perf::request_frame(window, "topbar-scroll");
+            return;
+        }
+        self.topbar_manual_scroll = None;
         let overflow = f32::from(self.topbar_scroll.max_offset().width);
         if overflow <= 0.5 {
             self.topbar_scroll
                 .set_offset(gpui::point(px(0.0), px(0.0)));
+            self.topbar_last_offset = 0.0;
             return;
         }
         let elapsed = self.topbar_marquee_started.elapsed().as_secs_f32();
         let offset = marquee_offset(overflow, elapsed);
         self.topbar_scroll
             .set_offset(gpui::point(px(-offset), px(0.0)));
+        self.topbar_last_offset = -offset;
         perf::request_frame(window, "topbar-marquee");
     }
 
@@ -987,4 +1008,5 @@ mod cover_cache_tests {
         assert_eq!(cache.cover_art(), "art-a");
         assert!(!cache.changed());
     }
+
 }

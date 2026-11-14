@@ -33,6 +33,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
+
 /// Largest accepted command line. Commands are tiny; a longer line is a client
 /// bug and is dropped instead of growing the daemon's memory.
 const MAX_COMMAND_BYTES: usize = 64 * 1024;
@@ -157,49 +159,77 @@ pub fn serve<F>(path: PathBuf, mut handler: F)
 where
     F: FnMut(String) -> Option<String> + Send + 'static,
 {
-    let (tx, rx) = std::sync::mpsc::channel::<(String, Arc<UnixStream>)>();
-    std::thread::spawn(move || {
-        for (line, stream) in rx {
-            if let Some(reply) = handler(line) {
-                let mut writer = &*stream;
-                _ = writeln!(writer, "{reply}");
-                _ = writer.flush();
+    // The text socket is fully async now: the listener, each connection reader
+    // and the single serialized dispatcher are Tokio tasks, not OS threads.
+    // The handler stays serialized (one task drains the line queue), so the
+    // command ordering is the same as the old dispatcher thread.
+    crate::app::runtime().spawn(async move {
+        let listener = match tokio::task::spawn_blocking(move || bind_private(&path)).await {
+            Ok(Ok(listener)) => listener,
+            Ok(Err(err)) => {
+                eprintln!("ipc: could not bind: {err}");
+                return;
             }
-        }
-    });
-
-    std::thread::spawn(move || {
-        let listener = match bind_private(&path) {
-            Ok(listener) => listener,
             Err(err) => {
-                eprintln!("ipc: could not bind {}: {err}", path.display());
+                eprintln!("ipc: bind task failed: {err}");
                 return;
             }
         };
-        for stream in listener.incoming() {
-            let Ok(stream) = stream else {
+        let listener = match listener.set_nonblocking(true) {
+            Ok(()) => match tokio::net::UnixListener::from_std(listener) {
+                Ok(listener) => listener,
+                Err(err) => {
+                    eprintln!("ipc: could not register listener: {err}");
+                    return;
+                }
+            },
+            Err(err) => {
+                eprintln!("ipc: could not make listener non-blocking: {err}");
+                return;
+            }
+        };
+        crate::startup::trace("ipc.socket");
+
+        let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel::<(
+            String,
+            Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>,
+        )>();
+        tokio::spawn(async move {
+            while let Some((line, writer)) = line_rx.recv().await {
+                if let Some(reply) = handler(line) {
+                    let mut writer = writer.lock().await;
+                    if writer.write_all(reply.as_bytes()).await.is_ok()
+                        && writer.write_all(b"\n").await.is_ok()
+                        && writer.flush().await.is_err()
+                    {
+                        // Client went away between the write and the flush;
+                        // the reader task will observe EOF and exit.
+                    }
+                }
+            }
+        });
+
+        loop {
+            let Ok((stream, _addr)) = listener.accept().await else {
                 continue;
             };
             if !same_uid(&stream) {
                 eprintln!("ipc: refused a connection from another user");
                 continue;
             }
-            let Ok(reply_stream) = stream.try_clone() else {
-                continue;
-            };
-            let reply_stream = Arc::new(reply_stream);
-            let tx = tx.clone();
-            std::thread::spawn(move || {
-                let mut reader = BufReader::new(stream);
-                _ = reader
-                    .get_ref()
-                    .set_read_timeout(Some(COMMAND_READ_TIMEOUT));
+            let (read_half, write_half) = stream.into_split();
+            let writer = Arc::new(tokio::sync::Mutex::new(write_half));
+            let line_tx = line_tx.clone();
+            tokio::spawn(async move {
+                let mut reader = AsyncBufReader::new(read_half);
                 loop {
                     let mut line = String::new();
-                    match reader.read_line(&mut line) {
-                        Ok(0) => break,
-                        Ok(_) => {}
-                        Err(_) => break,
+                    match tokio::time::timeout(COMMAND_READ_TIMEOUT, reader.read_line(&mut line))
+                        .await
+                    {
+                        Ok(Ok(0)) | Err(_) => break,
+                        Ok(Ok(_)) => {}
+                        Ok(Err(_)) => break,
                     }
                     if line.len() > MAX_COMMAND_BYTES {
                         eprintln!("ipc: dropped an oversized command line");
@@ -209,8 +239,8 @@ where
                     if command.is_empty() {
                         continue;
                     }
-                    if tx
-                        .send((command.to_string(), Arc::clone(&reply_stream)))
+                    if line_tx
+                        .send((command.to_string(), Arc::clone(&writer)))
                         .is_err()
                     {
                         break;

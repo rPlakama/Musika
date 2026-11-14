@@ -38,6 +38,7 @@ impl Bridge {
                 Ok(report) => report,
                 Err(err) => {
                     _ = tx.send(Event::Error(format!("Library sync failed: {err:#}")));
+                    crate::linux::malloc_trim();
                     return;
                 }
             };
@@ -49,6 +50,10 @@ impl Bridge {
                 });
                 crate::index::cache_covers(&dbs, &client, &report.forced_covers).await;
             }
+            // A sync holds large JSON bodies and cover buffers transiently;
+            // return the freed pages now instead of keeping the high-water
+            // mark resident for the daemon's whole lifetime.
+            crate::linux::malloc_trim();
             _ = tx.send(Event::LibrarySynced);
         });
     }
@@ -74,6 +79,7 @@ impl Bridge {
                     _ = tx.send(Event::Error(format!("Wipe failed: {err:#}")));
                 }
             }
+            crate::linux::malloc_trim();
         });
     }
 

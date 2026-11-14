@@ -443,6 +443,7 @@ pub(crate) async fn cache_covers(
     let pass = COVER_PASS.lock().await;
     let result = cache_covers_locked(dbs, client, forced).await;
     drop(pass);
+    crate::linux::malloc_trim();
     result
 }
 

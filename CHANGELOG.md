@@ -41,6 +41,38 @@ open work; this file is the release history.
   Rows and collage panes keep using the 320 px thumbnail, so they do not pay
   for a multi-megapixel decode.
 
+- **Top-bar horizontal scroll:** the page-context identity row now accepts a
+  direct horizontal wheel/trackpad gesture (the x-only viewport also maps a
+  plain vertical wheel to horizontal) and pauses the idle marquee for two
+  seconds, so overflowing album/playlist metadata can be read without waiting
+  for the auto-scroll.
+- **Lyrics keybind insight:** the `Lyrics · <source> · j/k scroll · ? closes`
+  line is now fixed chrome outside the gliding lyric column; it no longer
+  travels with the lyrics when they scroll or follow the playhead.
+
+- **Lean core daemon:** the core binary no longer links the GPUI front end
+  (`musika --ui` execs the sibling `musika-ui`), and the packaged FFmpeg closure
+  is the headless variant (audio decoders kept, GUI/capture dependencies
+  dropped). The PipeWire node starts suspended and is
+  activated by load/resume instead of running at graph rate while idle; engine
+  events go directly to the playback service (the forwarding thread is gone);
+  the playback, engine and decode loops block on their channels when there is
+  nothing time-based to do; the MPRIS position tick only runs while playing.
+  The FTS search pool opens lazily and SQLite pools reap burst connections
+  after 60 s idle; large buffers are returned to the kernel after sync/cover/
+  search bursts, and database warm-up uses kernel readahead instead of a 1 MiB
+  userspace copy. Measured on the development host (sandboxed config, private
+  session bus, packaged release build, same restored real-snapshot harness
+  before/after): core binary 53.5 -> 22.9 MB, `ldd` libraries 83 -> 74, idle
+  threads 20 -> 16, idle wakeups ~65/s -> ~4.3/s, idle CPU ~0, RSS with the
+  restored real queue 95.3 -> 89.2 MB (fresh config with no restored session:
+  44.1 -> 36.9 MB), mappings 598 -> 545, SQLite workers settle from 4 to 3.
+  The shippable package now uses the repo's fat-LTO/one-CGU profile instead of
+  thin/4. The text control socket now runs on Tokio tasks instead of two
+  persistent reader/dispatcher threads, the async runtime caps its worker and
+  blocking pools, and spawned child processes get close-on-exec descriptors.
+  No IPC, database, audio or MPRIS behavior changes.
+
 ## 0.7.3 - _F32 pipeline and float headroom_
 
 - **F32 end-to-end audio:** the decoder/swresampler now emits packed F32

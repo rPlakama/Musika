@@ -161,15 +161,17 @@ impl AppRoot {
             return;
         }
         let overlay = self.lyrics_overlay;
+        // Reserve one hint row: the keybind insight is fixed chrome now, so
+        // it must not steal vertical space from the gliding lyric window.
         let (width, height) = if overlay {
             (
                 ((self.win_w * 0.72).min(720.0) - 32.0).max(1.0),
-                (self.win_h * 0.80).max(1.0),
+                (self.win_h * 0.80 - 24.0).max(1.0),
             )
         } else if self.fullscreen {
             (
                 ((self.win_w * 0.95 - 24.0) * 0.5 - 24.0).max(1.0),
-                (self.win_h * 0.55).max(1.0),
+                (self.win_h * 0.55 - 18.0).max(1.0),
             )
         } else {
             self.lyrics_layout = None;

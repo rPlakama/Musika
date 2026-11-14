@@ -977,6 +977,12 @@ struct AppRoot {
     /// title/subtitle/meta row is wider than the bar).
     topbar_scroll: gpui::ScrollHandle,
     topbar_marquee_started: std::time::Instant,
+    /// Last manual horizontal-wheel interaction; the auto marquee pauses for
+    /// a short grace period so it does not fight the user's scroll.
+    topbar_manual_scroll: Option<std::time::Instant>,
+    /// Offset written by the marquee on the previous frame; a different value
+    /// means a wheel/drag moved the viewport.
+    topbar_last_offset: f32,
     topbar_identity_signature: u64,
     resize_last_size: Option<(f32, f32)>,
     resize_recenter: bool,
@@ -1284,6 +1290,8 @@ impl AppRoot {
             win_h: 800.0,
             topbar_scroll: gpui::ScrollHandle::new(),
             topbar_marquee_started: std::time::Instant::now(),
+            topbar_manual_scroll: None,
+            topbar_last_offset: 0.0,
             topbar_identity_signature: 0,
             resize_last_size: None,
             resize_recenter: false,

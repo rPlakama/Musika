@@ -8,7 +8,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 
 use crate::db::Dbs;
-use crate::ui::ipc_command::{CurrentTrack, DownloadMode, DownloadRequest, DownloadScope};
+use crate::ipc_command::{CurrentTrack, DownloadMode, DownloadRequest, DownloadScope};
 
 /// Name resolution only needs the best few search hits, not a full page.
 const RESOLVE_LIMIT: usize = 50;

@@ -184,11 +184,11 @@ for _ in $(seq 1 300); do
 done
 [[ -S "$CFG/ipc.sock" ]] || { tail -20 "$DAEMON_LOG" >&2; die "daemon did not create ipc.sock"; }
 
-# Disposable GPUI client, in-process UI.
+# Disposable GPUI client; the core spawns the same `musika-ui` binary.
 echo "check-ui-memory: starting UI"
 env -u MUSIKA_IPC_SOCKET -u MUSIKA_DAEMON_SOCKET \
     XDG_CONFIG_HOME="$CFG" XDG_CACHE_HOME="$CACHE" MUSIKA_FRAME_STATS=1 \
-    "$BIN_DIR/musika" --ui >"$UI_LOG" 2>&1 &
+    "$BIN_DIR/musika-ui" >"$UI_LOG" 2>&1 &
 UI_PID=$!
 
 deadline=$((SECONDS + INIT))

@@ -216,6 +216,7 @@ pub(crate) fn spawn(
                 return;
             }
         };
+        crate::startup::trace("daemon.socket.bound");
         {
             use std::os::unix::fs::PermissionsExt;
             _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));

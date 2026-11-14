@@ -420,6 +420,15 @@ fn build_stream<'c>(
         )
         .map_err(|error| format!("cannot connect PipeWire stream: {error}"))?;
 
+    // Start suspended. A connected node is scheduled at graph rate even with
+    // no track loaded (the core otherwise wakes its RT thread ~50x/s while
+    // idle); `Command::Load`/`SetPaused` activates it before any PCM is
+    // written, and `switch_format` restores the ring's paused state after a
+    // rebuild. A failure is only a fallback to the old always-active stream.
+    if let Err(error) = stream.set_active(false) {
+        crate::debug_log!("pipewire: cannot start the stream inactive: {error}");
+    }
+
     Ok(ActiveStream { listener, stream })
 }
 

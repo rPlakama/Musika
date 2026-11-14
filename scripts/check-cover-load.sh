@@ -271,13 +271,13 @@ for _ in $(seq 1 20); do
 done
 kill -0 "$IPC_PID" 2>/dev/null || die "persistent IPC sender failed to connect to $CFG/ipc.sock"
 
-# Disposable GPUI client, in-process UI (same invocation as check-ui-memory.sh).
+# Disposable GPUI client; the core spawns the same `musika-ui` binary.
 echo "check-cover-load: starting UI"
 ui_spawn_ms=$(now_ms)
 env -u MUSIKA_IPC_SOCKET -u MUSIKA_DAEMON_SOCKET \
     XDG_CONFIG_HOME="$CFG" XDG_CACHE_HOME="$CACHE" \
     MUSIKA_FRAME_STATS=1 MUSIKA_LOAD_TRACE=1 \
-    "$BIN_DIR/musika" --ui >"$UI_LOG" 2>&1 &
+    "$BIN_DIR/musika-ui" >"$UI_LOG" 2>&1 &
 UI_PID=$!
 
 deadline=$((ui_spawn_ms + INIT * 1000))

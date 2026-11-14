@@ -93,10 +93,13 @@ impl Durability {
 
 /// Opens every database and applies its migrations.
 ///
-/// ARC-RS-4.9: 6 connections total (3 library + 2 media + 1 search) instead
-/// of 10 (5+3+2); `search` keeps its own pool so a slow query never blocks
-/// the writer, but `sync` merges into `library`.
+/// ARC-RS-4.9: at most 7 connections (3 library + 2 media + 1 sync + 1
+/// search) instead of 10 (5+3+2); `search` stays a separate pool so a slow
+/// query never blocks the writer, and it is opened lazily. Extra burst
+/// connections are reaped after 60 s idle, so a settled daemon keeps one
+/// connection per eager pool.
 pub async fn init() -> Result<Dbs> {
+    let started = std::time::Instant::now();
     let library = open_migrated(
         library_path()?,
         3,
@@ -105,6 +108,8 @@ pub async fn init() -> Result<Dbs> {
         Durability::Full,
     )
     .await?;
+    crate::startup::trace_elapsed("db.library", started.elapsed());
+    let started = std::time::Instant::now();
     let media = open_migrated(
         media_path()?,
         2,
@@ -113,12 +118,19 @@ pub async fn init() -> Result<Dbs> {
         Durability::Normal,
     )
     .await?;
+    crate::startup::trace_elapsed("db.media", started.elapsed());
+    let started = std::time::Instant::now();
     let sync = open_sync_pool(library_path()?).await?;
+    crate::startup::trace_elapsed("db.sync", started.elapsed());
+    let started = std::time::Instant::now();
     absorb_legacy(&library, &media).await?;
+    crate::startup::trace_elapsed("db.legacy", started.elapsed());
     // Search gets its own connection over the same library file: a slow or
     // cancelled query can never occupy the writer's pool (the search box
-    // stays responsive while a sync rebuilds the FTS table).
-    let search = open_pool(library_path()?, 1, Durability::Normal).await?;
+    // stays responsive while a sync rebuilds the FTS table). It is opened
+    // lazily: the daemon may never take the FTS fallback, and an unused
+    // connection still costs a worker thread and a page cache.
+    let search = open_lazy_pool(library_path()?, 1, Durability::Normal)?;
 
     Ok(Dbs {
         credentials: library.clone(),
@@ -145,9 +157,13 @@ pub async fn init() -> Result<Dbs> {
 /// once by [`absorb_legacy`] and then removed.
 pub fn warm_startup() {
     std::thread::spawn(|| {
+        // Best-effort: the page cache is the goal, never a correctness
+        // dependency, and this I/O must not compete with audio or the UI.
+        crate::linux::demote_current();
         for candidate in warm_startup_paths() {
             _ = warm_path(&candidate);
         }
+        crate::startup::trace("db.warm.done");
     });
 }
 
@@ -178,14 +194,10 @@ fn warm_path(path: &Path) -> std::io::Result<()> {
 }
 
 fn warm_file(path: &Path) -> std::io::Result<()> {
-    use std::io::Read;
-    // Ask the kernel to start readahead without copying through userspace;
-    // the buffered pass below remains the actual page-cache fallback.
-    _ = crate::linux::advise_willneed(path);
-    let mut file = std::fs::File::open(path)?;
-    let mut buffer = vec![0u8; 1024 * 1024];
-    while file.read(&mut buffer)? > 0 {}
-    Ok(())
+    // `readahead(2)`/`posix_fadvise(WILLNEED)` fill the page cache without a
+    // userspace copy. The old loop read the whole database through a 1 MiB
+    // buffer, which duplicated the kernel work for no extra warmth.
+    crate::linux::prefetch_file(path)
 }
 
 /// Bounds the WAL after a successful bulk write. Only call this from a
@@ -499,7 +511,16 @@ pub fn ensure_parent_dir(path: &Path) -> Result<()> {
 
 async fn open_sync_pool(path: PathBuf) -> Result<SqlitePool> {
     let before = sqlite_workers();
-    let pool = open_pool(path, 1, Durability::Full).await?;
+    ensure_parent_dir(&path)?;
+    // One long-lived demoted writer: it must never be reaped and replaced by a
+    // normal-priority worker in the middle of a sync.
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .min_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(connect_options(path, Durability::Full))
+        .await?;
     // Force the worker to exist, then demote only newly created sqlx workers.
     _ = pool.acquire().await?;
     demote_new_sqlite_workers(&before);
@@ -527,21 +548,6 @@ fn sqlite_workers() -> std::collections::HashSet<u32> {
 
 #[cfg(target_os = "linux")]
 fn demote_new_sqlite_workers(before: &std::collections::HashSet<u32>) {
-    #[repr(C)]
-    struct SchedParam {
-        priority: std::ffi::c_int,
-    }
-    unsafe extern "C" {
-        fn sched_setscheduler(
-            pid: std::ffi::c_int,
-            policy: std::ffi::c_int,
-            param: *const SchedParam,
-        ) -> std::ffi::c_int;
-        fn syscall(number: std::ffi::c_long, ...) -> std::ffi::c_long;
-    }
-    const SCHED_IDLE: std::ffi::c_int = 5;
-    const IOPRIO_WHO_PROCESS: std::ffi::c_int = 1;
-    const IOPRIO_CLASS_IDLE: std::ffi::c_int = 3;
     for entry in std::fs::read_dir("/proc/self/task")
         .into_iter()
         .flatten()
@@ -557,25 +563,8 @@ fn demote_new_sqlite_workers(before: &std::collections::HashSet<u32>) {
         if !comm.trim().starts_with("sqlx-sqlite-wor") {
             continue;
         }
-        let param = SchedParam { priority: 0 };
-        // SAFETY: `tid` is a task id just read from /proc/self/task, and
-        // `param` is a fully initialised `sched_param`; `sched_setscheduler`
-        // only reads those values and reports failure through its return
-        // value, so no memory-safety precondition can be violated.
-        let sched = unsafe { sched_setscheduler(tid as std::ffi::c_int, SCHED_IDLE, &param) };
-        // SAFETY: raw `ioprio_set(2)` (syscall 251 on Linux) with integer-only
-        // arguments; the kernel validates the target task and class and
-        // reports errors through the return value.
-        let io = unsafe {
-            syscall(
-                251,
-                IOPRIO_WHO_PROCESS,
-                tid as std::ffi::c_int,
-                IOPRIO_CLASS_IDLE << 13,
-            ) as std::ffi::c_int
-        };
-        if sched != 0 || io != 0 {
-            crate::debug_log!("db: could not demote sync worker {tid}: sched={sched}, io={io}");
+        if !crate::linux::set_idle_priority(tid) {
+            crate::debug_log!("db: could not demote sync worker {tid}");
         }
     }
 }
@@ -599,14 +588,43 @@ async fn open_migrated(
 }
 
 /// Opens a pool with the shared connection options (no migrations).
+///
+/// Eager pools keep one warm connection and reap any extra burst connections
+/// after a minute: startup/migrations/page loads briefly need two or three
+/// connections, but an idle daemon should not keep their threads and page
+/// caches alive for sqlx's default ten minutes.
 async fn open_pool(
     path: PathBuf,
     max_connections: u32,
     durability: Durability,
 ) -> Result<SqlitePool> {
     ensure_parent_dir(&path)?;
+    let pool = SqlitePoolOptions::new()
+        .max_connections(max_connections)
+        .min_connections(1)
+        .idle_timeout(Some(Duration::from_secs(60)))
+        .connect_with(connect_options(path, durability))
+        .await?;
+    Ok(pool)
+}
 
-    let options = sqlx::sqlite::SqliteConnectOptions::new()
+/// A pool that does not open a connection until its first query.
+fn open_lazy_pool(
+    path: PathBuf,
+    max_connections: u32,
+    durability: Durability,
+) -> Result<SqlitePool> {
+    ensure_parent_dir(&path)?;
+    Ok(SqlitePoolOptions::new()
+        .max_connections(max_connections)
+        .min_connections(0)
+        .idle_timeout(Some(Duration::from_secs(60)))
+        .connect_lazy_with(connect_options(path, durability)))
+}
+
+/// The shared SQLite connection options; the pool policy differs per role.
+fn connect_options(path: PathBuf, durability: Durability) -> sqlx::sqlite::SqliteConnectOptions {
+    sqlx::sqlite::SqliteConnectOptions::new()
         .filename(&path)
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
@@ -625,14 +643,7 @@ async fn open_pool(
         .pragma("temp_store", "MEMORY")
         .pragma("journal_size_limit", "16777216")
         .synchronous(durability.synchronous())
-        .optimize_on_close(true, 400);
-
-    let pool = SqlitePoolOptions::new()
-        .max_connections(max_connections)
-        .connect_with(options)
-        .await?;
-
-    Ok(pool)
+        .optimize_on_close(true, 400)
 }
 
 // ---------------------------------------------------------------------------
@@ -731,6 +742,19 @@ mod options_tests {
             assert_eq!(value, expected);
             runtime.block_on(pool.close());
         }
+        _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn lazy_pool_stays_unopened_until_first_acquire() {
+        let dir = std::env::temp_dir().join(format!("musika-db-lazy-{}", std::process::id()));
+        ensure_dir(&dir).expect("temp dir");
+        let path = dir.join("lazy.db");
+        let pool = open_lazy_pool(path, 1, Durability::Normal).expect("lazy pool");
+        assert_eq!(pool.size(), 0, "a lazy pool must not open a connection at construction");
+        drop(pool.acquire().await.expect("first acquire"));
+        assert_eq!(pool.size(), 1, "the first acquire opens exactly one connection");
+        pool.close().await;
         _ = std::fs::remove_dir_all(&dir);
     }
 

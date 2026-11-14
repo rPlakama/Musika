@@ -17,9 +17,14 @@ use crate::ipc_protocol::{ErrorCode, PlaybackState, PlayerOp, StateWire};
 use crate::player::core::{CoreCommand, Outcome, PlaybackCore};
 use crate::player::engine::{Engine, EngineEvent};
 
-/// How often the playback thread evaluates its clock while active/paused.
-const ACTIVE_TICK: Duration = Duration::from_millis(25);
-const IDLE_TICK: Duration = Duration::from_millis(250);
+/// How often the playback thread evaluates its clock while audible/loading.
+///
+/// This is not the transport clock: engine events wake the thread through the
+/// service channel and the UI extrapolates from the published anchor. The
+/// periodic wake only exists so the 5 s drift correction has a deadline, so a
+/// coarse cadence is enough. Stopped/paused playback blocks on the channel
+/// instead of waking at all.
+const ACTIVE_TICK: Duration = Duration::from_millis(250);
 /// A playing clock is republished at least this often so UI extrapolation
 /// cannot drift for long (this is a correction, not the old 10 Hz position
 /// stream: between corrections the UI computes the position locally).
@@ -194,7 +199,6 @@ impl Drop for PlaybackService {
 struct ServiceState {
     core: PlaybackCore,
     engine: Option<Engine>,
-    forwarder: Option<JoinHandle<()>>,
     service_tx: Sender<ServiceInput>,
     outputs: UnboundedSender<PlaybackOutput>,
     last_engine_attempt: Option<Instant>,
@@ -216,26 +220,17 @@ impl ServiceState {
             return false;
         }
         self.last_engine_attempt = Some(Instant::now());
-        let (event_tx, event_rx) = mpsc::channel::<EngineEvent>();
-        match Engine::new(event_tx) {
+        // The transport reports straight into the service channel; the old
+        // forwarding thread only added a hop between the engine and the
+        // playback thread.
+        let service_tx = self.service_tx.clone();
+        let events: crate::player::engine::EventSink = Arc::new(move |event| {
+            service_tx.send(ServiceInput::Engine(event)).is_ok()
+        });
+        match Engine::new(events) {
             Ok(engine) => {
-                let service_tx = self.service_tx.clone();
-                self.forwarder = match thread::Builder::new()
-                    .name("musika-engine-events".to_string())
-                    .spawn(move || {
-                        for event in event_rx {
-                            if service_tx.send(ServiceInput::Engine(event)).is_err() {
-                                break;
-                            }
-                        }
-                    }) {
-                    Ok(join) => Some(join),
-                    Err(error) => {
-                        crate::debug_log!("playback: cannot start engine forwarder: {error}");
-                        None
-                    }
-                };
                 self.engine = Some(engine);
+                crate::startup::trace("engine.ready");
                 crate::debug_log!("playback: engine ready");
                 true
             }
@@ -250,9 +245,6 @@ impl ServiceState {
     fn drop_engine(&mut self) {
         if let Some(engine) = self.engine.take() {
             engine.shutdown();
-        }
-        if let Some(forwarder) = self.forwarder.take() {
-            _ = forwarder.join();
         }
     }
 
@@ -286,7 +278,6 @@ fn run(
     let mut service = ServiceState {
         core,
         engine: None,
-        forwarder: None,
         service_tx: engine_tx,
         outputs,
         last_engine_attempt: None,
@@ -309,14 +300,24 @@ fn run(
     service.sync_audio();
     publish_now(&mut service, &mut published, &mut published_at, &mut next_seq);
     store_snapshot(&snapshot, &service, &published);
+    crate::startup::trace("playback.ready");
 
     loop {
         let active = published.state() == StateWire::Playing || published.loading();
-        let timeout = if active { ACTIVE_TICK } else { IDLE_TICK };
-        let input = match rx.recv_timeout(timeout) {
-            Ok(input) => Some(input),
-            Err(RecvTimeoutError::Timeout) => None,
-            Err(RecvTimeoutError::Disconnected) => break,
+        // While the transport is stopped or paused nothing changes without an
+        // input, so block on the channel. While playing keep a coarse tick for
+        // the drift correction; engine events arrive directly in the channel.
+        let input = if active {
+            match rx.recv_timeout(ACTIVE_TICK) {
+                Ok(input) => Some(input),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        } else {
+            match rx.recv() {
+                Ok(input) => Some(input),
+                Err(_) => break,
+            }
         };
 
         let mut force = false;

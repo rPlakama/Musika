@@ -23,8 +23,10 @@ use super::pipewire::{Native, SinkState};
 /// Wake cadence while audible or loading: fast enough that a boundary or a
 /// drained ring is handled within one audio period.
 const ACTIVE_WAIT: Duration = Duration::from_millis(10);
-/// Wake cadence while paused/stopped. Wakes are still event-driven.
-const IDLE_WAIT: Duration = Duration::from_millis(250);
+/// Safety-net wake cadence while paused/stopped. Real work is event-driven:
+/// the command eventfd and the shared transport eventfd wake the poll, so this
+/// timeout only bounds a missed wake; it is not the transport clock.
+const IDLE_WAIT: Duration = Duration::from_secs(1);
 
 /// Transport commands the playback core emits for the engine.
 #[derive(Debug, Clone, PartialEq)]
@@ -106,9 +108,16 @@ pub(crate) struct Engine {
     join: Option<JoinHandle<()>>,
 }
 
+/// Callback the transport uses to report events to the playback service.
+///
+/// A callback (instead of a forwarding thread) sends `EngineEvent`s straight
+/// into the service channel: the sender is thread-safe and per-producer order
+/// is preserved, so the old `musika-engine-events` hop and its thread are gone.
+pub(crate) type EventSink = Arc<dyn Fn(EngineEvent) -> bool + Send + Sync>;
+
 impl Engine {
     /// `Err` when there is no usable PipeWire session; never panics.
-    pub(crate) fn new(events: Sender<EngineEvent>) -> Result<Self, String> {
+    pub(crate) fn new(events: EventSink) -> Result<Self, String> {
         // Reuse the transport created by the startup warm-up
         // (`entry::init_backend` calls `player::warm_native`). Waiting for an
         // in-flight warm-up instead of racing it is what guarantees a single
@@ -221,7 +230,7 @@ impl Drop for Engine {
 fn engine_thread(
     native: Native,
     commands: Receiver<AudioCommand>,
-    events: Sender<EngineEvent>,
+    events: EventSink,
     clock: Arc<ClockState>,
     wake_fd: libc::c_int,
 ) {
@@ -255,7 +264,7 @@ fn engine_thread(
             break;
         }
 
-        if !pump(&native, &events, &paused, &mut sink_failed) {
+        if !pump(&native, events.as_ref(), &paused, &mut sink_failed) {
             break;
         }
 
@@ -311,11 +320,11 @@ fn apply_command(native: &Native, command: AudioCommand, paused: &mut bool) {
 /// receiver closed (the engine must end).
 fn pump(
     native: &Native,
-    events: &Sender<EngineEvent>,
+    events: &(dyn Fn(EngineEvent) -> bool + Send + Sync),
     paused: &bool,
     sink_failed: &mut bool,
 ) -> bool {
-    let emit = |event: EngineEvent| -> bool { events.send(event).is_ok() };
+    let emit = |event: EngineEvent| -> bool { events(event) };
 
     if let Some((duration, stream_size, position)) = native.take_boundary_event()
         && !emit(EngineEvent::Boundary {

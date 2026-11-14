@@ -3711,7 +3711,6 @@ dependencies = [
  "nucleo",
  "openssl",
  "pipewire",
- "rayon",
  "reqwest",
  "resvg 0.48.1",
  "serde",

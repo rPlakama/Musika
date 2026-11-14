@@ -31,22 +31,7 @@ fn load_dotenv() {
 }
 
 pub fn run() {
-    // Keep glibc from creating a new arena per decoder thread.
-    #[cfg(target_os = "linux")]
-    {
-        // SAFETY: `mallopt` is a plain glibc C function with integer
-        // parameters; no pointers cross this boundary.
-        unsafe extern "C" {
-            fn mallopt(param: std::ffi::c_int, value: std::ffi::c_int) -> std::ffi::c_int;
-        }
-        const M_ARENA_MAX: std::ffi::c_int = -8;
-        // SAFETY: the declaration above matches glibc's `int mallopt(int,
-        // int)`; the call has no memory-safety preconditions and failure is
-        // reported through the return value, which is deliberately ignored.
-        unsafe {
-            _ = mallopt(M_ARENA_MAX, 1);
-        }
-    }
+    crate::linux::tune_allocator();
 
     // CLI probe before any database work, so `musika --version` also works
     // on a headless host.
@@ -63,11 +48,41 @@ pub fn run() {
         crate::daemon::run();
     }
     if args.iter().any(|arg| arg == "--ui") {
-        crate::ui::run();
-        return;
+        exec_ui();
     }
 
     launch_or_show();
+}
+
+/// `musika --ui`: become the sibling GPUI client instead of linking the front
+/// end into the core binary.
+///
+/// The window is a separate process anyway (`musika-ui`), and the core never
+/// touches GPUI. `exec` keeps the CLI contract (`musika --ui` still starts the
+/// window with the same stdio/env) while letting the linker drop the whole UI
+/// stack from the daemon executable.
+#[cfg(unix)]
+fn exec_ui() -> ! {
+    use std::os::unix::process::CommandExt;
+
+    let Some(ui) = crate::daemon::ui_binary_path() else {
+        eprintln!("musika: cannot locate the UI binary");
+        std::process::exit(1);
+    };
+    // The UI ignores command-line arguments; forwarding them keeps any future
+    // front-end flags working without another launcher special case.
+    let error = std::process::Command::new(&ui)
+        .args(std::env::args_os().skip(1))
+        .exec();
+    eprintln!("musika: could not start {}: {error}", ui.display());
+    std::process::exit(1);
+}
+
+/// Non-Unix fallback: the project targets Linux; keep a buildable stub.
+#[cfg(not(unix))]
+fn exec_ui() -> ! {
+    crate::ui::run();
+    std::process::exit(0);
 }
 
 /// Default `musika` invocation: connect to the existing core (or start it),
@@ -154,6 +169,9 @@ fn spawn_detached_daemon() {
         if unsafe { libc::setsid() } == -1 {
             return Err(std::io::Error::last_os_error());
         }
+        // The launcher's descriptors (and anything inherited from a terminal
+        // or shell) must not survive into the long-lived core.
+        crate::linux::close_inherited_fds()?;
         Ok(())
     };
     // SAFETY: `pre_exec` requires the closure to be async-signal-safe in the
@@ -188,8 +206,8 @@ pub(crate) fn init_backend() -> bool {
             return false;
         }
     };
+    crate::startup::trace("accounts.root");
     crate::db::set_data_root(data_root);
-    crate::db::warm_startup();
 
     let dbs = match crate::app::runtime().block_on(crate::db::init()) {
         Ok(dbs) => dbs,
@@ -202,6 +220,11 @@ pub(crate) fn init_backend() -> bool {
     if let Err(err) = crate::app::runtime().block_on(crate::accounts::migrate_legacy(&dbs)) {
         eprintln!("accounts: legacy migration failed: {err:#}");
     }
+    crate::startup::trace("accounts.migrate");
     crate::app::set_dbs(dbs);
+    crate::startup::trace("db.ready");
+    // Warm after the migrations so the page cache holds the final files; the
+    // thread is demoted and only issues kernel readahead.
+    crate::db::warm_startup();
     true
 }

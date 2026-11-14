@@ -25,6 +25,8 @@
 #   MUSIKA_MEM_SETTLE       seconds to wait after open_song_album (default 1.2)
 #   MUSIKA_MEM_INIT         max seconds to wait for the first rendered frame (default 90)
 #   MUSIKA_MEM_REVISITS     revisit entries appended (default 10)
+#   MUSIKA_MEM_NO_COVERS    1 to set MUSIKA_UI_NO_COVERS=1 for the UI child
+#                           (placeholder-only run: isolates cover cost)
 set -euo pipefail
 export LC_ALL=C  # stable decimal points for awk/printf
 
@@ -58,6 +60,8 @@ esac
 SETTLE=${MUSIKA_MEM_SETTLE:-1.2}
 INIT=${MUSIKA_MEM_INIT:-90}
 REVISITS=${MUSIKA_MEM_REVISITS:-10}
+NO_COVERS=${MUSIKA_MEM_NO_COVERS:-0}
+[[ "$NO_COVERS" =~ ^[01]$ ]] || die "MUSIKA_MEM_NO_COVERS must be 0 or 1"
 
 CFG="$OUTDIR/config"
 CACHE="$OUTDIR/cache"
@@ -188,6 +192,7 @@ done
 echo "check-ui-memory: starting UI"
 env -u MUSIKA_IPC_SOCKET -u MUSIKA_DAEMON_SOCKET \
     XDG_CONFIG_HOME="$CFG" XDG_CACHE_HOME="$CACHE" MUSIKA_FRAME_STATS=1 \
+    MUSIKA_UI_NO_COVERS="$NO_COVERS" \
     "$BIN_DIR/musika-ui" >"$UI_LOG" 2>&1 &
 UI_PID=$!
 

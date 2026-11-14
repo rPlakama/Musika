@@ -137,6 +137,10 @@ actions!(
 );
 
 pub fn run() {
+    // The UI is the process that decodes/upload covers: use the same
+    // long-lived-process allocator policy as the core and return freed pages
+    // after the page-sized decode churn.
+    crate::linux::tune_allocator();
     Application::new()
         .with_http_client(remote_images::app_http_client())
         .with_assets(Assets)

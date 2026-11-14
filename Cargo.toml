@@ -76,7 +76,7 @@ gpui = { version = "0.2.2", optional = true, default-features = false, features 
 
 # Cover art loading (UI): DCT-scaled JPEG decode and SIMD resizing before the
 # texture upload. Both are UI-only: the headless daemon keeps `image`.
-jpeg-decoder = { version = "0.3", optional = true }
+jpeg-decoder = { version = "0.3", optional = true, default-features = false }
 fast_image_resize = { version = "6.1", optional = true, default-features = false, features = ["std"] }
 zune-jpeg = { version = "0.5", optional = true }
 

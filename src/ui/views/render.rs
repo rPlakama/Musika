@@ -69,6 +69,10 @@ impl Render for AppRoot {
         if page_moved {
             self.page_state_marker = Some((self.page_generation, self.page.is_some()));
             self.prune_page_state();
+            // Cover decodes allocate multi-megabyte source buffers; without a
+            // trim glibc keeps that page-change high-water in its arenas even
+            // after the retired textures are gone.
+            crate::linux::malloc_trim();
             // The released page's covers are unloaded on the next frame. Ask
             // for that frame explicitly: otherwise the window can go idle right
             // after the navigation and hold the retired page's covers until the

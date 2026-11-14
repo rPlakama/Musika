@@ -41,6 +41,18 @@ open work; this file is the release history.
   Rows and collage panes keep using the 320 px thumbnail, so they do not pay
   for a multi-megapixel decode.
 
+- **Cover-decode memory high-water:** entering a page decodes its full
+  hero/row art, but the bounded image cache was not the cost: after 20 album
+  entries the cache held only 4.9 MiB while UI RSS grew 148 -> 322 MiB. The
+  transient source-decode buffers were being retained by glibc's per-thread
+  arenas (made worse by `jpeg-decoder`'s default rayon pool, 16 extra threads).
+  The UI now applies the daemon's allocator policy, trims after a page change's
+  cover release, and `jpeg-decoder` runs without the rayon pool. The same
+  harness now grows 141 -> 156 MiB (+15 MB) over 20 entries with the cover
+  cache full, 73 threads instead of 89, and unchanged 60 fps / p95 18 ms frame
+  pacing. `MUSIKA_UI_NO_COVERS=1` (or `MUSIKA_MEM_NO_COVERS=1` on the harness)
+  paints placeholders only and makes the isolation reproducible.
+
 - **Top-bar horizontal scroll:** the page-context identity row now accepts a
   direct horizontal wheel/trackpad gesture (the x-only viewport also maps a
   plain vertical wheel to horizontal) and pauses the idle marquee for two

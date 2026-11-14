@@ -193,12 +193,25 @@ impl CoverSource {
     }
 }
 
+/// Temporary diagnostic switch: make every cover surface resolve no source,
+/// so the UI paints placeholders and never decodes/uploads cover pixels.
+/// Used by the UI memory harness to separate cover cost from row/list cost.
+fn covers_disabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("MUSIKA_UI_NO_COVERS").is_ok_and(|value| value == "1")
+    })
+}
+
 pub(crate) fn remote_cover(url: &str) -> Option<String> {
     let url = url.trim();
     (url.starts_with("http://") || url.starts_with("https://")).then(|| url.to_string())
 }
 
 pub(crate) fn cover_source(url: &str) -> Option<CoverSource> {
+    if covers_disabled() {
+        return None;
+    }
     if let Some(remote) = remote_cover(url) {
         return Some(CoverSource::Remote(remote));
     }
@@ -208,6 +221,9 @@ pub(crate) fn cover_source(url: &str) -> Option<CoverSource> {
 /// Resolves a cover URL with a provider URL as the fallback for a local file
 /// that is missing or fails to load.
 pub(crate) fn cover_source_with_remote(url: &str, remote: &str) -> Option<CoverSource> {
+    if covers_disabled() {
+        return None;
+    }
     match cover_source(url) {
         Some(source) => Some(source.with_remote_fallback(remote)),
         None => remote_cover(remote).map(CoverSource::Remote),
@@ -222,6 +238,9 @@ pub(crate) fn cover_source_with_remote(url: &str, remote: &str) -> Option<CoverS
 /// shared image cache still bounds decoded pixels; it is not this module's
 /// concern.
 pub(crate) fn full_cover_source(url: &str) -> Option<CoverSource> {
+    if covers_disabled() {
+        return None;
+    }
     cover_path_full(url)
         .map(CoverSource::Path)
         .or_else(|| remote_cover(url).map(CoverSource::Remote))
@@ -235,6 +254,9 @@ pub(crate) fn full_cover_source(url: &str) -> Option<CoverSource> {
 /// that shortened copy when the provider's original URL is available, so the
 /// explicit `remote` URL wins there.
 pub(crate) fn full_cover_source_with_remote(url: &str, remote: &str) -> Option<CoverSource> {
+    if covers_disabled() {
+        return None;
+    }
     match cover_path_full(url) {
         Some(path) => Some(CoverSource::Path(path).with_remote_fallback(remote)),
         None => remote_cover(remote)
@@ -260,6 +282,9 @@ pub(crate) fn cover_sources<'a, I>(rows: I) -> Vec<Option<std::sync::Arc<CoverSo
 where
     I: Iterator<Item = (&'a str, &'a str)>,
 {
+    if covers_disabled() {
+        return rows.map(|_| None).collect();
+    }
     let mut store = COVERS
         .get_or_init(|| std::sync::Mutex::new(covers::CoverStore::new(768)))
         .lock()

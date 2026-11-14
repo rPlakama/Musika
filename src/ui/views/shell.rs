@@ -563,6 +563,7 @@ impl AppRoot {
         id_name: &'static str,
         index: usize,
         source: Option<CoverSource>,
+        preview: Option<CoverSource>,
         width: f32,
         height: f32,
         scale: f32,
@@ -580,6 +581,8 @@ impl AppRoot {
             fit,
             radius,
         )
+        .with_preview(preview.map(std::sync::Arc::new))
+        .retained()
         .into_any_element()
     }
 
@@ -595,6 +598,7 @@ impl AppRoot {
         id_name: &'static str,
         index: usize,
         source: Option<CoverSource>,
+        preview: Option<CoverSource>,
         width: f32,
         height: f32,
         fit: gpui::ObjectFit,
@@ -611,7 +615,9 @@ impl AppRoot {
             1.0,
             fit,
             radius,
-        );
+        )
+        .with_preview(preview.map(std::sync::Arc::new))
+        .retained();
         match fade_id {
             Some(id) => div()
                 .child(image)
@@ -675,6 +681,7 @@ impl AppRoot {
                                 "player-cover",
                                 0,
                                 cover,
+                                None,
                                 m.cover_side,
                                 m.cover_side,
                                 gpui::ObjectFit::Contain,

@@ -269,6 +269,7 @@ impl AppRoot {
                                 "fullscreen-cover",
                                 0,
                                 cover,
+                                self.current_cover.thumb(),
                                 cover_side,
                                 cover_side,
                                 gpui::ObjectFit::Contain,

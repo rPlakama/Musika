@@ -37,7 +37,8 @@ pub(crate) mod daemon_client;
 #[cfg(debug_assertions)]
 mod debug;
 pub(crate) use crate::ipc_command;
-mod image_cache;
+pub(crate) mod fast_image;
+pub(crate) mod image_cache;
 mod line_search;
 mod lyrics_layout;
 mod metrics;

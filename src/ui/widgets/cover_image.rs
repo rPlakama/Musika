@@ -11,7 +11,7 @@
 //! the cache de-duplicates by resource. A same-cover change therefore issues no
 //! new load; a different cover paints a different cached image.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use gpui::{
     App, Bounds, Corners, Element, ElementId, Entity, GlobalElementId, InspectorElementId,
@@ -34,6 +34,28 @@ pub(crate) struct CoverImage {
     fit: ObjectFit,
     radius: f32,
     image: Option<Arc<RenderImage>>,
+    /// Cheap thumbnail painted while `source` (the full-resolution copy)
+    /// decodes. A hero appears within a frame instead of staying blank for a
+    /// full-size JPEG decode; once the source lands it paints on the next
+    /// frame and the preview goes stale.
+    preview: Option<Arc<CoverSource>>,
+    preview_image: Option<Arc<RenderImage>>,
+    /// Keeps this decoded cover in a warm slot across page changes.
+    retained: bool,
+}
+
+/// Whether cover load tracing (`MUSIKA_LOAD_TRACE`) is enabled. Read once so
+/// the per-frame checks cost a relaxed atomic load instead of a getenv scan.
+fn load_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("MUSIKA_LOAD_TRACE").is_some())
+}
+
+/// Wall-clock unix milliseconds; 0 if the system clock is before the epoch.
+fn unix_epoch_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis())
 }
 
 impl CoverImage {
@@ -63,7 +85,25 @@ impl CoverImage {
             fit,
             radius,
             image: None,
+            preview: None,
+            preview_image: None,
+            retained: false,
         }
+    }
+
+    /// Paints `preview` (usually the 320 px thumbnail) until the full source
+    /// has decoded, so a large cover never leaves a blank hero.
+    pub(crate) fn with_preview(mut self, preview: Option<Arc<CoverSource>>) -> Self {
+        self.preview = preview;
+        self.preview_image = None;
+        self
+    }
+
+    /// Keeps the decoded cover resident across page changes (hero surfaces
+    /// and the playing cover), so album -> artist -> album does not re-decode.
+    pub(crate) fn retained(mut self) -> Self {
+        self.retained = true;
+        self
     }
 }
 
@@ -112,6 +152,8 @@ impl Element for CoverImage {
         let Some(source) = self.source.as_deref() else {
             return;
         };
+        let trace = load_trace_enabled();
+        let was_none = self.image.is_none();
         let resource = source.resource();
         // Decode at the physical size this cover is painted at. The original
         // cover file is untouched; a 400 pt hero decodes 400 px instead of a
@@ -121,18 +163,75 @@ impl Element for CoverImage {
             self.width.max(self.height),
             window.scale_factor(),
         );
+        let retained = self.retained;
         let loaded = self.cache.update(cx, |cache, cx| {
-            cache.load_display(&resource, edge, window, cx)
+            if retained {
+                cache.load_display_retained(&resource, edge, window, cx)
+            } else {
+                cache.load_display(&resource, edge, window, cx)
+            }
         });
         self.image = match loaded {
             Some(Ok(image)) => Some(image),
             Some(Err(_)) => source.remote_resource().and_then(|resource| {
                 self.cache
-                    .update(cx, |cache, cx| cache.load_display(&resource, edge, window, cx))
+                    .update(cx, |cache, cx| {
+                        if retained {
+                            cache.load_display_retained(&resource, edge, window, cx)
+                        } else {
+                            cache.load_display(&resource, edge, window, cx)
+                        }
+                    })
                     .and_then(Result::ok)
             }),
             None => None,
         };
+        // Paint a cheap thumbnail while the source decodes: the thumbnail
+        // file is a few tens of KB, so the surface has real pixels within a
+        // frame instead of a blank rectangle for the source decode.
+        self.preview_image = None;
+        if self.image.is_none()
+            && let Some(preview) = self.preview.as_deref()
+        {
+            let preview_edge =
+                display_edge_for(self.width.max(self.height), window.scale_factor()).min(384);
+            let resource = preview.resource();
+            self.preview_image = match self.cache.update(cx, |cache, cx| {
+                cache.load_preview(&resource, preview_edge, window, cx)
+            }) {
+                Some(Ok(image)) => Some(image),
+                Some(Err(_)) => preview.remote_resource().and_then(|resource| {
+                    self.cache
+                        .update(cx, |cache, cx| {
+                            cache.load_preview(&resource, preview_edge, window, cx)
+                        })
+                        .and_then(Result::ok)
+                }),
+                None => None,
+            };
+        }
+        // Diagnostic only, and gated: one line the first time this element
+        // has an image to paint, so an external harness can time startup and
+        // album-page hero readiness from the UI log. `state=preview` is the
+        // fast placeholder; `state=full` is the sharp source.
+        let state = if self.image.is_some() {
+            Some("full")
+        } else if self.preview_image.is_some() {
+            Some("preview")
+        } else {
+            None
+        };
+        if trace
+            && was_none
+            && let Some(state) = state
+        {
+            eprintln!(
+                "[musika/cover] ready id={} index={} epoch_ms={} edge={edge} state={state}",
+                self.id_name,
+                self.index,
+                unix_epoch_ms(),
+            );
+        }
     }
 
     fn paint(
@@ -154,7 +253,7 @@ impl Element for CoverImage {
         window.paint_quad(
             fill(bounds, rgb(palette::surface_container_highest())).corner_radii(corners),
         );
-        let Some(image) = self.image.as_ref() else {
+        let Some(image) = self.image.as_ref().or(self.preview_image.as_ref()) else {
             return;
         };
         let scaled = self.scale.max(1.0);

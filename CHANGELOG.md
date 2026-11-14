@@ -15,6 +15,32 @@ open work; this file is the release history.
   dropped after a library sync. The `getSimilarSongs` client wrapper remains
   but has no radio call site.
 
+- **Fast cover loading:** the UI decodes covers for the pixels they are painted
+  at instead of full-decoding the provider original. JPEGs use DCT-scaled
+  decoding (1/2-1/8) plus SIMD resizing before the BGRA/RenderImage handoff;
+  small JPEGs decode straight to BGRA with zune-jpeg; PNG/WebP still decode
+  through `image` and resize with `fast_image_resize`. Decode edges are
+  bucketed so the page hero/fullscreen/window resize share one texture, the
+  first large decode writes a small display derivative (later opens ~1.5 ms),
+  and hero surfaces paint the 320 px thumbnail while the sharp source decodes
+  (no blank hero). In-flight decodes are owned by the bounded cache entry and
+  cancelled on page navigation or eviction; evicted textures still go through
+  `App::drop_image`.
+
+- **Warm covers across page changes:** the last three large decoded covers
+  (page hero, fullscreen art, playing cover) stay resident while everything
+  else is still released two frames after it stops being painted, so
+  album -> artist -> album (and reopening fullscreen) reuses the image instead
+  of decoding it again. `MUSIKA_IMAGE_CACHE_WARM` overrides the slot count
+  (0 disables). Measured: reopening the same album immediately is 21-25 ms with
+  warm slots vs 36-45 ms with them disabled.
+- **Measured:** corpus-weighted cold hero decode 8.8-9.0 ms (was 12.3-18.9 ms
+  full decode), second open 1.5 ms, 4000-7200 px cold 145-165 ms (was
+  178-265 ms); end-to-end album-page first pixels p50 47 / p95 51 ms on a
+  cold cache and p50 40 / p95 46 ms with display derivatives (was 66 / 95 ms).
+  Rows and collage panes keep using the 320 px thumbnail, so they do not pay
+  for a multi-megapixel decode.
+
 ## 0.7.3 - _F32 pipeline and float headroom_
 
 - **F32 end-to-end audio:** the decoder/swresampler now emits packed F32

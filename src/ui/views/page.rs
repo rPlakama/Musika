@@ -22,6 +22,13 @@ impl AppRoot {
         } else {
             full_cover_source_with_remote(&page.header.cover_url, &page.header.cover_remote)
         };
+        // The row thumbnail is already on disk: paint it immediately while
+        // the untouched original decodes to the hero size.
+        let cover_preview = if profile.collage {
+            None
+        } else {
+            cover_source_with_remote(&page.header.cover_url, &page.header.cover_remote)
+        };
         let header_h = cover_bottom.max(240.0);
 
         if page.loading && page.rows.is_empty() {
@@ -80,16 +87,16 @@ impl AppRoot {
                     .justify_center()
                     .overflow_hidden()
                     .child(if profile.collage {
-                        // Collage panes are hero-sized too: each pane paints the
-                        // original cover source, falling back to the provider
-                        // URL when the local original is missing.
+                        // Collage panes are ~250 px or less: the row thumbnail
+                        // is already the right size, with the provider URL as
+                        // the fallback when the local copy is missing.
                         let sources = page
                             .header
                             .collage
                             .iter()
                             .enumerate()
                             .map(|(index, url)| {
-                                full_cover_source_with_remote(
+                                cover_source_with_remote(
                                     url,
                                     page.header
                                         .collage_remote
@@ -109,6 +116,7 @@ impl AppRoot {
                             "page-hero",
                             0,
                             cover,
+                            cover_preview,
                             cover_art_side,
                             cover_art_side,
                             1.0,

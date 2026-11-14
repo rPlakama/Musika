@@ -7,40 +7,40 @@
 //! that grows with every album/artist page a user visits, so entering pages
 //! used to increase RSS by the decoded size of each new hero/row cover.
 //!
-//! [`BoundedImageCache`] implements [`gpui::ImageCache`] with two release
+//! [`BoundedImageCache`] implements [`gpui::ImageCache`] with three release
 //! rules. An image that no element has requested for a couple of frames is
-//! unloaded immediately: leaving a page (or closing an overlay) drops its
-//! covers instead of keeping them resident until some later page happens to
-//! need the memory. A decoded-byte budget (default 96 MiB) then backstops a
-//! single screen that really does paint more than that at once. Eviction drops
-//! the image from the window sprite atlas with [`gpui::App::drop_image`], so
-//! neither the CPU pixels nor the texture survive. Only decoded bytes are
-//! counted (not the file size): that is the number that matters for RSS.
+//! unloaded: leaving a page (or closing an overlay) drops its covers instead
+//! of keeping them resident until some later page happens to need the memory.
+//! A decoded-byte budget (default 96 MiB) backstops a single screen that
+//! really does paint more than that at once. Finally, a small number of the
+//! most recently painted **large** covers (the page hero, fullscreen art, the
+//! playing cover) stay warm across page changes (`MUSIKA_IMAGE_CACHE_WARM`,
+//! default 3): bouncing album -> artist -> album must not re-decode the same
+//! image. Everything else still follows the stale-frame rule, and eviction
+//! drops the image from the window sprite atlas with
+//! [`gpui::App::drop_image`], so neither the CPU pixels nor the texture
+//! survive. Only decoded bytes are counted (not the file size): that is the
+//! number that matters for RSS.
 //!
 //! The cache stores no path or URL knowledge; callers hand it a `Resource`
 //! through the same `img` element path every surface already uses. The one
 //! app-wide cache entity is installed as the root render's image cache, so
-//! every cover `img()` in the tree inherits it.
-//!
-//! Decoding is display-sized: local covers decode through a capped path whose
-//! long edge is the physical pixel size the cover is painted at (row covers
-//! ~64 px, hero/fullscreen covers their real on-screen pixels, scale factor
-//! included). The original file is never modified and never decoded to a huge
-//! texture just because the source is large: a 4096 px source painted into a
-//! 400 pt hero decodes 400 px, not 64 MiB. A 7200 px source still has a large
-//! transient decode inside `image`, so the absolute cap
-//! (`MUSIKA_COVER_MAX_EDGE`, default 4096, clamped 512-8192) remains a
-//! pathological-source guard. Non-file resources (remote provider art,
-//! embedded assets) keep gpui's stock loader.
+//! every cover `img()` in the tree inherits it. Local cover files do not go
+//! through that path at all: [`super::fast_image`] decodes them for the
+//! painted size and hands back a ready [`RenderImage`].
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use futures_util::FutureExt as _;
 use gpui::{
     App, AppContext, Asset, AssetLogger, Entity, ImageAssetLoader, ImageCache, ImageCacheError,
-    ImageCacheItem, ImageLoadingTask, RenderImage, Resource, Window, hash,
+    RenderImage, Resource, Window, hash,
 };
+
+use super::fast_image::{self, quantize_edge};
 
 /// Decoded RGBA budget for cover art. Covers are now decoded at their painted
 /// size, so this is a backstop rather than the per-page peak: 96 MiB comfortably
@@ -57,6 +57,19 @@ const BYTES_PER_MIB: usize = 1024 * 1024;
 /// just moved to; frame counting (not wall clock) means an idle window keeps
 /// the cover it is showing.
 const STALE_FRAMES: u64 = 2;
+
+/// Decoded covers kept resident even when nothing currently paints them.
+///
+/// The open page's row thumbnails are cheap to reload, but a hero is a real
+/// decode. Bouncing between an album and its artist (album -> artist -> album
+/// -> ...) or reopening the fullscreen cover otherwise re-decodes the same
+/// image every time. The last few large covers stay warm instead; everything
+/// else is still released two frames after it stops being painted.
+pub(crate) const DEFAULT_WARM_SLOTS: usize = 3;
+const MAX_WARM_SLOTS: usize = 8;
+/// Smallest decode edge worth keeping warm. Row/player thumbnails (64-384 px)
+/// are cheap to re-decode and would otherwise crowd the hero slots.
+const WARM_MIN_EDGE: u32 = 512;
 
 /// Absolute longest edge decoded for a local cover file, independent of the
 /// display size. This only guards pathological sources and huge transient
@@ -88,6 +101,14 @@ pub(crate) fn new_cache(cx: &mut App) -> Entity<BoundedImageCache> {
     cx.new(|_| BoundedImageCache::new(budget_mib * BYTES_PER_MIB))
 }
 
+/// Parses the `MUSIKA_IMAGE_CACHE_WARM` override, clamped so a typo cannot
+/// pin an unbounded number of covers or disable hero retention.
+fn warm_slots_from(raw: Option<&str>) -> usize {
+    raw.and_then(|raw| raw.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_WARM_SLOTS)
+        .min(MAX_WARM_SLOTS)
+}
+
 fn budget_mib() -> usize {
     budget_mib_from(std::env::var("MUSIKA_IMAGE_CACHE_MB").ok().as_deref())
 }
@@ -117,6 +138,14 @@ impl CacheStats {
     }
 }
 
+/// Whether an entry may occupy a warm slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Retain {
+    Never,
+    IfLarge,
+    Always,
+}
+
 /// An [`ImageCache`] that unloads images nothing paints anymore.
 pub(crate) struct BoundedImageCache {
     lru: LruBudget,
@@ -128,15 +157,38 @@ pub(crate) struct BoundedImageCache {
     /// Monotonic render-frame counter. A cache entity sees one `begin_frame`
     /// per rendered frame; loads during that frame mark their image as painted.
     frame: u64,
+    /// Monotonic paint counter: recency for the warm slots, with a finer
+    /// ordering than `frame` when several surfaces are painted in one frame.
+    touch_seq: u64,
+    /// Large decoded images retained across page changes (see
+    /// [`DEFAULT_WARM_SLOTS`]).
+    warm_slots: usize,
+}
+
+/// One decode in flight. The task is owned by the cache entry, so dropping
+/// the entry cancels the decode: a page navigation, an edge growth or a
+/// budget eviction cannot leave a superseded 4000 px decode burning a
+/// background thread for a cover nothing paints anymore.
+type DecodeFuture =
+    Pin<Box<dyn Future<Output = Result<Arc<RenderImage>, ImageCacheError>> + Send + 'static>>;
+
+/// State of one cached cover.
+enum EntryItem {
+    Loading(DecodeFuture),
+    Loaded(Result<Arc<RenderImage>, ImageCacheError>),
 }
 
 struct Entry {
-    item: ImageCacheItem,
+    item: EntryItem,
     /// Frame whose layout/paint last asked for this image.
     last_used: u64,
+    /// Paint-order recency, used to rank warm candidates.
+    last_touch: u64,
     /// Long edge this local image was decoded for (0 for remote/stock images).
     /// A later surface needing a bigger texture re-decodes once.
     edge: u32,
+    /// Whether this entry may occupy a warm slot across page changes.
+    retain: bool,
 }
 
 impl BoundedImageCache {
@@ -147,7 +199,51 @@ impl BoundedImageCache {
             hits: 0,
             misses: 0,
             frame: 0,
+            touch_seq: 0,
+            warm_slots: warm_slots_from(std::env::var("MUSIKA_IMAGE_CACHE_WARM").ok().as_deref()),
         }
+    }
+
+    /// Number of large covers retained across page changes.
+    pub(crate) fn warm_slots(&self) -> usize {
+        self.warm_slots
+    }
+
+    /// Overrides the warm-slot count; tests and diagnostics only.
+    #[cfg(test)]
+    pub(crate) fn set_warm_slots(&mut self, slots: usize) {
+        self.warm_slots = slots.min(MAX_WARM_SLOTS);
+    }
+
+    /// Marks one entry as most recently painted.
+    fn touch(&mut self, key: u64) {
+        self.touch_seq = self.touch_seq.wrapping_add(1);
+        let touch_seq = self.touch_seq;
+        let frame = self.frame;
+        if let Some(entry) = self.entries.get_mut(&key) {
+            entry.last_used = frame;
+            entry.last_touch = touch_seq;
+        }
+        self.lru.touch(key);
+    }
+
+    /// Keys of the large decoded images protected from stale eviction.
+    fn warm_keys(&self) -> HashSet<u64> {
+        if self.warm_slots == 0 {
+            return HashSet::new();
+        }
+        let mut candidates: Vec<(u64, u64)> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.retain && matches!(entry.item, EntryItem::Loaded(_)))
+            .map(|(key, entry)| (*key, entry.last_touch))
+            .collect();
+        candidates.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.1));
+        candidates
+            .into_iter()
+            .take(self.warm_slots)
+            .map(|(key, _)| key)
+            .collect()
     }
 
     /// Number of resident images (loading requests included).
@@ -189,7 +285,7 @@ impl BoundedImageCache {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
-        self.load_with_edge(resource, None, window, cx)
+        self.load_with_edge(resource, None, Retain::Never, window, cx)
     }
 
     /// Loads a cover painted at `display_edge` physical pixels. Local files
@@ -202,13 +298,40 @@ impl BoundedImageCache {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
-        self.load_with_edge(resource, Some(display_edge), window, cx)
+        self.load_with_edge(resource, Some(display_edge), Retain::IfLarge, window, cx)
+    }
+
+    /// Loads a hero/player-bar cover that stays warm across page changes even
+    /// when it is currently not painted (the identity closure must resolve it
+    /// again without a decode).
+    pub(crate) fn load_display_retained(
+        &mut self,
+        resource: &Resource,
+        display_edge: u32,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
+        self.load_with_edge(resource, Some(display_edge), Retain::Always, window, cx)
+    }
+
+    /// Loads a cheap placeholder thumbnail. Previews never occupy a warm slot:
+    /// they are a few KB and re-decoded instantly, while a warm slot must hold
+    /// one of the large covers the user is actually navigating between.
+    pub(crate) fn load_preview(
+        &mut self,
+        resource: &Resource,
+        display_edge: u32,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
+        self.load_with_edge(resource, Some(display_edge), Retain::Never, window, cx)
     }
 
     fn load_with_edge(
         &mut self,
         resource: &Resource,
         display_edge: Option<u32>,
+        retain: Retain,
         window: &mut Window,
         cx: &mut App,
     ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
@@ -216,16 +339,28 @@ impl BoundedImageCache {
         // them (fast page navigation, closed overlays). Without this pass such
         // an orphaned result would stay `Loading` forever, hold its decoded
         // bytes and never qualify for eviction.
-        self.settle_loading();
+        self.settle_loading(window);
         let key = hash(resource);
         let local = cappable_path(resource).is_some();
         let edge = if local {
             let requested = display_edge.unwrap_or_else(decode_max_edge);
-            requested
-                .min(decode_max_edge())
-                .max(DISPLAY_DECODE_MIN_EDGE)
+            // Decode edges are quantized so one decoded texture serves a
+            // range of window sizes (hero -> fullscreen) instead of forcing a
+            // new full decode for every pixel change.
+            quantize_edge(
+                requested
+                    .min(decode_max_edge())
+                    .max(DISPLAY_DECODE_MIN_EDGE),
+            )
         } else {
             0
+        };
+        let retain = match retain {
+            Retain::Never => false,
+            Retain::Always => true,
+            // Remote provider art is already a "hero" resource: keep it warm
+            // when a surface asked for it by display size.
+            Retain::IfLarge => !local || edge >= WARM_MIN_EDGE,
         };
         if let Some(entry) = self.entries.get_mut(&key) {
             // A same-size or larger decode already serves this request. A
@@ -233,12 +368,15 @@ impl BoundedImageCache {
             // fullscreen cover at 900 px).
             if !(local && edge > entry.edge) {
                 self.hits = self.hits.saturating_add(1);
-                entry.last_used = self.frame;
-                let loaded = entry.item.get();
+                entry.retain |= retain;
+                let loaded = match &entry.item {
+                    EntryItem::Loading(_) => None,
+                    EntryItem::Loaded(result) => Some(result.clone()),
+                };
                 if let Some(Ok(image)) = loaded.as_ref() {
                     _ = self.lru.record(key, image_bytes(image));
                 }
-                self.lru.touch(key);
+                self.touch(key);
                 return loaded;
             }
             self.unload(key, window, cx);
@@ -248,58 +386,69 @@ impl BoundedImageCache {
         self.entries.insert(
             key,
             Entry {
-                item: ImageCacheItem::Loading(task.clone()),
+                item: EntryItem::Loading(task),
                 last_used: self.frame,
+                last_touch: 0,
                 edge,
+                retain,
             },
         );
-        self.lru.touch(key);
-        // Wake the requesting view once the decode completes; without this
-        // the frame that first asked would stay blank until some other event
-        // repainted it.
-        let entity = window.current_view();
-        window
-            .spawn(cx, async move |cx| {
-                _ = task.await;
-                cx.on_next_frame(move |_, cx| {
-                    cx.notify(entity);
-                });
-            })
-            .detach();
+        self.touch(key);
+        // Keep frames coming until the decode settles: `settle_loading` runs
+        // at the next frame start and swaps the finished task for its image.
+        window.request_animation_frame();
         None
     }
 
     /// Polls every in-flight decode once and records the decoded size of the
-    /// ones that finished. `ImageCacheItem::get` is a cheap `now_or_never` on a
-    /// still-loading task.
-    fn settle_loading(&mut self) {
+    /// ones that finished. Decodes run on the background executor; polling at
+    /// frame start means no per-task wakeup closure is needed, and dropping a
+    /// pending entry (navigation, eviction) cancels its decode instead of
+    /// letting it finish unobserved.
+    fn settle_loading(&mut self, window: &Window) {
         let loading: Vec<u64> = self
             .entries
             .iter()
-            .filter(|(_, entry)| matches!(entry.item, ImageCacheItem::Loading(_)))
+            .filter(|(_, entry)| matches!(entry.item, EntryItem::Loading(_)))
             .map(|(key, _)| *key)
             .collect();
+        let mut pending = false;
         for key in loading {
             let Some(entry) = self.entries.get_mut(&key) else {
                 continue;
             };
-            let loaded = entry.item.get();
-            let bytes = match loaded.as_ref() {
-                Some(Ok(image)) => image_bytes(image),
-                Some(Err(_)) | None => 0,
-            };
-            if loaded.is_some() {
-                _ = self.lru.record(key, bytes);
+            let mut finished = None;
+            if let EntryItem::Loading(future) = &mut entry.item {
+                finished = (&mut *future).now_or_never();
             }
+            let Some(result) = finished else {
+                pending = true;
+                continue;
+            };
+            let bytes = result.as_ref().map_or(0, image_bytes);
+            _ = self.lru.record(key, bytes);
+            entry.item = EntryItem::Loaded(result);
+        }
+        if pending {
+            window.request_animation_frame();
         }
     }
 
-    /// Drops every resident cover immediately (decoded entry, byte accounting
-    /// and sprite-atlas texture). Called when the open page identity changes:
-    /// the retired page must not keep images (or their GPU atlas textures)
-    /// resident while the new page decodes its own covers.
-    pub(crate) fn purge_all(&mut self, window: &mut Window, cx: &mut App) {
-        let keys: Vec<u64> = self.entries.keys().copied().collect();
+    /// Releases the retired page's covers immediately, keeping the warm slots.
+    ///
+    /// Called when the open page identity changes. Row thumbnails, collage
+    /// panes and previews are cheap to reload, so they are dropped at once
+    /// instead of waiting for the stale-frame grace; the last few large covers
+    /// (page heroes, fullscreen art, the playing cover) stay resident so
+    /// album -> artist -> album does not re-decode them.
+    pub(crate) fn purge_retired(&mut self, window: &mut Window, cx: &mut App) {
+        let warm = self.warm_keys();
+        let keys: Vec<u64> = self
+            .entries
+            .keys()
+            .copied()
+            .filter(|key| !warm.contains(key))
+            .collect();
         for key in keys {
             self.unload(key, window, cx);
         }
@@ -313,6 +462,7 @@ impl BoundedImageCache {
     /// out.
     pub(crate) fn begin_frame(&mut self, window: &mut Window, cx: &mut App) {
         self.frame = self.frame.wrapping_add(1);
+        self.settle_loading(window);
         self.evict_stale(window, cx);
         self.evict_budget(window, cx);
     }
@@ -324,10 +474,11 @@ impl BoundedImageCache {
     /// never a candidate.
     fn evict_stale(&mut self, window: &mut Window, cx: &mut App) {
         let frame = self.frame;
+        let warm = self.warm_keys();
         let stale: Vec<u64> = self
             .entries
             .iter()
-            .filter(|(_, entry)| is_stale(frame, entry.last_used))
+            .filter(|(key, entry)| is_stale(frame, entry.last_used) && !warm.contains(key))
             .map(|(key, _)| *key)
             .collect();
         for key in stale {
@@ -345,16 +496,24 @@ impl BoundedImageCache {
     fn evict_budget(&mut self, window: &mut Window, cx: &mut App) {
         while self.lru.over_budget() {
             let frame = self.frame;
-            let Some(key) = self.lru.eviction_candidate(|key| {
+            let warm = self.warm_keys();
+            let evictable = |key: u64| {
                 matches!(
                     self.entries.get(&key),
                     Some(Entry {
-                        item: ImageCacheItem::Loaded(_),
+                        item: EntryItem::Loaded(_),
                         last_used,
                         ..
                     }) if *last_used < frame
                 )
-            }) else {
+            };
+            // Prefer dropping non-warm images; if only warm ones are left, the
+            // decoded-byte budget is a hard cap and they go too.
+            let key = self
+                .lru
+                .eviction_candidate(|key| evictable(key) && !warm.contains(&key))
+                .or_else(|| self.lru.eviction_candidate(evictable));
+            let Some(key) = key else {
                 break;
             };
             self.unload(key, window, cx);
@@ -362,14 +521,14 @@ impl BoundedImageCache {
     }
 
     /// Removes one entry, its byte accounting and (when decoded) its atlas
-    /// texture. A still-loading entry is simply forgotten: the task keeps
-    /// running to completion but its result is dropped with the handle.
+    /// texture. A still-loading entry is cancelled: dropping the owned task
+    /// aborts the background decode instead of letting it finish unobserved.
     fn unload(&mut self, key: u64, window: &mut Window, cx: &mut App) {
         let Some(entry) = self.entries.remove(&key) else {
             return;
         };
         _ = self.lru.remove(key);
-        if let ImageCacheItem::Loaded(Ok(image)) = entry.item {
+        if let EntryItem::Loaded(Ok(image)) = entry.item {
             cx.drop_image(image, Some(window));
         }
     }
@@ -396,21 +555,22 @@ fn is_stale(frame: u64, last_used: u64) -> bool {
 }
 
 /// Builds the loading task for one image: local files decode through the
-/// edge-capped path; everything else (remote provider art, embedded assets)
-/// keeps gpui's stock loader.
-fn load_image_task(resource: &Resource, cx: &mut App, max_edge: u32) -> ImageLoadingTask {
+/// display-sized fast decoder; everything else (remote provider art, embedded
+/// assets) keeps gpui's stock loader.
+fn load_image_task(resource: &Resource, cx: &mut App, max_edge: u32) -> DecodeFuture {
     let Some(path) = cappable_path(resource) else {
         let future = AssetLogger::<ImageAssetLoader>::load(resource.clone(), cx);
-        return cx.background_executor().spawn(future).shared();
+        return Box::pin(cx.background_executor().spawn(future));
     };
     let max_edge = if max_edge == 0 {
         decode_max_edge()
     } else {
         max_edge
     };
-    cx.background_executor()
-        .spawn(async move { decode_capped_file(&path, max_edge) })
-        .shared()
+    Box::pin(
+        cx.background_executor()
+            .spawn(async move { fast_image::decode_for_display(&path, max_edge) }),
+    )
 }
 
 /// Local files that decode through [`decode_capped_file`]. Animated cover
@@ -439,34 +599,15 @@ fn decode_edge_from(raw: Option<&str>) -> u32 {
         .clamp(DECODE_MIN_EDGE, DECODE_MAX_EDGE_LIMIT)
 }
 
-/// Reads and decodes one local cover, downscaling only when its longest edge
-/// exceeds `max_edge`.
+/// Decodes one local cover for a surface painted at `max_edge` physical px.
 ///
-/// gpui exposes no decode-size limit, and a 7200 px cover allocates ~198 MiB of
-/// RGBA before any resize could run; capping inside the cache's own decoder is
-/// the only place that avoids that transient spike. The result mirrors gpui's
-/// own conversion: RGBA pixels byte-swapped to BGRA, wrapped in one
-/// [`RenderImage`] frame.
-fn decode_capped_file(
+/// Kept as the cache/benchmark entry point; [`fast_image::decode_for_display`]
+/// owns the DCT-scaled JPEG path, SIMD resize and display-derivative cache.
+pub(crate) fn decode_capped_file(
     path: &std::path::Path,
     max_edge: u32,
 ) -> Result<Arc<RenderImage>, ImageCacheError> {
-    let bytes = std::fs::read(path).map_err(|err| ImageCacheError::Io(Arc::new(err)))?;
-    let format = image::guess_format(&bytes)
-        .map_err(|err| ImageCacheError::Image(Arc::new(err)))?;
-    let mut image = image::load_from_memory_with_format(&bytes, format)
-        .map_err(|err| ImageCacheError::Image(Arc::new(err)))?;
-    if image.width().max(image.height()) > max_edge {
-        image = image.thumbnail(max_edge, max_edge);
-    }
-    let mut rgba = image.into_rgba8();
-    // gpui's `RenderImage` is BGRA; mirror the stock ImageDecoder swap.
-    for pixel in rgba.pixels_mut() {
-        pixel.0.swap(0, 2);
-    }
-    Ok(Arc::new(RenderImage::new(smallvec::smallvec![
-        image::Frame::new(rgba)
-    ])))
+    fast_image::decode_for_display(path, max_edge)
 }
 
 /// Decoded byte length of an image, across all its frames.
@@ -675,9 +816,59 @@ mod tests {
     fn an_image_is_unloaded_only_after_two_rendered_frames() {
         assert!(!is_stale(10, 10), "requested in this frame");
         assert!(!is_stale(11, 10), "one frame of grace covers a transition");
-        assert!(is_stale(12, 10), "left page is released on the second frame");
-        assert!(!is_stale(9, 10), "a future stamp (counter wrap) is not stale");
+        assert!(
+            is_stale(12, 10),
+            "left page is released on the second frame"
+        );
+        assert!(
+            !is_stale(9, 10),
+            "a future stamp (counter wrap) is not stale"
+        );
         assert!(!is_stale(0, 0));
+    }
+
+    #[test]
+    fn warm_slot_count_parses_and_clamps() {
+        assert_eq!(warm_slots_from(None), DEFAULT_WARM_SLOTS);
+        assert_eq!(warm_slots_from(Some("0")), 0);
+        assert_eq!(warm_slots_from(Some(" 2 ")), 2);
+        assert_eq!(warm_slots_from(Some("99")), MAX_WARM_SLOTS);
+        assert_eq!(warm_slots_from(Some("junk")), DEFAULT_WARM_SLOTS);
+    }
+
+    fn insert_loaded(cache: &mut BoundedImageCache, key: u64, retain: bool, last_touch: u64) {
+        cache.entries.insert(
+            key,
+            Entry {
+                item: EntryItem::Loaded(Err(ImageCacheError::Io(Arc::new(std::io::Error::other(
+                    "test image",
+                ))))),
+                last_used: 0,
+                last_touch,
+                edge: 512,
+                retain,
+            },
+        );
+    }
+
+    #[test]
+    fn warm_keys_keep_the_most_recently_painted_large_covers() {
+        let mut cache = BoundedImageCache::new(8 * BYTES_PER_MIB);
+        cache.set_warm_slots(2);
+        insert_loaded(&mut cache, 1, true, 10);
+        insert_loaded(&mut cache, 2, true, 30);
+        insert_loaded(&mut cache, 3, false, 50);
+        insert_loaded(&mut cache, 4, true, 20);
+        insert_loaded(&mut cache, 5, false, 40);
+        assert_eq!(cache.warm_keys(), HashSet::from([2, 4]));
+    }
+
+    #[test]
+    fn zero_warm_slots_disable_retention() {
+        let mut cache = BoundedImageCache::new(8 * BYTES_PER_MIB);
+        cache.set_warm_slots(0);
+        insert_loaded(&mut cache, 1, true, 10);
+        assert!(cache.warm_keys().is_empty());
     }
 
     #[test]

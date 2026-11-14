@@ -57,13 +57,14 @@ impl Render for AppRoot {
             self.page.is_some(),
         );
         if page_moved {
-            // Fully unload the retired page's covers *before* the new page is
-            // laid out and paints its own hero. Without this the outgoing
-            // outgoing hero texture and the incoming one can occupy the sprite
-            // atlas at the same time, and the renderer's texture pool keeps the
-            // extra atlas allocation even after the old image is evicted.
+            // Release the retired page's covers *before* the new page is laid
+            // out and paints its own hero. Without this the outgoing hero
+            // texture and the incoming one can occupy the sprite atlas at the
+            // same time, and the renderer's texture pool keeps the extra atlas
+            // allocation even after the old image is evicted. Warm slots
+            // survive, so an album/artist bounce reuses its heroes.
             self.image_cache
-                .update(cx, |cache, cx| cache.purge_all(window, cx));
+                .update(cx, |cache, cx| cache.purge_retired(window, cx));
         }
         if page_moved {
             self.page_state_marker = Some((self.page_generation, self.page.is_some()));

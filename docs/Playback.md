@@ -484,10 +484,11 @@ meant for `status` sampling and regression comparisons, not persistence.
 
 ### Known playback limits
 
-- **Rate-change boundary:** when the next track needs a different native rate,
-  the sink rebuilds at the boundary and flushes queued PCM for the new rate.
-  The resulting small gap is still present; crossfade/gapless covers
-  same-rate transitions.
+- **Rate-change boundary:** with crossfade enabled the preload is decoded at
+  the current pipeline rate, so the fade covers a rate change without a sink
+  rebuild. Without crossfade, when the next track needs a different native
+  rate, the sink rebuilds at the boundary and flushes queued PCM for the new
+  rate; that small gap remains.
 - **Exclusive/bit-perfect output:** the default backend is PipeWire;
   `output exclusive on` sets its `node.exclusive` request and
   `output bitperfect on` bypasses EQ, ReplayGain and crossfade. For a true
@@ -512,6 +513,7 @@ meant for `status` sampling and regression comparisons, not persistence.
   `CHANNELS = 2`, and both sinks negotiate a stereo stream. Multichannel would
   require a channel count through decode, ring, EQ, crossfade, sink format
   and the position/channel map; it is not wired.
-- **DSD:** FFmpeg can demux/decode DSF/DFF and convert DSD to PCM, but Musika
-  has no native DoP path and has not validated DSD content end-to-end. It is a
-  feasibility gate, not a supported format.
+- **DSD:** FFmpeg exposes DSF/DFF demuxers and DSD decoders, but Musika has
+  no native DoP path and has not validated DSD content end-to-end. The decoder
+  now rejects DSD explicitly as `Unsupported` (no retry) instead of attempting
+  a broken playback; converting to PCM first remains the supported route.

@@ -1887,3 +1887,13 @@ fn crossfade_curves_are_complementary_and_power_preserving() {
         assert!((out + next - 1.0).abs() < 1e-6);
     }
 }
+
+#[test]
+fn dsd_is_classified_as_unsupported_instead_of_retried() {
+    let error = crate::player::PlaybackError::classify(
+        crate::player::ErrorStage::Read,
+        "decoder: DSD playback is unsupported; convert to PCM first",
+    );
+    assert_eq!(error.kind, crate::player::error::ErrorKind::Unsupported);
+    assert!(!error.retryable());
+}

@@ -170,6 +170,9 @@ fn classify_kind(message: &str) -> ErrorKind {
     {
         return ErrorKind::Network;
     }
+    if lower.contains("unsupported") {
+        return ErrorKind::Unsupported;
+    }
     if lower.contains("invalid data")
         || lower.contains("could not find codec")
         || lower.contains("decoder:")

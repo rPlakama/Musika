@@ -5,6 +5,11 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **DSD gate:** the decoder now rejects DSD codec IDs explicitly as
+  `Unsupported` (not retried) instead of attempting playback. Crossfade-enabled
+  transitions already preload at the current pipeline rate, so they cover a
+  rate change without the sink rebuild; plain gapless still has the small
+  boundary gap.
 - **Direct ALSA backend:** an optional `alsa-backend` (default on) adds a
   blocking F32-stereo ALSA `PcmSink` alongside PipeWire. `output backend alsa`
   or `output alsa hw:0,0` selects it; it requires the track's exact rate and

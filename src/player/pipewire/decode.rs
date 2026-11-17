@@ -316,6 +316,18 @@ impl Decoder {
         let mut codec_context = codec::Context::from_parameters(parameters).map_err(|error| {
             context_error("decoder: cannot apply audio codec parameters", error)
         })?;
+        // DSD is a feasibility gate: FFmpeg may expose a DSD decoder, but the
+        // player has no DoP/native path and no validated DSD content. Reject
+        // it explicitly instead of pretending to play it.
+        if matches!(
+            codec_context.id(),
+            ffmpeg::codec::Id::DSD_LSBF
+                | ffmpeg::codec::Id::DSD_MSBF
+                | ffmpeg::codec::Id::DSD_LSBF_PLANAR
+                | ffmpeg::codec::Id::DSD_MSBF_PLANAR
+        ) {
+            return Err("decoder: DSD playback is unsupported; convert to PCM first".to_string());
+        }
         // Audio decode is cheap enough to keep on the player thread. More
         // importantly, this bounds FFmpeg's internal buffering and makes
         // seek/flush behaviour deterministic.

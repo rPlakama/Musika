@@ -514,10 +514,11 @@ meant for `status` sampling and regression comparisons, not persistence.
   track's exact rate, and falls back to PipeWire on any configuration error.
   The backend is chosen at engine construction, so `output backend` takes
   effect on the next engine start/restart.
-- **Multichannel:** the decoder resamples to packed F32 stereo, the ring has
-  `CHANNELS = 2`, and both sinks negotiate a stereo stream. Multichannel would
-  require a channel count through decode, ring, EQ, crossfade, sink format
-  and the position/channel map; it is not wired.
+- **Multichannel:** multichannel sources are accepted and downmixed by
+  swresample to packed F32 stereo (covered by a six-channel WAV decode test),
+  but the ring/sinks/EQ are stereo and no channel map is negotiated. True
+  multichannel output would require a channel count through decode, ring, EQ,
+  crossfade, sink format and the position/channel map; it is not wired.
 - **DSD:** FFmpeg exposes DSF/DFF demuxers and DSD decoders, but Musika has
   no native DoP path and has not validated DSD content end-to-end. The decoder
   now rejects DSD explicitly as `Unsupported` (no retry) instead of attempting

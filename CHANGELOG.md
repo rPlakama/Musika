@@ -5,6 +5,10 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Multichannel source coverage:** add a six-channel WAV fixture proving
+  multichannel inputs are accepted and safely downmixed to the stereo pipeline.
+  Multichannel *output* (a channel count through ring/EQ/crossfade/sink) remains
+  a documented gate.
 - **Fixed-rate gapless option:** `stream fixed <Hz>` / `stream fixed off`
   forces every decoder to one pipeline rate, removing the non-crossfade
   rate-change boundary gap at the cost of native-rate playback. Defaults off.

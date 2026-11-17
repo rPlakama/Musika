@@ -1032,6 +1032,32 @@ mod tests {
     }
 
     #[test]
+    fn downmixes_a_six_channel_wav_to_stereo() {
+        let rate = 48_000u32;
+        let frames = 480usize;
+        let mut samples = Vec::with_capacity(frames * 6);
+        for index in 0..frames {
+            let time = index as f64 / f64::from(rate);
+            let tone = (8_000.0 * (2.0 * std::f64::consts::PI * 440.0 * time).sin()) as i16;
+            // 5.1: front L/R carry the tone, the other four are silent.
+            samples.extend_from_slice(&[tone, tone, 0, 0, 0, 0]);
+        }
+        let file = wav_fixture(rate, 6, &samples);
+        let mut decoder = Decoder::open(
+            file.path().to_str().expect("utf-8 temp path"),
+            new_stop(),
+        )
+        .expect("open six-channel WAV");
+        let mut out = vec![0f32; 1024 * 2];
+        let read = decoder.read(&mut out, 1024).expect("decode six-channel WAV");
+        assert!(read > 0);
+        assert!(
+            mean_abs(&out[..read * 2]) > 0.001,
+            "the downmixed stereo output must carry the front channels"
+        );
+    }
+
+    #[test]
     fn decodes_path_and_file_url_to_stereo() {
         let rate = 44_100u32;
         let frames = (rate as f64 * 0.2) as usize;

@@ -3,6 +3,11 @@
 use super::super::text_modal::TextBoxStyle;
 use super::super::*;
 
+/// Search rows are fixed-height in the floating panel. The scroll engine
+/// must use this same stride; adapting it to the window height made keyboard
+/// follow target 46/98 px rows while the list actually painted 56 px rows.
+const SEARCH_ROW_H: f32 = 56.0;
+
 impl AppRoot {
     pub(in crate::ui) fn search_loading_visible(&self, search: &SearchState) -> bool {
         search.loading
@@ -173,7 +178,7 @@ impl AppRoot {
         search: &SearchState,
         progress: f32,
     ) -> gpui::AnyElement {
-        let row_h = 56.0;
+        let row_h = SEARCH_ROW_H;
         let field_h = 54.0;
         let panel_w = (self.win_w * 0.60).clamp(360.0, 680.0);
         let panel_h = field_h

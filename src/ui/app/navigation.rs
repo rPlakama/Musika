@@ -199,27 +199,6 @@ impl AppRoot {
         }
     }
 
-    pub(in crate::ui) fn ensure_search_metrics(&mut self, window_height: f32) {
-        let measured = f32::from(
-            self.search_scroll
-                .handle
-                .0
-                .borrow()
-                .base_handle
-                .bounds()
-                .size
-                .height,
-        );
-        let viewport = if measured > 0.0 {
-            measured
-        } else {
-            (window_height * 0.72).max(1.0)
-        };
-        if self.search_scroll.ensure_metrics(viewport) {
-            self.follow_search(false);
-        }
-    }
-
     pub(in crate::ui) fn ensure_page_metrics(&mut self) {
         let measured = {
             let height = f32::from(

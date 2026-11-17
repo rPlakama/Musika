@@ -318,14 +318,6 @@ impl Render for AppRoot {
         if self.queue_open {
             self.ensure_queue_metrics();
         }
-        if self
-            .search
-            .as_ref()
-            .is_some_and(|search| !search.editor.text.is_empty())
-        {
-            let height = f32::from(window.viewport_size().height);
-            self.ensure_search_metrics(height);
-        }
         self.ensure_library_window();
         if !self.preloaded && self.view.rows.count > 0 && self.view.scope != Scope::Playlists {
             self.preloaded = true;

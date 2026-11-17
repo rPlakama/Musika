@@ -17,6 +17,9 @@ pub struct ScrollProfile {
     pub min_row_h: f32,
     pub overscan_rows: usize,
     pub follow_ms: f32,
+    /// Whether the row height adapts to the measured viewport. Fixed-height
+    /// surfaces (search) keep the nominal stride.
+    pub adaptive: bool,
 }
 
 pub const LIBRARY: ScrollProfile = ScrollProfile {
@@ -25,6 +28,7 @@ pub const LIBRARY: ScrollProfile = ScrollProfile {
     min_row_h: 18.0,
     overscan_rows: 10,
     follow_ms: 300.0,
+    adaptive: true,
 };
 pub const ALBUM: ScrollProfile = ScrollProfile {
     row_ratio: 0.06,
@@ -32,13 +36,18 @@ pub const ALBUM: ScrollProfile = ScrollProfile {
     min_row_h: 18.0,
     overscan_rows: 10,
     follow_ms: 300.0,
+    adaptive: true,
 };
+/// Search rows are fixed at 56 px inside the overlay; `row_h` starts there
+/// and must not be fed through `adaptive_row` (that made keyboard follow
+/// target a different stride than the painted rows).
 pub const SEARCH: ScrollProfile = ScrollProfile {
     row_ratio: 0.12,
     nominal_row_h: 56.0,
     min_row_h: 18.0,
     overscan_rows: 10,
     follow_ms: 300.0,
+    adaptive: false,
 };
 pub const QUEUE: ScrollProfile = ScrollProfile {
     row_ratio: 0.10,
@@ -46,6 +55,7 @@ pub const QUEUE: ScrollProfile = ScrollProfile {
     min_row_h: 18.0,
     overscan_rows: 10,
     follow_ms: 300.0,
+    adaptive: true,
 };
 
 #[derive(Default, Clone, Copy)]
@@ -217,7 +227,7 @@ impl ScrollModal {
     }
 
     pub fn ensure_metrics_ref(&mut self, reference: f32) -> bool {
-        if reference <= 0.0 {
+        if reference <= 0.0 || !self.profile.adaptive {
             return false;
         }
         self.row_ref.get_or_insert(reference);
@@ -314,5 +324,18 @@ mod tests {
         assert!(changed);
         assert_eq!(modal.row_ref, Some(1000.0));
         assert!((modal.row_h - 105.0).abs() < 20.0);
+    }
+}
+
+#[cfg(test)]
+mod fixed_metrics_tests {
+    use super::{SEARCH, ScrollModal};
+
+    #[test]
+    fn fixed_search_rows_are_not_adapted_to_the_window() {
+        let mut modal = ScrollModal::new(SEARCH);
+        assert_eq!(modal.row_h, 56.0);
+        assert!(!modal.ensure_metrics(800.0));
+        assert_eq!(modal.row_h, 56.0);
     }
 }

@@ -243,6 +243,71 @@ mod tests {
         assert_eq!(scope, Scope::Albums);
     }
 
+    fn header() -> crate::model::PageHeader {
+        crate::model::PageHeader {
+            title: "Playlist".into(),
+            subtitle: String::new(),
+            meta: String::new(),
+            cover_url: String::new(),
+            cover_remote: String::new(),
+            collage: Vec::new(),
+            collage_remote: Vec::new(),
+            collage_art: Vec::new(),
+            cover_art: String::new(),
+            rating: 0,
+            starred: false,
+        }
+    }
+
+    fn row(title: &str, remote: &str) -> Row {
+        Row {
+            item: crate::model::ItemMeta {
+                id: title.into(),
+                title: title.into(),
+                cover_url: String::new(),
+                cover_remote: remote.into(),
+                album_id: String::new(),
+            },
+            track: String::new(),
+            kind: RowKind::Song,
+            subtitle: String::new(),
+            meta: String::new(),
+            song_id: String::new(),
+            starred: false,
+            rating: 0,
+        }
+    }
+
+    #[test]
+    fn repeated_page_payload_keeps_cover_source_identity() {
+        let mut page = PageState::new(PageDescriptor::new(PageKind::Playlist, "p1".to_string()));
+        let rows = vec![row("one", "https://img/one")];
+        page.install_payload(header(), rows.clone());
+        let first = page.covers[0].as_ref().expect("remote cover").clone();
+        page.install_payload(header(), rows);
+        let second = page.covers[0].as_ref().expect("remote cover").clone();
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn page_payload_reuses_untouched_rows_and_rebuilds_changed_ones() {
+        let mut page = PageState::new(PageDescriptor::new(PageKind::Playlist, "p1".to_string()));
+        let rows = vec![row("one", "https://img/one")];
+        page.install_payload(header(), rows);
+        let first = page.covers[0].as_ref().expect("remote cover").clone();
+        let rows = vec![
+            row("one", "https://img/one"),
+            row("two", "https://img/two"),
+        ];
+        page.install_payload(header(), rows);
+        let kept = page.covers[0].as_ref().expect("remote cover").clone();
+        assert!(std::sync::Arc::ptr_eq(&first, &kept));
+        assert_eq!(
+            page.covers[1].as_ref().expect("new cover").key(),
+            "https://img/two"
+        );
+    }
+
     #[test]
     fn cursor_is_clamped_to_rows() {
         let mut view = ViewState {
@@ -372,6 +437,46 @@ impl PageState {
                 .iter()
                 .map(|row| (row.cover_url.as_str(), row.cover_remote.as_str())),
         );
+    }
+
+    /// Installs a page payload without churning identities that did not
+    /// change. A repeated payload (or a reload where only one row's cover
+    /// warmed up) keeps the existing decoded `CoverSource` Arcs, so the image
+    /// cache never sees a needless resource swap.
+    pub fn install_payload(&mut self, header: crate::model::PageHeader, rows: Vec<Row>) {
+        if self.header != header {
+            self.header = header;
+        }
+        if self.rows == rows {
+            return;
+        }
+        let mut reused: std::collections::HashMap<
+            (String, String),
+            std::sync::Arc<CoverSource>,
+        > = std::collections::HashMap::new();
+        for (row, cover) in self.rows.iter().zip(self.covers.iter()) {
+            if let Some(cover) = cover {
+                reused
+                    .entry((row.cover_url.clone(), row.cover_remote.clone()))
+                    .or_insert_with(|| std::sync::Arc::clone(cover));
+            }
+        }
+        self.covers = rows
+            .iter()
+            .map(|row| {
+                let key = (row.cover_url.clone(), row.cover_remote.clone());
+                reused.get(&key).cloned().or_else(|| {
+                    cover_sources(std::iter::once((
+                        row.cover_url.as_str(),
+                        row.cover_remote.as_str(),
+                    )))
+                    .into_iter()
+                    .next()
+                    .flatten()
+                })
+            })
+            .collect();
+        self.rows = rows;
     }
 
     pub fn cover(&self, index: usize) -> Option<&Arc<CoverSource>> {

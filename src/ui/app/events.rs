@@ -455,9 +455,7 @@ impl AppRoot {
                     header.cover_url,
                     header.title
                 );
-                page.header = header;
-                page.rows = rows;
-                page.rebuild_covers();
+                page.install_payload(header, rows);
                 page.loading = false;
                 page.error = None;
                 if let Some((id, row, keep_selection)) = self.pending_playlist_cursor.as_ref()

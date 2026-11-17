@@ -2213,3 +2213,113 @@ async fn server_move_with_a_duplicated_cache_writes_no_duplicates() {
     let third = add.find("songIdToAdd=s3").expect("s3 add");
     assert!(second < first && first < third, "moved order: {add}");
 }
+
+#[tokio::test]
+async fn page_prefers_one_stable_provider_cover() {
+    let library = playlist_pool().await;
+    sqlx::migrate!("./migrations_library")
+        .run(&library)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "CREATE TABLE covers (
+             id TEXT PRIMARY KEY, file TEXT NOT NULL, hash TEXT, content_type TEXT,
+             size INTEGER, etag TEXT, last_modified TEXT, fetched_at TEXT NOT NULL);
+         INSERT INTO albums (id, artist_id, name, artist, song_count)
+             VALUES ('al1', NULL, 'Album', 'Artist', 2);
+         INSERT INTO songs (id, album_id, title, artist, album, duration, cover_art)
+             VALUES ('s1', 'al1', 'One', 'Artist', 'Album', 10, 'dc-1'),
+                    ('s2', 'al1', 'Two', 'Artist', 'Album', 20, 'dc-1');",
+    )
+    .execute(&library)
+    .await
+    .unwrap();
+    let playlist = playlist_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO playlist (id, source, name, song_count, duration, cover_art, fetched_at)
+             VALUES ('pl1', 'subsonic', 'Mix', 2, 30, 'pl-cover', 0);
+         INSERT INTO playlist_song (playlist_id, position, song_id, title, cover_art)
+             VALUES ('pl1', 0, 's1', 'One', 'dc-1'),
+                    ('pl1', 1, 's2', 'Two', 'dc-1');",
+    )
+    .execute(&playlist)
+    .await
+    .unwrap();
+    let dbs = playlist_dbs(&library, &playlist);
+    let (header, rows) = page(&dbs, "pl1", false).await.unwrap();
+    assert_eq!(header.collage.len(), 1);
+    assert_eq!(header.collage_art, vec!["pl-cover".to_string()]);
+    assert_eq!(header.cover_art, "pl-cover");
+    assert_eq!(rows.len(), 2);
+}
+
+#[tokio::test]
+async fn page_fallback_collage_does_not_depend_on_cover_cache_warming() {
+    let library = playlist_pool().await;
+    sqlx::migrate!("./migrations_library")
+        .run(&library)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "CREATE TABLE covers (
+             id TEXT PRIMARY KEY, file TEXT NOT NULL, hash TEXT, content_type TEXT,
+             size INTEGER, etag TEXT, last_modified TEXT, fetched_at TEXT NOT NULL);
+         INSERT INTO albums (id, artist_id, name, artist, song_count)
+             VALUES ('al1', NULL, 'A', 'Artist', 2), ('al2', NULL, 'B', 'Artist', 1);
+         INSERT INTO songs (id, album_id, title, artist, album, duration, cover_art)
+             VALUES ('s1', 'al1', 'One', 'Artist', 'A', 10, 'dc-1'),
+                    ('s2', 'al1', 'Two', 'Artist', 'A', 20, 'dc-1'),
+                    ('s3', 'al2', 'Three', 'Artist', 'B', 30, 'dc-2');",
+    )
+    .execute(&library)
+    .await
+    .unwrap();
+    let playlist = playlist_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO playlist (id, source, name, song_count, duration, fetched_at)
+             VALUES ('pl1', 'subsonic', 'Mix', 3, 60, 0);
+         INSERT INTO playlist_song (playlist_id, position, song_id, title, cover_art)
+             VALUES ('pl1', 0, 's1', 'One', 'dc-1'),
+                    ('pl1', 1, 's2', 'Two', 'dc-1'),
+                    ('pl1', 2, 's3', 'Three', 'dc-2');",
+    )
+    .execute(&playlist)
+    .await
+    .unwrap();
+    let dbs = playlist_dbs(&library, &playlist);
+    let (first, _) = page(&dbs, "pl1", false).await.unwrap();
+    let (second, _) = page(&dbs, "pl1", false).await.unwrap();
+    assert_eq!(first.collage.len(), 2, "one pane per unique album");
+    assert_eq!(first.collage_art, vec!["dc-1".to_string(), "dc-2".to_string()]);
+    assert_eq!(first.collage, second.collage);
+    assert_eq!(first.collage_remote, second.collage_remote);
+}
+
+#[tokio::test]
+async fn referenced_cover_ids_include_playlist_and_entry_art() {
+    let playlist = playlist_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO playlist (id, source, name, song_count, cover_art, fetched_at)
+             VALUES ('pl1', 'subsonic', 'Mix', 1, 'pl-cover', 0);
+         INSERT INTO playlist_song (playlist_id, position, song_id, title, cover_art)
+             VALUES ('pl1', 0, 's1', 'One', 'dc-1');",
+    )
+    .execute(&playlist)
+    .await
+    .unwrap();
+    let ids = referenced_cover_ids(&playlist).await.unwrap();
+    assert!(ids.contains("pl-cover"));
+    assert!(ids.contains("dc-1"));
+}

@@ -452,13 +452,17 @@ async fn cache_covers_locked(
     client: &Arc<SubsonicClient>,
     forced: &[String],
 ) -> CoverReport {
-    let referenced = match crate::library::referenced_cover_ids(&dbs.library).await {
+    let mut referenced = match crate::library::referenced_cover_ids(&dbs.library).await {
         Ok(referenced) => referenced,
         Err(err) => {
             eprintln!("index: could not determine referenced covers: {err:#}");
             return CoverReport::default();
         }
     };
+    match crate::playlists::referenced_cover_ids(&dbs.playlist).await {
+        Ok(playlist_covers) => referenced.extend(playlist_covers),
+        Err(err) => eprintln!("index: could not determine playlist covers: {err:#}"),
+    }
 
     match crate::covers::refresh(&dbs.covers, client, &referenced, forced).await {
         Ok(report) => {

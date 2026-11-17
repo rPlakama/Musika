@@ -5,6 +5,14 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Stable playlist artwork:** playlist pages prefer the provider's
+  `cover_art` (single, cached hero) and otherwise build a fixed-size ordered
+  collage from unique album entries, including panes whose local file is still
+  cold. Playlist list rows now resolve server/first-entry covers.
+- Playlist-owned cover ids are included in the post-sync cover pass; page
+  payloads reuse unchanged `CoverSource` Arcs, and `CoverImage` keeps the
+  previous pixels while a replacement resource decodes (remote -> local) to
+  remove thumbnail flashes.
 - **Artist image cache:** artist portraits from the provider's signed
   `/share/img/...` URLs are now downloaded into the covers store as a detached
   post-sync background pass (and on demand for visible artists). Artist rows

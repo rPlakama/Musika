@@ -736,6 +736,7 @@ struct PlaylistListRow {
     song_count: i64,
     duration: i64,
     owner: Option<String>,
+    cover_art: Option<String>,
 }
 
 /// Where a playlist came from, as the row subtitle leads with it: the local
@@ -761,14 +762,32 @@ pub struct PlaylistHit {
 
 /// One playlist segment row, deriving the same title/subtitle/meta text the
 /// JSON row carried (`playlist_row`) without a `Value` round trip.
-fn playlist_segment_row(row: &PlaylistListRow) -> crate::model::Row {
+fn playlist_segment_row(
+    row: &PlaylistListRow,
+    covers: &std::collections::HashMap<String, String>,
+    remotes: &std::collections::HashMap<String, String>,
+    first_song_cover: Option<&String>,
+) -> crate::model::Row {
     let origin = playlist_origin(row);
+    let cover_id = row
+        .cover_art
+        .as_ref()
+        .filter(|cover| !cover.trim().is_empty())
+        .or(first_song_cover);
+    let cover_url = cover_id
+        .and_then(|id| covers.get(id))
+        .cloned()
+        .unwrap_or_default();
+    let cover_remote = cover_id
+        .and_then(|id| remotes.get(id))
+        .cloned()
+        .unwrap_or_default();
     crate::model::Row {
         item: crate::model::ItemMeta {
             id: row.id.clone(),
             title: row.name.clone(),
-            cover_url: String::new(),
-            cover_remote: String::new(),
+            cover_url,
+            cover_remote,
             album_id: String::new(),
         },
         track: String::new(),
@@ -799,18 +818,42 @@ pub async fn list(dbs: &Dbs) -> Result<Vec<crate::model::Row>> {
 /// entries are all server-only cannot lead to an empty, unplayable page.
 pub async fn list_filtered(dbs: &Dbs, downloaded_only: bool) -> Result<Vec<crate::model::Row>> {
     let rows: Vec<PlaylistListRow> = sqlx::query_as(
-        "SELECT id, source, name, song_count, duration, owner
+        "SELECT id, source, name, song_count, duration, owner, cover_art
          FROM playlist
          WHERE song_count > 0
          ORDER BY lower(name)",
     )
     .fetch_all(&dbs.playlist)
     .await?;
+    let first_covers: std::collections::HashMap<String, String> = {
+        let entries: Vec<(String, Option<String>)> = sqlx::query_as(
+            "SELECT playlist_id, cover_art FROM playlist_song
+             WHERE cover_art IS NOT NULL AND cover_art != ''
+             ORDER BY playlist_id, position",
+        )
+        .fetch_all(&dbs.playlist)
+        .await?;
+        let mut map = std::collections::HashMap::new();
+        for (playlist_id, cover) in entries {
+            if let Some(cover) = cover {
+                map.entry(playlist_id).or_insert(cover);
+            }
+        }
+        map
+    };
+    let mut ids: Vec<Option<String>> = rows.iter().map(|row| row.cover_art.clone()).collect();
+    ids.extend(first_covers.values().cloned().map(Some));
+    let covers = crate::covers::url_map_for(dbs, ids.iter()).await?;
+    let remotes = crate::covers::remote_map_for(dbs, ids.iter()).await?;
+    let row_for = |row: &PlaylistListRow| {
+        let first = first_covers.get(&row.id);
+        playlist_segment_row(row, &covers, &remotes, first)
+    };
     if !downloaded_only {
-        return Ok(rows.iter().map(playlist_segment_row).collect());
+        return Ok(rows.iter().map(row_for).collect());
     }
     let Some(filter) = crate::offline::load(dbs, true).await? else {
-        return Ok(rows.iter().map(playlist_segment_row).collect());
+        return Ok(rows.iter().map(row_for).collect());
     };
     let entries: Vec<(String, Option<String>)> =
         sqlx::query_as("SELECT playlist_id, song_id FROM playlist_song")
@@ -825,7 +868,7 @@ pub async fn list_filtered(dbs: &Dbs, downloaded_only: bool) -> Result<Vec<crate
     Ok(rows
         .iter()
         .filter(|row| playable.contains(&row.id))
-        .map(playlist_segment_row)
+        .map(row_for)
         .collect())
 }
 
@@ -950,6 +993,7 @@ struct PlaylistRow {
     owner: Option<String>,
     song_count: i64,
     duration: i64,
+    cover_art: Option<String>,
 }
 
 /// One cached `playlist_song` row for [`page`].
@@ -966,7 +1010,7 @@ struct SongRow {
 
 async fn playlist_page_row(dbs: &Dbs, playlist_id: &str) -> Result<PlaylistRow> {
     sqlx::query_as::<_, PlaylistRow>(
-        "SELECT id, source, name, comment, owner, song_count, duration
+        "SELECT id, source, name, comment, owner, song_count, duration, cover_art
          FROM playlist WHERE id = ?1",
     )
     .bind(playlist_id)
@@ -1119,17 +1163,23 @@ pub async fn page(
         .into_iter()
         .map(|song| (song.id.clone(), song))
         .collect();
-    let cover_ids: Vec<Option<String>> = rows
+    let mut cover_ids: Vec<Option<String>> = rows
         .iter()
         .map(|row| row.cover_art.clone())
         .chain(by_id.values().map(|song| song.cover_art.clone()))
         .collect();
+    let playlist_cover = playlist
+        .cover_art
+        .clone()
+        .filter(|cover| !cover.trim().is_empty());
+    cover_ids.push(playlist_cover.clone());
     let covers = crate::covers::url_map_for(dbs, cover_ids.iter()).await?;
     let remotes = crate::covers::remote_map_for(dbs, cover_ids.iter()).await?;
 
     let mut duration_total: i64 = 0;
     let mut collage: Vec<String> = Vec::new();
     let mut collage_remote: Vec<String> = Vec::new();
+    let mut collage_art: Vec<String> = Vec::new();
     let mut collage_origins: Vec<String> = Vec::new();
     let mut list_rows: Vec<crate::model::Row> = Vec::with_capacity(rows.len());
     for row in &rows {
@@ -1149,10 +1199,17 @@ pub async fn page(
             .filter(|id| !id.is_empty())
             .or_else(|| row.album.clone().filter(|album| !album.is_empty()))
             .unwrap_or_else(|| format!("#{position}", position = row.position));
-        if !cover.is_empty() && !collage_origins.contains(&origin) {
+        if let Some(cover_id) = cover_id
+            && !collage_origins.contains(&origin)
+            && collage.len() < 4
+        {
+            // Keep the pane even when the local file is cold: the remote URL
+            // above keeps the image usable and, crucially, the pane count does
+            // not change as the cover cache warms.
             collage_origins.push(origin);
             collage.push(cover.clone());
             collage_remote.push(cover_remote.clone());
+            collage_art.push(cover_id.clone());
         }
         let duration = row
             .duration
@@ -1209,6 +1266,31 @@ pub async fn page(
     } else {
         "Playlist".to_string()
     };
+    // A provider playlist cover is authoritative and stable. Most providers
+    // do not return one, so the fallback collage above is deterministic even
+    // while individual files are still missing from the local cover cache.
+    let (cover_url, cover_remote, cover_art, collage, collage_remote, collage_art) =
+        if let Some(cover_id) = playlist_cover {
+            let local = covers.get(&cover_id).cloned().unwrap_or_default();
+            let remote = remotes.get(&cover_id).cloned().unwrap_or_default();
+            (
+                local.clone(),
+                remote.clone(),
+                cover_id.clone(),
+                vec![local],
+                vec![remote],
+                vec![cover_id],
+            )
+        } else {
+            (
+                collage.first().cloned().unwrap_or_default(),
+                collage_remote.first().cloned().unwrap_or_default(),
+                String::new(),
+                collage,
+                collage_remote,
+                collage_art,
+            )
+        };
     let header = crate::model::PageHeader {
         title: playlist.name.clone(),
         subtitle: format!(
@@ -1221,12 +1303,12 @@ pub async fn page(
         } else {
             String::new()
         },
-        cover_url: collage.first().cloned().unwrap_or_default(),
-        cover_remote: collage_remote.first().cloned().unwrap_or_default(),
+        cover_url,
+        cover_remote,
         collage,
         collage_remote,
-        collage_art: Vec::new(),
-        cover_art: String::new(),
+        collage_art,
+        cover_art,
         rating: 0,
         starred: false,
     };
@@ -1243,7 +1325,7 @@ pub async fn page(
 pub async fn search_rows(dbs: &Dbs, query: &str, limit: i64) -> Result<Vec<PlaylistHit>> {
     let like = format!("%{}%", query.trim());
     let rows: Vec<PlaylistListRow> = sqlx::query_as(
-        "SELECT id, source, name, song_count, duration, owner
+        "SELECT id, source, name, song_count, duration, owner, cover_art
          FROM playlist
          WHERE song_count > 0 AND lower(name) LIKE lower(?1)
          ORDER BY lower(name) LIMIT ?2",
@@ -1983,4 +2065,20 @@ fn push_m3u_entry(out: &mut String, entry: &M3uEntry) {
     }
     out.push_str(&m3u_line(&entry.path));
     out.push('\n');
+}
+
+/// Cover ids owned by playlists rather than the library. Included in the
+/// post-sync cover pass so synthetic playlist/entry ids (`pl-...`,
+/// `dc-...:1`) are local before the page first opens.
+pub async fn referenced_cover_ids(
+    pool: &SqlitePool,
+) -> Result<std::collections::BTreeSet<String>> {
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT cover_art FROM playlist WHERE cover_art IS NOT NULL AND cover_art != ''
+         UNION
+         SELECT cover_art FROM playlist_song WHERE cover_art IS NOT NULL AND cover_art != ''",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(ids.into_iter().collect())
 }

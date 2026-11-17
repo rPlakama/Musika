@@ -42,7 +42,18 @@ pub(crate) struct CoverImage {
     preview_image: Option<Arc<RenderImage>>,
     /// Keeps this decoded cover in a warm slot across page changes.
     retained: bool,
+    /// Resource identity most recently requested. A changed key may keep the
+    /// previous pixels while the next cover decodes (remote -> local warm-up).
+    source_key: Option<String>,
+    /// When the source key last changed, bounding how long stale pixels can be
+    /// painted if the replacement never loads.
+    pending_since: Option<std::time::Instant>,
 }
+
+/// How long a cover surface may paint the previous image while a replacement
+/// resource is still decoding. Long enough for a thumbnail decode, short
+/// enough that a genuinely different row cannot keep stale art indefinitely.
+const IMAGE_SWAP_GRACE: std::time::Duration = std::time::Duration::from_millis(600);
 
 /// Whether cover load tracing (`MUSIKA_LOAD_TRACE`) is enabled. Read once so
 /// the per-frame checks cost a relaxed atomic load instead of a getenv scan.
@@ -88,6 +99,8 @@ impl CoverImage {
             preview: None,
             preview_image: None,
             retained: false,
+            source_key: None,
+            pending_since: None,
         }
     }
 
@@ -150,10 +163,19 @@ impl Element for CoverImage {
         cx: &mut App,
     ) {
         let Some(source) = self.source.as_deref() else {
+            self.image = None;
+            self.preview_image = None;
+            self.source_key = None;
+            self.pending_since = None;
             return;
         };
         let trace = load_trace_enabled();
         let was_none = self.image.is_none();
+        let source_key = source.key();
+        if self.source_key.as_deref() != Some(source_key.as_str()) {
+            self.source_key = Some(source_key);
+            self.pending_since = Some(std::time::Instant::now());
+        }
         let resource = source.resource();
         // Decode at the physical size this cover is painted at. The original
         // cover file is untouched; a 400 pt hero decodes 400 px instead of a
@@ -171,7 +193,7 @@ impl Element for CoverImage {
                 cache.load_display(&resource, edge, window, cx)
             }
         });
-        self.image = match loaded {
+        let loaded_image = match loaded {
             Some(Ok(image)) => Some(image),
             Some(Err(_)) => source.remote_resource().and_then(|resource| {
                 self.cache
@@ -186,6 +208,18 @@ impl Element for CoverImage {
             }),
             None => None,
         };
+        if let Some(image) = loaded_image {
+            self.image = Some(image);
+            self.pending_since = None;
+        } else if self.image.is_some()
+            && self
+                .pending_since
+                .is_some_and(|started| started.elapsed() > IMAGE_SWAP_GRACE)
+        {
+            // The replacement never decoded: do not keep painting art that may
+            // belong to a different row forever.
+            self.image = None;
+        }
         // Paint a cheap thumbnail while the source decodes: the thumbnail
         // file is a few tens of KB, so the surface has real pixels within a
         // frame instead of a blank rectangle for the source decode.

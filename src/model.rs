@@ -308,7 +308,7 @@ impl PageDescriptor {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PageHeader {
     pub title: String,
     pub subtitle: String,

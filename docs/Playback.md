@@ -490,9 +490,10 @@ meant for `status` sampling and regression comparisons, not persistence.
 
 - **Rate-change boundary:** with crossfade enabled the preload is decoded at
   the current pipeline rate, so the fade covers a rate change without a sink
-  rebuild. Without crossfade, when the next track needs a different native
-  rate, the sink rebuilds at the boundary and flushes queued PCM for the new
-  rate; that small gap remains.
+  rebuild. Without crossfade, the sink rebuilds at the boundary and flushes
+  queued PCM for the new rate; `stream fixed <Hz>` is the opt-in alternative
+  that resamples every track to one pipeline rate and removes the gap (at the
+  cost of native-rate playback).
 - **Exclusive/bit-perfect output:** the default backend is PipeWire;
   `output exclusive on` sets its `node.exclusive` request and
   `output bitperfect on` bypasses EQ, ReplayGain and crossfade. For a true

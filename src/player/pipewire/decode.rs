@@ -260,6 +260,12 @@ impl Decoder {
         output_rate: Option<u32>,
     ) -> Result<Self, String> {
         initialize();
+        let output_rate = output_rate.or_else(|| {
+            let settings = crate::playback_settings::current();
+            settings
+                .fixed_pipeline_rate
+                .then_some(settings.fixed_pipeline_hz)
+        });
 
         if url.is_empty() {
             return Err("decoder: empty media URL".to_string());

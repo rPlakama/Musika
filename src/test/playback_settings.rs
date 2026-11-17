@@ -90,4 +90,9 @@ fn stream_changes_apply_one_field_and_keys_match_the_request() {
     assert!(!settings.stream_cache);
     StreamChange::CacheSize(1).apply(&mut settings);
     assert_eq!(settings.stream_cache_mib, 64);
+    StreamChange::FixedRate(Some(96_000)).apply(&mut settings);
+    assert!(settings.fixed_pipeline_rate);
+    assert_eq!(settings.fixed_pipeline_hz, 96_000);
+    StreamChange::FixedRate(None).apply(&mut settings);
+    assert!(!settings.fixed_pipeline_rate);
 }

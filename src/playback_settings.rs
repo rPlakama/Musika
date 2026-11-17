@@ -84,6 +84,11 @@ pub struct PlaybackSettings {
     pub stream_format: Option<String>,
     pub stream_cache: bool,
     pub stream_cache_mib: u64,
+    /// Resample every track to `fixed_pipeline_hz` instead of following native
+    /// rates. Opt-in: it removes rate-change gaps but sacrifices native-rate
+    /// playback/bit-perfect sourcing.
+    pub fixed_pipeline_rate: bool,
+    pub fixed_pipeline_hz: u32,
     /// Submit now-playing/completed plays to the server.
     pub scrobble: bool,
     /// Bypass EQ, ReplayGain and crossfade (a best-effort bit-perfect path).
@@ -110,6 +115,8 @@ impl Default for PlaybackSettings {
             stream_format: None,
             stream_cache: true,
             stream_cache_mib: 2048,
+            fixed_pipeline_rate: false,
+            fixed_pipeline_hz: 48_000,
             scrobble: true,
             bit_perfect: false,
         }
@@ -152,6 +159,8 @@ pub enum StreamChange {
     Cache(bool),
     /// Playback-cache cap in MiB.
     CacheSize(u64),
+    /// Force every decoder to one pipeline rate (`None` = native rates).
+    FixedRate(Option<u32>),
 }
 
 impl StreamChange {
@@ -166,6 +175,12 @@ impl StreamChange {
             }
             Self::Cache(enabled) => settings.stream_cache = enabled,
             Self::CacheSize(mib) => settings.stream_cache_mib = mib.clamp(64, 65_536),
+            Self::FixedRate(rate) => {
+                settings.fixed_pipeline_rate = rate.is_some();
+                if let Some(rate) = rate {
+                    settings.fixed_pipeline_hz = rate.clamp(44_100, 192_000);
+                }
+            }
         }
     }
 }
@@ -215,6 +230,7 @@ impl PlaybackSettings {
         if self.alsa_device.trim().is_empty() {
             self.alsa_device = "default".to_string();
         }
+        self.fixed_pipeline_hz = self.fixed_pipeline_hz.clamp(44_100, 192_000);
         self.stream_format = self.stream_format.and_then(|format| {
             let format = format.trim().to_ascii_lowercase();
             (!format.is_empty()).then_some(format)

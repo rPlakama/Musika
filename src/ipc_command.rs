@@ -1333,6 +1333,15 @@ fn advanced_parse(name: &str, rest: &str, usage: &str) -> Result<IpcCommand, Com
             [what, value] if what == "size" => Ok(IpcCommand::Stream(StreamChange::CacheSize(
                 parse_number(value, "MiB")?.max(64.0) as u64,
             ))),
+            [what, value] if what == "fixed" => {
+                if value == "off" {
+                    Ok(IpcCommand::Stream(StreamChange::FixedRate(None)))
+                } else {
+                    Ok(IpcCommand::Stream(StreamChange::FixedRate(Some(
+                        parse_number(value, "Hz")?.max(44_100.0) as u32,
+                    ))))
+                }
+            }
             _ => Err(CommandError(
                 "usage: stream <quality|format|cache|size> <value>".to_string(),
             )),
@@ -1914,6 +1923,10 @@ fn advanced_canonical(command: &IpcCommand) -> String {
 
         Stream(StreamChange::CacheSize(mib)) => format!("stream size {mib}"),
 
+        Stream(StreamChange::FixedRate(Some(rate))) => format!("stream fixed {rate}"),
+
+        Stream(StreamChange::FixedRate(None)) => "stream fixed off".to_string(),
+
         Sleep(Some(minutes)) => format!("sleep {minutes}"),
 
         Sleep(None) => "sleep off".to_string(),
@@ -2431,6 +2444,16 @@ mod tests {
         assert_eq!(
             parse("stream size 512"),
             Ok(IpcCommand::Stream(StreamChange::CacheSize(512)))
+        );
+        assert_eq!(
+            parse("stream fixed 48000"),
+            Ok(IpcCommand::Stream(StreamChange::FixedRate(Some(
+                48_000
+            ))))
+        );
+        assert_eq!(
+            parse("stream fixed off"),
+            Ok(IpcCommand::Stream(StreamChange::FixedRate(None)))
         );
         assert!(parse("stream").is_err());
         assert!(parse("stream nonsense 1").is_err());

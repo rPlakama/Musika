@@ -104,7 +104,7 @@ mpris_position:5000000
 | `sync` | `sync [all|repair]` | Incremental sync by default; `all` performs the deep pass; `repair` rebuilds the search/library indexes. The first successful server ping after the app opens (or after a login) starts one `sync all` automatically. |
 | `refresh` | `refresh` | Start an incremental sync. |
 | `output` | `output <list\|default\|node-name\|exclusive <on\|off>\|bitperfect <on\|off>\|backend <pipewire\|alsa>\|alsa <device>>` | List PipeWire sinks, follow the default, target a named `node.name`, request exclusive access, bypass DSP, or select the direct ALSA backend/device; choices are persisted (backend changes apply at the next engine start). |
-| `stream` | `stream <quality\|format\|cache\|size> <value>` | Cap the stream bitrate (`quality 128`, `quality 0` = original), request a format, toggle the playback cache, or set its size in MiB. |
+| `stream` | `stream <quality\|format\|cache\|size\|fixed> <value>` | Cap the stream bitrate, request a format, toggle the playback cache, set its size, or force one pipeline rate (`stream fixed 48000` / `off`) for gap-free rate changes. |
 | `sleep` | `sleep <minutes\|off>` | Fade out over five seconds and pause after N minutes; `sleep off` cancels. |
 | `scrobble` | `scrobble <on\|off>` | Enable or disable now-playing/completed-play submissions; queued offline plays flush on the next successful ping. |
 | `wipe` | `wipe <album|lyrics|covers>` | Clear downloaded album files, cached lyrics, or cached covers. |

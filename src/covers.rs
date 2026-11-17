@@ -47,6 +47,9 @@ use crate::http_client::SubsonicClient;
 /// the server-downscaled 512 px variant; their missing prefix forces one raw
 /// refetch on the next pass.
 const RAW_PREFIX: &str = "raw-";
+/// Artist portraits live in the same cover store under this prefix; the sync
+/// cover pass must not purge them as unreferenced `getCoverArt` ids.
+const ARTIST_IMAGE_PREFIX: &str = "artist-image:";
 
 /// FIX-2: in-flight registries — a repeated page reload/scroll while a cover
 /// is still missing (or its thumbnail is not generated yet) must not start
@@ -258,7 +261,7 @@ async fn refresh_inner(
     // fetches a subset and must leave every other cached cover alone.
     if purge_unreferenced {
         for (id, row) in known.iter() {
-            if !referenced.contains(id) {
+            if !referenced.contains(id) && !id.starts_with(ARTIST_IMAGE_PREFIX) {
                 _ = std::fs::remove_file(dir.join(&row.file));
                 _ = std::fs::remove_file(dir.join(thumb_name(&row.file)));
                 crate::cache::delete_by(pool, "DELETE FROM covers WHERE id = ?1", id).await?;
@@ -274,7 +277,7 @@ async fn refresh_inner(
     if purge_unreferenced {
         let mut queued: HashSet<String> = thumb_jobs.iter().map(|(name, _)| name.clone()).collect();
         for (id, row) in known.iter() {
-            if !referenced.contains(id) {
+            if !referenced.contains(id) && !id.starts_with(ARTIST_IMAGE_PREFIX) {
                 continue;
             }
             let source = dir.join(&row.file);
@@ -1263,4 +1266,141 @@ mod cap_tests {
         assert_eq!(decoded.width().max(decoded.height()), COVER_MAX_EDGE);
         assert!(decoded.color().has_alpha());
     }
+}
+
+/// Cache key for an artist image. Kept distinct from Subsonic `coverArt` ids
+/// so an artist id cannot collide with an album cover row.
+pub(crate) fn artist_image_key(artist_id: &str) -> String {
+    format!("{ARTIST_IMAGE_PREFIX}{artist_id}")
+}
+
+/// Maps artist ids to locally cached image URLs, fetching any missing image
+/// in the background. The returned map contains only cached entries; callers
+/// use the artist's `image_url` as the remote fallback.
+pub async fn artist_image_urls(
+    dbs: &crate::db::Dbs,
+    artists: &[(String, String)],
+) -> Result<HashMap<String, String>> {
+    let entries: Vec<(String, String)> = artists
+        .iter()
+        .filter(|(id, url)| !id.is_empty() && !url.is_empty())
+        .map(|(id, url)| (artist_image_key(id), url.clone()))
+        .collect();
+    if entries.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let keys: Vec<String> = entries.iter().map(|(key, _)| key.clone()).collect();
+    let cached = cached_urls(&dbs.covers, &keys).await?;
+    let mut map = HashMap::new();
+    let mut missing = Vec::new();
+    for (key, url) in entries {
+        if let Some(local) = cached.get(&key) {
+            if let Some(artist_id) = key.strip_prefix("artist-image:") {
+                map.insert(artist_id.to_string(), local.clone());
+            }
+        } else if claim_fetch(&key) {
+            missing.push((key, url));
+        }
+    }
+    if missing.is_empty() {
+        return Ok(map);
+    }
+    let Ok(client) = crate::session::client(dbs).await else {
+        for (key, _) in &missing {
+            release_fetch(key.clone());
+        }
+        return Ok(map);
+    };
+    let pooled = dbs.covers.clone();
+    let client = Arc::new(client);
+    crate::app::runtime().spawn(async move {
+        let result = refresh_external_inner(&pooled, &client, &missing).await;
+        for (key, _) in &missing {
+            release_fetch(key.clone());
+        }
+        if let Err(err) = result {
+            eprintln!("covers: artist-image fetch failed: {err:#}");
+        }
+    });
+    Ok(map)
+}
+
+/// Background pass over every artist image URL after a successful sync.
+pub(crate) async fn refresh_artist_images(
+    pool: &SqlitePool,
+    client: &Arc<SubsonicClient>,
+    artists: &[(String, String)],
+) -> Result<CoverReport> {
+    let items: Vec<(String, String)> = artists
+        .iter()
+        .filter(|(id, url)| !id.is_empty() && !url.is_empty())
+        .map(|(id, url)| (artist_image_key(id), url.clone()))
+        .collect();
+    refresh_external_inner(pool, client, &items).await
+}
+
+async fn refresh_external_inner(
+    pool: &SqlitePool,
+    client: &Arc<SubsonicClient>,
+    items: &[(String, String)],
+) -> Result<CoverReport> {
+    let dir = crate::db::covers_dir()?;
+    crate::db::ensure_dir(&dir)?;
+    let existing: Vec<CoverRow> =
+        sqlx::query_as("SELECT id, file, hash, etag, last_modified FROM covers")
+            .fetch_all(pool)
+            .await?;
+    let known: Arc<HashMap<String, CoverRow>> = Arc::new(
+        existing
+            .into_iter()
+            .map(|row| (row.id.clone(), row))
+            .collect(),
+    );
+    let known_for_apply = Arc::clone(&known);
+    let mut report = CoverReport::default();
+    let mut thumb_jobs = Vec::new();
+    for chunk in items.chunks(crate::consts::FETCH_CONCURRENCY) {
+        let mut set = tokio::task::JoinSet::new();
+        for (key, url) in chunk {
+            let key = key.clone();
+            let url = url.clone();
+            let client = Arc::clone(client);
+            let known = Arc::clone(&known);
+            set.spawn(async move {
+                let cached = known.get(&key);
+                let etag = cached.and_then(|row| row.etag.clone());
+                let last_modified = cached.and_then(|row| row.last_modified.clone());
+                let Ok(url) = reqwest::Url::parse(&url) else {
+                    return (
+                        key,
+                        Err(anyhow::anyhow!("invalid artist image URL: {url}")),
+                    );
+                };
+                let result = client
+                    .get_external_image(url, etag.as_deref(), last_modified.as_deref())
+                    .await;
+                (key, result)
+            });
+        }
+        while let Some(joined) = set.join_next().await {
+            match joined {
+                Ok((key, result)) => {
+                    apply_fetched(
+                        pool,
+                        &dir,
+                        known_for_apply.as_ref(),
+                        &key,
+                        result,
+                        &mut report,
+                        &mut thumb_jobs,
+                    )
+                    .await?;
+                }
+                Err(err) => eprintln!("covers: artist-image task failed: {err}"),
+            }
+        }
+    }
+    _ = ensure_thumbs(&dir, thumb_jobs).await;
+    remove_orphans(pool, &dir).await?;
+    Ok(report)
 }

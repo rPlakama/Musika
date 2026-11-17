@@ -167,7 +167,9 @@ only quits on `Bye { quit|shutdown }`; a protocol mismatch shows a
 The core owns SQLite databases, the Subsonic session, playback and native
 PipeWire/FFmpeg audio, covers cache, downloads, sync, session status, MPRIS and
 the StatusNotifierItem tray. The UI never opens those resources; it reads
-already-cached cover files for painting, keeps cursor/scroll/overlay state
+already-cached cover files for painting (album art and artist portraits share
+the covers store; portraits are warmed by a detached post-sync pass), keeps
+cursor/scroll/overlay state
 locally, and sends every data/player/session action over `daemon.sock`. It keeps
 no optimistic player mirror: transport and queue state are whatever the core
 last published. External `ipc.sock` commands always work in the core (playback,

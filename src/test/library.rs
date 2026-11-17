@@ -670,3 +670,30 @@ async fn random_album_id_skips_empty_albums() {
         .unwrap();
     assert_eq!(random_album_id(&pool).await.unwrap(), None);
 }
+
+#[tokio::test]
+async fn artist_rows_expose_the_provider_image_url() {
+    let pool = library_pool().await;
+    sqlx::query(
+        "INSERT INTO artists (id, name, album_count, image_url)
+         VALUES ('ar-image', 'Portrait', 1, 'https://img.example/ar-image')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO albums (id, artist_id, name, artist, song_count)
+         VALUES ('al-image', 'ar-image', 'Album', 'Portrait', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let row = crate::library::artist(&pool, "ar-image")
+        .await
+        .unwrap()
+        .expect("artist row");
+    assert_eq!(
+        row.image_url.as_deref(),
+        Some("https://img.example/ar-image")
+    );
+}

@@ -79,18 +79,40 @@ pub(crate) async fn library_rows(
             let remotes =
                 crate::covers::remote_map_for(&dbs, artists.iter().map(|artist| &artist.cover_art))
                     .await?;
+            let artist_images = crate::covers::artist_image_urls(
+                &dbs,
+                &artists
+                    .iter()
+                    .map(|artist| {
+                        (
+                            artist.id.clone(),
+                            artist.image_url.clone().unwrap_or_default(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .await?;
             Ok(artists
                 .into_iter()
-                .map(|artist| Row {
+                .map(|artist| {
+                    let local_image = artist_images.get(&artist.id).cloned();
+                    Row {
                     item: crate::model::ItemMeta {
                         id: artist.id,
                         title: artist.name,
-                        cover_url: crate::covers::url_for(artist.cover_art.as_deref(), &covers),
+                        cover_url: local_image.unwrap_or_else(|| {
+                            crate::covers::url_for(artist.cover_art.as_deref(), &covers)
+                        }),
                         cover_remote: artist
-                            .cover_art
-                            .as_deref()
-                            .and_then(|id| remotes.get(id))
-                            .cloned()
+                            .image_url
+                            .clone()
+                            .or_else(|| {
+                                artist
+                                    .cover_art
+                                    .as_deref()
+                                    .and_then(|id| remotes.get(id))
+                                    .cloned()
+                            })
                             .unwrap_or_default(),
                         album_id: String::new(),
                     },
@@ -101,6 +123,7 @@ pub(crate) async fn library_rows(
                     song_id: String::new(),
                     starred: artist.starred.is_some(),
                     rating: 0,
+                }
                 })
                 .collect())
         }
@@ -268,6 +291,15 @@ pub(crate) async fn page_data(
                 .and_then(|id| remotes.get(id))
                 .cloned()
                 .unwrap_or_default();
+            let artist_images = crate::covers::artist_image_urls(
+                &dbs,
+                &[(
+                    artist.id.clone(),
+                    artist.image_url.clone().unwrap_or_default(),
+                )],
+            )
+            .await?;
+            let local_artist_image = artist_images.get(&artist.id).cloned();
             let header = PageHeader {
                 title: artist.name,
                 subtitle: albums_label(if offline {
@@ -278,8 +310,10 @@ pub(crate) async fn page_data(
                 meta: String::new(),
                 // Hero surfaces paint the untouched original; the album rows
                 // further down keep their thumbnail URLs.
-                cover_url: crate::covers::url_for(artist.cover_art.as_deref(), &covers),
-                cover_remote,
+                cover_url: local_artist_image.unwrap_or_else(|| {
+                    crate::covers::url_for(artist.cover_art.as_deref(), &covers)
+                }),
+                cover_remote: artist.image_url.clone().unwrap_or(cover_remote),
                 collage: Vec::new(),
                 collage_remote: Vec::new(),
                 collage_art: Vec::new(),

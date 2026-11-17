@@ -5,6 +5,11 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Artist image cache:** artist portraits from the provider's signed
+  `/share/img/...` URLs are now downloaded into the covers store as a detached
+  post-sync background pass (and on demand for visible artists). Artist rows
+  and the artist page use the cached file with the provider URL as fallback;
+  `artist-image:` entries are excluded from the cover purge.
 - **Runtime test fixes:** apply the playback-settings/pending-scrobble
   migrations to the production library file (status is an alias of library,
   not only the test status pool); bump the core/UI protocol to v3 so a stale

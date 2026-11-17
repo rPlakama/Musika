@@ -463,6 +463,20 @@ async fn cache_covers_locked(
     match crate::covers::refresh(&dbs.covers, client, &referenced, forced).await {
         Ok(report) => {
             _ = crate::library::touch_cover_check(&dbs.library).await;
+            // Artist portraits are signed external URLs, not `getCoverArt`
+            // ids; cache them as a detached follow-up so the sync does not wait
+            // on 100+ extra image downloads.
+            if let Ok(artists) = crate::library::artist_image_urls(&dbs.library).await {
+                let pool = dbs.covers.clone();
+                let client = Arc::clone(client);
+                crate::app::runtime().spawn(async move {
+                    if let Err(err) =
+                        crate::covers::refresh_artist_images(&pool, &client, &artists).await
+                    {
+                        eprintln!("index: artist image cache failed: {err:#}");
+                    }
+                });
+            }
             report
         }
         Err(err) => {

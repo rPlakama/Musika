@@ -26,6 +26,7 @@ fn artist(id: &str, name: &str) -> ArtistRow {
         name: name.to_string(),
         album_count: 1,
         cover_art: None,
+        image_url: None,
         starred: None,
     }
 }

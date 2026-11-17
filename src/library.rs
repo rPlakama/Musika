@@ -506,6 +506,19 @@ pub async fn song_starred_ids(
 ///
 /// Only album- and artist-level art is cached: songs inherit their album's
 /// cover, which keeps the cache bounded (per-song ids exploded it).
+/// Every non-empty artist portrait URL, used by the post-sync background
+/// cache pass.
+pub async fn artist_image_urls(
+    pool: &SqlitePool,
+) -> Result<Vec<(String, String)>> {
+    Ok(sqlx::query_as::<_, (String, String)>(
+        "SELECT id, image_url FROM artists
+         WHERE image_url IS NOT NULL AND image_url != ''",
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
 pub async fn referenced_cover_ids(pool: &SqlitePool) -> Result<std::collections::BTreeSet<String>> {
     let ids: Vec<String> = sqlx::query_scalar(
         "SELECT cover_art FROM artists WHERE cover_art IS NOT NULL
@@ -572,6 +585,9 @@ pub struct ArtistRow {
     pub name: String,
     pub album_count: i64,
     pub cover_art: Option<String>,
+    /// Provider artist portrait (`/share/img/...`), cached separately from
+    /// `cover_art` in the covers store.
+    pub image_url: Option<String>,
     /// Server `starred` timestamp; the payload ORs the local `artist_user`
     /// overlay on top (UI-56).
     pub starred: Option<String>,
@@ -821,7 +837,8 @@ const ALBUM_SELECT: &str =
     "SELECT id, name AS title, artist, year, song_count, duration, cover_art, starred, rating
      FROM albums";
 
-const ARTIST_SELECT: &str = "SELECT id, name, album_count, cover_art, starred FROM artists";
+const ARTIST_SELECT: &str =
+    "SELECT id, name, album_count, cover_art, image_url, starred FROM artists";
 
 fn album_order(order: &str, by_artist: bool) -> &'static str {
     match (by_artist, order) {

@@ -240,7 +240,26 @@ impl SubsonicClient {
             params.push(("size", size.to_string()));
         }
         let url = self.endpoint_url("getCoverArt", &params)?;
+        self.get_image_url(url, etag, last_modified).await
+    }
 
+    /// Fetches an absolute image URL (artist images are signed `/share/img/`
+    /// links outside `getCoverArt`), with the same conditional/response shape.
+    pub async fn get_external_image(
+        &self,
+        url: reqwest::Url,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> Result<CoverArt> {
+        self.get_image_url(url, etag, last_modified).await
+    }
+
+    async fn get_image_url(
+        &self,
+        url: reqwest::Url,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> Result<CoverArt> {
         let mut request = identity_encoding(self.http.get(url));
         if let Some(last_modified) = last_modified {
             request = request.header(reqwest::header::IF_MODIFIED_SINCE, last_modified);

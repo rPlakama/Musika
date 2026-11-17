@@ -408,6 +408,9 @@ impl AppRoot {
                         div()
                             .flex_1()
                             .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
                             .text_size(px(row_h * 0.44))
                             .text_color(if selected {
                                 rgb(palette::on_primary_container())
@@ -419,6 +422,10 @@ impl AppRoot {
                     .child(
                         div()
                             .max_w(px(self.win_w * 0.48))
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
                             .text_size(px(row_h * 0.36))
                             .text_color(if selected {
                                 rgb(palette::on_primary_container())

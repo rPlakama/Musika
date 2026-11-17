@@ -329,6 +329,10 @@ reliability and CI items remain roadmap work.
 
 ### Implemented after the audit (2026-11)
 
+- **Settings overlay:** `Ctrl-,` opens a compact playback-settings panel
+  (shuffle/repeat/crossfade/EQ/sleep), driven by the same bridge commands as
+  the command line; Esc closes it.
+
 - **Exclusive/bit-perfect request:** `output exclusive on|off` rebuilds the
   PipeWire stream with `node.exclusive`, and `output bitperfect on|off`
   bypasses the DSP blocks (EQ, ReplayGain, crossfade) while keeping the

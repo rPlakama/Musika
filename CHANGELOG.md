@@ -5,6 +5,9 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Settings overlay:** `Ctrl-,` opens a keyboard-driven panel with shuffle,
+  repeat, crossfade, EQ, and sleep-timer controls. `j/k` moves, Enter applies,
+  Esc closes; it reuses the same core/UI commands as the `:` surface.
 - **DSD gate:** the decoder now rejects DSD codec IDs explicitly as
   `Unsupported` (not retried) instead of attempting playback. Crossfade-enabled
   transitions already preload at the current pipeline rate, so they cover a

@@ -752,6 +752,7 @@ pub struct PlaybackView {
     repeat: Repeat,
     normalization: Normalization,
     crossfade: bool,
+    shuffle: bool,
     loading: bool,
     retrying: bool,
     duration: f64,
@@ -775,6 +776,7 @@ impl Default for PlaybackView {
             repeat: Repeat::Off,
             normalization: Normalization::Off,
             crossfade: false,
+            shuffle: false,
             loading: false,
             retrying: false,
             duration: 0.0,
@@ -807,6 +809,7 @@ impl PlaybackView {
         self.repeat = state.repeat().into();
         self.normalization = Normalization::from_code(state.normalization_code());
         self.crossfade = state.crossfade();
+        self.shuffle = state.shuffle();
         self.volume = state.volume();
         self.muted = state.muted();
         self.loading = state.loading();
@@ -962,6 +965,10 @@ impl PlaybackView {
 
     pub fn crossfade(&self) -> bool {
         self.crossfade
+    }
+
+    pub fn shuffle(&self) -> bool {
+        self.shuffle
     }
 
     pub fn index(&self) -> usize {
@@ -1246,6 +1253,9 @@ impl AppPlayer {
     }
     pub fn repeat(&self) -> Repeat {
         self.view.repeat()
+    }
+    pub fn shuffle(&self) -> bool {
+        self.view.shuffle()
     }
     pub fn normalization(&self) -> Normalization {
         self.view.normalization()

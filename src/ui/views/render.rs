@@ -303,6 +303,7 @@ impl Render for AppRoot {
             .as_ref()
             .map(|search| self.search_overlay(window, &*cx, search, progress));
         let description_overlay = self.description_overlay(&*cx);
+        let settings_overlay = self.settings_overlay(&*cx);
         if let Some(started) = self.exiting {
             perf::request_frame(window, "exiting");
             if self.clock.now - started >= 0.200 {
@@ -482,6 +483,10 @@ impl Render for AppRoot {
             })
             .child(match description_overlay {
                 Some(o) => o.into_any_element(),
+                None => div().into_any_element(),
+            })
+            .child(match settings_overlay {
+                Some(o) => o,
                 None => div().into_any_element(),
             })
             .child(match line_overlay {

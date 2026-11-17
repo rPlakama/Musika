@@ -28,6 +28,11 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.settings_open {
+            self.settings_cursor = (self.settings_cursor + 1).min(6);
+            cx.notify();
+            return;
+        }
         self.status_focus = None;
         if let Some(search) = self.search.as_mut() {
             search.move_cursor(1);
@@ -73,6 +78,11 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.settings_open {
+            self.settings_cursor = self.settings_cursor.saturating_sub(1);
+            cx.notify();
+            return;
+        }
         self.status_focus = None;
         if let Some(search) = self.search.as_mut() {
             search.move_cursor(-1);
@@ -350,6 +360,66 @@ impl AppRoot {
     ) {
         self.player.cycle_normalization();
         cx.notify();
+    }
+
+    pub(in crate::ui) fn on_settings_overlay(
+        &mut self,
+        _: &SettingsOverlay,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings_open = !self.settings_open;
+        self.settings_cursor = 0;
+        cx.notify();
+    }
+
+    pub(in crate::ui) fn settings_rows(&self) -> [(&'static str, String); 7] {
+        [
+            (
+                "Shuffle",
+                if self.player.shuffle() { "On" } else { "Off" }.to_string(),
+            ),
+            (
+                "Repeat",
+                match self.player.repeat() {
+                    crate::player::Repeat::Off => "Off",
+                    crate::player::Repeat::One => "One",
+                    crate::player::Repeat::All => "All",
+                }
+                .to_string(),
+            ),
+            (
+                "Crossfade",
+                if self.player.crossfade() { "On" } else { "Off" }.to_string(),
+            ),
+            (
+                "Equalizer",
+                self.eq_profile
+                    .clone()
+                    .unwrap_or_else(|| "Off".to_string()),
+            ),
+            ("Sleep timer", "30 minutes".to_string()),
+            ("Sleep timer", "Off".to_string()),
+            ("", "Close".to_string()),
+        ]
+    }
+
+    fn apply_settings_row(&mut self) {
+        match self.settings_cursor {
+            0 => self.player.shuffle_queue(),
+            1 => self.player.cycle_repeat(),
+            2 => self.player.toggle_crossfade(),
+            3 => {
+                self.bridge.cycle_eq();
+            }
+            4 => {
+                self.bridge.set_sleep_timer(Some(30));
+            }
+            5 => {
+                self.bridge.set_sleep_timer(None);
+            }
+            _ => self.settings_open = false,
+        }
     }
 
     #[expect(
@@ -1127,6 +1197,11 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.settings_open {
+            self.apply_settings_row();
+            cx.notify();
+            return;
+        }
         if self.line_search.open {
             self.line_search_commit(_window, cx);
             return;
@@ -1187,6 +1262,11 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.settings_open {
+            self.settings_open = false;
+            cx.notify();
+            return;
+        }
         if self.line_search.open {
             self.close_line_search();
             cx.notify();

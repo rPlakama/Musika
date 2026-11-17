@@ -79,6 +79,81 @@ impl AppRoot {
         .map(|overlay| overlay.into_any_element())
     }
 
+    pub(in crate::ui) fn settings_overlay(
+        &self,
+        _cx: &Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        if !self.settings_open {
+            return None;
+        }
+        let rows = self.settings_rows();
+        let mut panel = div()
+            .w(px(440.0))
+            .rounded_md()
+            .bg(gpui::black().opacity(0.86))
+            .p_4()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .text_size(px(18.0))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .child("Settings"),
+            )
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(rgb(palette::on_surface_variant()))
+                    .child("j/k move · Enter change · Esc close"),
+            );
+        for (index, (label, value)) in rows.iter().enumerate() {
+            let selected = index == self.settings_cursor;
+            panel = panel.child(
+                div()
+                    .id(("settings-row", index))
+                    .w_full()
+                    .px_2()
+                    .py_1()
+                    .rounded_sm()
+                    .flex()
+                    .justify_between()
+                    .when(selected, |row| {
+                        row.bg(rgb(palette::surface_container_high()))
+                    })
+                    .child(
+                        div()
+                            .text_size(px(13.0))
+                            .text_color(rgb(if selected {
+                                palette::primary()
+                            } else {
+                                palette::on_surface()
+                            }))
+                            .child(*label),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(rgb(palette::on_surface_variant()))
+                            .child(value.clone()),
+                    ),
+            );
+        }
+        Some(
+            div()
+                .id("settings-scrim")
+                .absolute()
+                .inset_0()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui::black().opacity(0.35))
+                .child(panel)
+                .into_any_element(),
+        )
+    }
+
     pub(in crate::ui) fn alt_overlay(&self, progress: f32) -> gpui::AnyElement {
         let (Some(menu), Some((ax, ay))) = (self.alt_menu.as_ref(), self.alt_anchor) else {
             return div().into_any_element();

@@ -49,6 +49,7 @@ work, including the command line.
 | `Shift-J` / `Shift-K` | Next / previous library scope (Albums, Songs, Artists, Playlists) |
 | `Shift-L` / `Shift-H` | Next / previous list ordering |
 | `Ctrl-E` | Cycle Equalizer APO-style EQ profiles from `~/.config/musika/eqs` through OFF |
+| `Ctrl-,` | Open/close the playback settings overlay (`j/k`, Enter, Esc) |
 | `/` | In-surface line search |
 | `Shift-Space F` or `i` | Open the floating search |
 | Mouse click | Place the cursor and open/play the row |

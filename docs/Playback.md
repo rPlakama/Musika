@@ -523,3 +523,26 @@ meant for `status` sampling and regression comparisons, not persistence.
   no native DoP path and has not validated DSD content end-to-end. The decoder
   now rejects DSD explicitly as `Unsupported` (no retry) instead of attempting
   a broken playback; converting to PCM first remains the supported route.
+
+## Roadmap conclusion
+
+The phased "better-capable playback" work is concluded:
+
+- structured errors/retries/telemetry and offline fallback;
+- PipeWire output enumeration, live retargeting and default follow;
+- stream quality/format controls and the purgeable playback cache;
+- persistent shuffle, history-aware Previous and the sleep timer;
+- Subsonic scrobbling with offline replay;
+- configurable equal-power/linear, album-gated crossfade plus the opt-in
+  fixed-rate gap-free mode;
+- Equalizer APO–style profiles via `Ctrl-E`;
+- optional direct F32 ALSA output, `node.exclusive`/bit-perfect requests and
+  explicit DSD rejection;
+- the `Ctrl-,` settings overlay, richer MPRIS, idle inhibition and telemetry
+  documentation.
+
+Two items are recorded as gates rather than shipped features: true
+multichannel *output* (multichannel sources are accepted and downmixed) and a
+validated native DSD/DoP path (DSD files are rejected explicitly). Plain
+non-crossfade native-rate changes still rebuild the sink; `stream fixed` is
+the opt-in gap-free alternative.

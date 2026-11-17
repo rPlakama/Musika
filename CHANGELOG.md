@@ -5,6 +5,9 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Roadmap conclusion:** document the completed playback roadmap and the two
+  explicit gates (multichannel output; native DSD/DoP), plus the fixed-rate
+  alternative to the non-crossfade boundary gap.
 - **Multichannel source coverage:** add a six-channel WAV fixture proving
   multichannel inputs are accepted and safely downmixed to the stereo pipeline.
   Multichannel *output* (a channel count through ring/EQ/crossfade/sink) remains

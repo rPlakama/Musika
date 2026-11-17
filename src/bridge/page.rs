@@ -6,7 +6,7 @@ impl Bridge {
     pub fn load_page(&self, descriptor: crate::model::PageDescriptor) {
         let generation = self.page_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let event = match page_data(&descriptor, offline).await {
                 Ok((header, rows)) => {

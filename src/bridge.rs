@@ -5,7 +5,7 @@
 //! task drains them and notifies its entity.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::model::PageHeader;
@@ -313,7 +313,6 @@ pub struct Bridge {
     page_generation: AtomicU64,
     search_generation: Arc<AtomicU64>,
     marks_generation: AtomicU64,
-    offline: AtomicBool,
     /// Attached by the daemon immediately after the playback service is
     /// created. Settings requests go straight to the service; only core→UI
     /// notifications use `Event`.
@@ -329,7 +328,6 @@ impl Bridge {
             page_generation: AtomicU64::new(0),
             search_generation: Arc::new(AtomicU64::new(0)),
             marks_generation: AtomicU64::new(0),
-            offline: AtomicBool::new(false),
             playback: OnceLock::new(),
             palette_inflight: Arc::new(Mutex::new(None)),
         };

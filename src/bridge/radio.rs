@@ -9,7 +9,7 @@ impl Bridge {
 
     pub fn play_radio(&self, kind: String, id: String, start_index: usize) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             emit_queue_pair(
@@ -75,7 +75,7 @@ impl Bridge {
     /// rows.
     pub fn shuffle_radio(&self, seed_kind: String, seed_id: String) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             emit_queue(
@@ -91,7 +91,7 @@ impl Bridge {
     /// already playing.
     pub fn queue_add_radio(&self, seed_kind: String, seed_id: String) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let tracks = match crate::radio::tracks(&dbs, &seed_kind, &seed_id, 0, offline).await
@@ -188,7 +188,7 @@ impl Bridge {
     /// Resolve an album/song name through the search engine, then start radio.
     pub fn play_radio_query(&self, kind: String, query: String, start_index: usize) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let scope = if kind == "album" {

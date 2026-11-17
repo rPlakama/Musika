@@ -35,7 +35,7 @@ impl Bridge {
         let generation = self.search_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let generation_counter = self.search_generation.clone();
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             // Debounce keystrokes: only the latest query runs the index search.
             tokio::time::sleep(std::time::Duration::from_millis(120)).await;
@@ -62,7 +62,7 @@ impl Bridge {
     pub fn load_library(&self, scope: crate::model::Scope, order: usize) -> u64 {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         if scope == crate::model::Scope::Playlists {
             crate::app::runtime().spawn(async move {
                 let event = match library_rows(scope, order, offline).await {
@@ -113,7 +113,7 @@ impl Bridge {
         count: usize,
     ) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let surface = scope.key();
@@ -146,7 +146,7 @@ impl Bridge {
 
     pub fn preload_library(&self, scope: crate::model::Scope, order: usize) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let Ok(count) =
@@ -193,7 +193,7 @@ impl Bridge {
         end: usize,
     ) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(120)).await;
             let Some(dbs) = crate::app::dbs() else { return };

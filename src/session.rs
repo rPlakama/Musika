@@ -46,8 +46,8 @@ pub(crate) fn online() -> bool {
     ONLINE.load(Ordering::Relaxed)
 }
 
-pub(crate) fn set_online(online: bool) {
-    ONLINE.store(online, Ordering::Relaxed);
+pub(crate) fn set_online(online: bool) -> bool {
+    ONLINE.swap(online, Ordering::Relaxed)
 }
 
 /// Installs the credentials just used to authenticate, so the first [`client`]

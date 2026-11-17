@@ -160,7 +160,7 @@ impl Bridge {
 
     pub fn quick_queue_add(&self, kind: String, id: String) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let queued = match RowKind::from_api_kind(&kind) {
@@ -184,7 +184,7 @@ impl Bridge {
     /// queue (paste below/above the queue cursor).
     pub fn paste_queue(&self, kind: String, ids: Vec<String>, at: usize) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             match crate::queue::quick_tracks_many(&dbs, &kind, &ids, offline).await {
@@ -223,7 +223,7 @@ impl Bridge {
 
     pub fn quick_play_playlist(&self, id: String) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             emit_queue_pair(
@@ -239,7 +239,7 @@ impl Bridge {
     /// Replace the queue with one shuffled artist pass.
     pub fn shuffle_album(&self, album_id: String) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             emit_queue(
@@ -253,7 +253,7 @@ impl Bridge {
 
     pub fn shuffle_artist(&self, artist_id: String) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             emit_queue(
@@ -270,7 +270,7 @@ impl Bridge {
     /// Named shuffle target: resolve via search, then reuse the id path.
     pub fn shuffle_album_query(&self, query: String) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let result = async {
@@ -290,7 +290,7 @@ impl Bridge {
     /// Named shuffle target: resolve via search, then reuse the id path.
     pub fn shuffle_artist_query(&self, query: String) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let result = async {

@@ -5,7 +5,7 @@ use super::*;
 impl Bridge {
     pub fn restore(&self) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let Ok(Some(status)) = crate::status::load(&dbs.status).await else {
@@ -60,7 +60,7 @@ impl Bridge {
 
     pub fn play_album(&self, album_id: String, start: usize) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             emit_queue(
@@ -77,7 +77,7 @@ impl Bridge {
     /// start it in album order, opening the album page.
     pub fn play_random_album(&self) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let id = match crate::library::random_album_id(&dbs.library).await {
@@ -119,7 +119,7 @@ impl Bridge {
 
     pub fn play_song_in_album(&self, song_id: String) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let Some(album_id) =
@@ -156,7 +156,7 @@ impl Bridge {
 
     pub fn play_song(&self, song_id: String, order: String) {
         let tx = self.tx.clone();
-        let offline = self.offline.load(Ordering::Relaxed);
+        let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let event = match queue_for_song(&song_id, &order, offline).await {
                 Ok((tracks, start)) => {

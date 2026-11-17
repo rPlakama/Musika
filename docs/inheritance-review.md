@@ -3,7 +3,7 @@
 Status: **review complete; R1/release blockers and the high-impact R3 items landed; R2/R4 tracked below**.
 Baseline tag: `v0.7.3` (`a927ebd`). Review target: `a4d8d11` (28 commits,
 108 files, +12,731/−878). Current tree is larger (186 production files,
-~78k LOC) and green: 621 tests, 19 ignored, Clippy clean.
+~78k LOC) and green: 622 tests, 19 ignored, Clippy clean.
 
 This complements `docs/mds/inheritance-audit.md`. The three audit questions
 apply: **Shape** (schema declared twice), **Identity** (loose strings for a
@@ -62,7 +62,7 @@ failures, not isolated bugs:
 
 ## Evidence/acceptance
 
-- `cargo test` 621 pass, 19 ignored; `cargo clippy --all-targets` clean.
+- `cargo test` 622 pass, 19 ignored; `cargo clippy --all-targets` clean.
 - Live playlist smoke on the real library:
   - provider playlist cover is a ~600 px pre-rendered 2×2 mosaic;
   - page now builds a two-pane full-resolution entry collage
@@ -77,6 +77,10 @@ failures, not isolated bugs:
   was inconclusive on this compositor.)
 - Status schema regression test opens the production library migrations and
   asserts `playback_settings`/`pending_scrobble`.
+- Shipped migrations carry a SHA-384 immutability test. Editing an applied
+  migration (even a comment) changes SQLx's checksum and breaks every existing
+  database; the two shipped status migrations were restored byte-for-byte and
+  pinned by that test (`8461e5f`).
 
 ## Assumptions
 

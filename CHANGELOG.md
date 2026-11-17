@@ -5,6 +5,10 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Migration checksums:** restored the two shipped status migrations after an
+  edit changed SQLx's checksum and blocked startup on existing databases; a
+  regression test pins their SHA-384 so this cannot recur.
+
 - **Inheritance cleanup (R1):** one status-schema owner (the production
   library migration tree; tests use the same tree instead of a parallel
   `migrations_status`), command metadata now advertises `stream fixed` and the

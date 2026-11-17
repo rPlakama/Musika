@@ -57,7 +57,10 @@ pub(crate) enum CoreCommand {
     },
     CycleRepeat,
     SetRepeat(Repeat),
+    /// Toggle the persistent shuffle mode.
     ShuffleQueue,
+    /// Set the shuffle mode explicitly (MPRIS/settings).
+    SetShuffle(bool),
     CycleNormalization,
     ToggleCrossfade,
     SetNormalization(Normalization),
@@ -138,6 +141,13 @@ pub(crate) struct PlaybackCore {
     /// A retryable failure is waiting for the service's retry timer; the row
     /// stays selected and the transport advertises the retrying flag.
     retrying: bool,
+    /// Persistent shuffle mode: the queue keeps its user-visible order, but
+    /// next/gapless follow `shuffle_plan`.
+    shuffle: bool,
+    /// Upcoming row indices in shuffle order (current excluded).
+    shuffle_plan: Vec<usize>,
+    /// Actual play history for Previous (bounded).
+    history: Vec<usize>,
     /// The row the engine was told to predecode after the current one.
     gapless_next: Option<usize>,
     /// Displayed position at `anchor_ns`.
@@ -174,6 +184,9 @@ impl PlaybackCore {
             last_error: None,
             last_failure: None,
             retrying: false,
+            shuffle: false,
+            shuffle_plan: Vec::new(),
+            history: Vec::new(),
             gapless_next: None,
             anchor_position: 0.0,
             anchor_ns: 0,
@@ -257,6 +270,10 @@ impl PlaybackCore {
         self.retrying
     }
 
+    pub(crate) fn shuffle(&self) -> bool {
+        self.shuffle
+    }
+
     /// Applies a connectivity verdict. This only governs *future* loads: a
     /// stream that is already open and playing is left alone (it may well
     /// finish from the read-ahead buffer).
@@ -309,6 +326,9 @@ impl PlaybackCore {
         }
         if self.retrying {
             flags |= crate::ipc_protocol::STATE_FLAG_RETRYING;
+        }
+        if self.shuffle {
+            flags |= crate::ipc_protocol::STATE_FLAG_SHUFFLE;
         }
         PlaybackState {
             seq,
@@ -391,7 +411,8 @@ impl PlaybackCore {
                     outcome.changed = true;
                 }
             }
-            CoreCommand::ShuffleQueue => self.shuffle(&mut outcome),
+            CoreCommand::ShuffleQueue => self.set_shuffle(!self.shuffle, &mut outcome),
+            CoreCommand::SetShuffle(enabled) => self.set_shuffle(enabled, &mut outcome),
             CoreCommand::SetTrackFavorite { id, favorite } => {
                 self.set_track_favorite(&id, favorite, &mut outcome)
             }
@@ -413,6 +434,8 @@ impl PlaybackCore {
         self.queue = Arc::new(tracks);
         self.index = start.min(self.queue.len().saturating_sub(1));
         self.revision += 1;
+        self.history.clear();
+        self.shuffle_plan.clear();
         self.duration = 0.0;
         self.stream_size = 0;
         self.seekable = false;
@@ -427,6 +450,9 @@ impl PlaybackCore {
             self.gapless_next = None;
             outcome.audio.push(AudioCommand::Stop);
             return outcome;
+        }
+        if self.shuffle {
+            self.rebuild_shuffle_plan();
         }
         self.start_current(paused, &mut outcome);
         outcome
@@ -666,6 +692,10 @@ impl PlaybackCore {
             return;
         }
         self.repeat = Repeat::Off;
+        self.history_push(self.index);
+        if self.shuffle {
+            self.shuffle_plan.retain(|candidate| *candidate != index);
+        }
         self.index = index;
         outcome.changed = true;
         self.start_current(false, outcome);
@@ -709,19 +739,77 @@ impl PlaybackCore {
     }
 
     /// Move forward by `steps` rows, loading at most once (old `advance_by`).
-    fn advance_by(&mut self, steps: usize, outcome: &mut Outcome) {
-        if self.queue.is_empty() || steps == 0 {
+    /// Bounded actual-play history: the stack Previous walks.
+    fn history_push(&mut self, index: usize) {
+        if self.history.last().copied() == Some(index) {
+            return;
+        }
+        self.history.push(index);
+        let cap = 128;
+        if self.history.len() > cap {
+            let drain = self.history.len() - cap;
+            self.history.drain(..drain);
+        }
+    }
+
+    /// Rebuilds the upcoming shuffle indices around the current row. Structural
+    /// queue edits call this because their indices shift; ordinary play does
+    /// not (the plan is consumed one row at a time).
+    fn rebuild_shuffle_plan(&mut self) {
+        self.shuffle_plan.clear();
+        if !self.shuffle || self.queue.len() <= 1 {
+            return;
+        }
+        self.shuffle_plan = (0..self.queue.len())
+            .filter(|index| *index != self.index)
+            .collect();
+        crate::queue::shuffle_slice(
+            &mut self.shuffle_plan,
+            crate::consts::now_nanos(),
+        );
+    }
+
+    /// Structural edits shift row indices; rebuild the plan and drop stale
+    /// history rather than walking removed rows.
+    fn shuffle_after_edit(&mut self) {
+        self.history.clear();
+        self.rebuild_shuffle_plan();
+    }
+
+    /// The next row for `from`, consuming one shuffle-plan slot. `None` means
+    /// the queue is exhausted under the current repeat mode.
+    fn advance_index(&mut self, from: usize) -> Option<usize> {
+        if self.shuffle {
+            if self.shuffle_plan.is_empty() && self.repeat == Repeat::All {
+                self.rebuild_shuffle_plan();
+            }
+            return if self.shuffle_plan.is_empty() {
+                None
+            } else {
+                Some(self.shuffle_plan.remove(0))
+            };
+        }
+        if from + 1 < self.queue.len() {
+            Some(from + 1)
+        } else if self.repeat == Repeat::All {
+            Some(0)
+        } else {
+            None
+        }
+    }
+
+    fn advance_by(&mut self, steps: usize, outcome: &mut Outcome) {        if self.queue.is_empty() || steps == 0 {
             return;
         }
         let mut index = self.index;
         for _ in 0..steps {
-            if index + 1 < self.queue.len() {
-                index += 1;
-            } else if self.repeat == Repeat::All {
-                index = 0;
-            } else {
+            let Some(next) = self.advance_index(index) else {
                 self.stop(outcome);
                 return;
+            };
+            if next != index {
+                self.history_push(index);
+                index = next;
             }
         }
         if index != self.index {
@@ -730,20 +818,34 @@ impl PlaybackCore {
         }
     }
 
-    /// Move backward by `steps` rows, loading at most once (old `retreat_by`).
+    /// Move backward through actual play history, falling back to the linear
+    /// previous row when the history is empty.
     fn retreat_by(&mut self, steps: usize, outcome: &mut Outcome) {
         if self.queue.is_empty() || steps == 0 {
             return;
         }
-        let index = self.index.saturating_sub(steps);
-        if index != self.index {
+        let mut index = self.index;
+        if self.shuffle {
+            for _ in 0..steps {
+                index = self
+                    .history
+                    .pop()
+                    .unwrap_or_else(|| index.saturating_sub(1));
+            }
+        } else {
+            index = index.saturating_sub(steps);
+        }
+        if index != self.index && index < self.queue.len() {
             self.index = index;
+            if self.shuffle {
+                self.shuffle_plan.retain(|candidate| *candidate != index);
+            }
             self.start_current(false, outcome);
         }
     }
 
-    /// Old `advance_after_error`: `repeat One` replays, otherwise advance, wrap
-    /// with `repeat All`, else stop.
+    /// `repeat One` replays, otherwise advance through the active order
+    /// (linear or shuffle), wrap with `repeat All`, else stop.
     fn advance_after_error(&mut self, outcome: &mut Outcome) {
         if self.queue.is_empty() {
             self.stop(outcome);
@@ -751,11 +853,11 @@ impl PlaybackCore {
         }
         if self.repeat == Repeat::One {
             self.start_current(false, outcome);
-        } else if self.index + 1 < self.queue.len() {
-            self.index += 1;
-            self.start_current(false, outcome);
-        } else if self.repeat == Repeat::All {
-            self.index = 0;
+            return;
+        }
+        if let Some(next) = self.advance_index(self.index) {
+            self.history_push(self.index);
+            self.index = next;
             self.start_current(false, outcome);
         } else {
             self.stop(outcome);
@@ -776,7 +878,11 @@ impl PlaybackCore {
         if next >= self.queue.len() {
             return;
         }
+        self.history_push(self.index);
         self.index = next;
+        if self.shuffle {
+            self.shuffle_plan.retain(|candidate| *candidate != next);
+        }
         self.duration = duration.max(0.0);
         self.stream_size = stream_size;
         self.loading = false;
@@ -922,11 +1028,13 @@ impl PlaybackCore {
             if self.index >= self.queue.len() {
                 self.index = self.queue.len() - 1;
             }
+        } else if index < self.index {
+            self.index -= 1;
+        }
+        self.shuffle_after_edit();
+        if was_current {
             self.start_current(false, outcome);
             return;
-        }
-        if index < self.index {
-            self.index -= 1;
         }
         self.gapless_next = self.gapless_index();
     }
@@ -968,6 +1076,7 @@ impl PlaybackCore {
         } else {
             old_index - below
         };
+        self.shuffle_after_edit();
         if removed_current {
             self.start_current(false, outcome);
         } else {
@@ -1001,6 +1110,7 @@ impl PlaybackCore {
                 to: to.min(u32::MAX as usize) as u32,
             },
         });
+        self.shuffle_after_edit();
         self.gapless_next = self.gapless_index();
     }
 
@@ -1046,6 +1156,7 @@ impl PlaybackCore {
             // re-stream the rows instead.
             outcome.queue_reset = true;
         }
+        self.shuffle_after_edit();
         self.gapless_next = self.gapless_index();
     }
 
@@ -1066,6 +1177,7 @@ impl PlaybackCore {
         }
         self.revision += 1;
         outcome.changed = true;
+        self.shuffle_after_edit();
         if count <= crate::ipc_protocol::QUEUE_INSERT_MAX_ROWS {
             let rows: Vec<WireTrack> = self
                 .queue
@@ -1087,18 +1199,18 @@ impl PlaybackCore {
         self.gapless_next = self.gapless_index();
     }
 
-    fn shuffle(&mut self, outcome: &mut Outcome) {
-        if self.queue.is_empty() {
+    fn set_shuffle(&mut self, enabled: bool, outcome: &mut Outcome) {
+        if self.shuffle == enabled {
             return;
         }
-        let tracks = Arc::make_mut(&mut self.queue);
-        crate::queue::shuffle_slice(tracks, crate::consts::now_nanos());
-        self.repeat = Repeat::Off;
-        self.index = 0;
-        self.revision += 1;
-        outcome.queue_reset = true;
+        self.shuffle = enabled;
+        self.shuffle_plan.clear();
+        if enabled {
+            self.rebuild_shuffle_plan();
+            // A single-row queue is still a valid (trivial) shuffle mode; the
+            // flag is user state, not a promise that the next row differs.
+        }
         outcome.changed = true;
-        self.start_current(false, outcome);
     }
 
     fn set_track_favorite(&mut self, id: &str, favorite: bool, outcome: &mut Outcome) {
@@ -1154,6 +1266,8 @@ impl PlaybackCore {
         }
         if self.repeat == Repeat::One {
             Some(self.index)
+        } else if self.shuffle {
+            self.shuffle_plan.first().copied()
         } else if self.index + 1 < self.queue.len() {
             Some(self.index + 1)
         } else if self.repeat == Repeat::All {

@@ -52,6 +52,7 @@ pub struct Snapshot {
     pub playback_status: String,
     /// `None` | `Track` | `Playlist`.
     pub loop_status: String,
+    pub shuffle: bool,
     pub title: String,
     pub artist: String,
     pub album: String,
@@ -69,9 +70,10 @@ impl Snapshot {
     /// Key for change detection: everything signalled except `Position`.
     pub(crate) fn signal_key(&self) -> String {
         format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.playback_status,
             self.loop_status,
+            self.shuffle,
             self.title,
             self.artist,
             self.album,
@@ -384,14 +386,12 @@ impl MprisPlayer {
 
     #[zbus(property)]
     fn shuffle(&self) -> bool {
-        false
+        snapshot().shuffle
     }
 
     #[zbus(property)]
     fn set_shuffle(&self, shuffle: bool) {
-        // The existing IPC shuffle command randomizes the queue in place; it
-        // has no persistent shuffle mode to disable.
-        if shuffle {
+        if snapshot().shuffle != shuffle {
             submit("shuffle queue".to_string());
         }
     }

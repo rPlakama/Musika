@@ -54,6 +54,8 @@ pub enum Event {
     },
     /// UI request: change the stream-quality/cache policy.
     StreamChange(crate::playback_settings::StreamChange),
+    /// UI request: arm/cancel the sleep timer (minutes, `None` = off).
+    SleepTimer(Option<u64>),
     LoggedIn {
         server_url: String,
         username: String,

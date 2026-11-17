@@ -181,6 +181,8 @@ pub enum IpcCommand {
     OutputDefault,
     /// Change the stream bitrate/format/cache policy.
     Stream(crate::playback_settings::StreamChange),
+    /// Sleep timer: `Some(minutes)` arms it, `None` cancels it.
+    Sleep(Option<u64>),
 }
 
 /// Where a command must run in the core/UI split. The classification is
@@ -248,7 +250,8 @@ impl IpcCommand {
             | Self::DownloadSong(_)
             | Self::OutputSet(_)
             | Self::OutputDefault
-            | Self::Stream(_) => T::CoreBridge,
+            | Self::Stream(_)
+            | Self::Sleep(_) => T::CoreBridge,
 
             // Read-only telemetry.
             Self::Status | Self::QueueQuery | Self::OutputList => T::Query,
@@ -555,6 +558,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         usage: "stream <quality|format|cache|size> <value>",
         description: "Set the stream bitrate (0 original), format, cache on/off or cache size in MiB",
         form: CommandForm::Advanced(ArgHints::Values(&["quality", "format", "cache", "size"])),
+    },
+    CommandSpec {
+        name: "sleep",
+        usage: "sleep <minutes|off>",
+        description: "Fade out and pause after N minutes, or cancel the timer",
+        form: CommandForm::Advanced(ArgHints::Values(&["off"])),
     },
     CommandSpec {
         name: "logout",
@@ -1220,6 +1229,16 @@ fn advanced_parse(name: &str, rest: &str, usage: &str) -> Result<IpcCommand, Com
             )),
         },
 
+        "sleep" => match split_quoted_args(rest)?.as_slice() {
+            [target] if target == "off" => Ok(IpcCommand::Sleep(None)),
+            [minutes] => Ok(IpcCommand::Sleep(Some(
+                parse_number(minutes, "minutes")?.max(1.0) as u64,
+            ))),
+            _ => Err(CommandError(
+                "usage: sleep <minutes|off>".to_string(),
+            )),
+        },
+
         "download" => parse_download(rest),
 
         "search" => Ok(IpcCommand::Search {
@@ -1734,6 +1753,10 @@ fn advanced_canonical(command: &IpcCommand) -> String {
 
         Stream(StreamChange::CacheSize(mib)) => format!("stream size {mib}"),
 
+        Sleep(Some(minutes)) => format!("sleep {minutes}"),
+
+        Sleep(None) => "sleep off".to_string(),
+
         Search { query } => format!("search {query}").trim_end().to_string(),
 
         InsertMode { query } => format!("insert_mode {query}").trim_end().to_string(),
@@ -2166,6 +2189,14 @@ fn current_download_path(current: &CurrentTrack) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_sleep_commands() {
+        assert_eq!(parse("sleep 30"), Ok(IpcCommand::Sleep(Some(30))));
+        assert_eq!(parse("sleep off"), Ok(IpcCommand::Sleep(None)));
+        assert!(parse("sleep").is_err());
+        assert!(parse("sleep later").is_err());
+    }
 
     #[test]
     fn parses_stream_quality_commands() {
@@ -2941,6 +2972,14 @@ mod tests {
         assert_eq!(
             canonical_string(&IpcCommand::Stream(StreamChange::Cache(true))),
             "stream cache on"
+        );
+        assert_eq!(
+            canonical_string(&IpcCommand::Sleep(Some(30))),
+            "sleep 30"
+        );
+        assert_eq!(
+            canonical_string(&IpcCommand::Sleep(None)),
+            "sleep off"
         );
         assert_eq!(
             canonical_string(&IpcCommand::Wipe(WipeScope::Lyrics)),

@@ -240,6 +240,9 @@ async fn run_async() {
                             change.clone(),
                         ));
                     }
+                    Event::SleepTimer(minutes) => {
+                        let _ = playback_control.send(PlaybackInput::SetSleepTimer(*minutes));
+                    }
                     Event::LoginRequired { .. } => {
                         auth = Some(event.clone());
                         connection = None;
@@ -385,6 +388,7 @@ async fn run_async() {
                         | Event::Restore { .. }
                         | Event::OutputDevice { .. }
                         | Event::StreamChange(_)
+                        | Event::SleepTimer(_)
                 );
                 if forward {
                     let dead = broadcast_event(&ui_clients, &event);
@@ -656,6 +660,7 @@ fn query_json(snapshot: &Snapshot, command: &IpcCommand) -> String {
                 "engine_available": snapshot.engine_available,
                 "retrying": snapshot.retrying,
                 "retry_attempt": snapshot.retry_attempt,
+                "sleep_remaining": snapshot.sleep_remaining_secs,
                 "metrics": snapshot.metrics,
                 "current": snapshot
                     .queue
@@ -703,6 +708,11 @@ fn dispatch_core_bridge(services: &Services, command: &IpcCommand) {
     match command {
         IpcCommand::Sync(mode) => bridge.sync(*mode),
         IpcCommand::Refresh => bridge.sync(SyncMode::Incremental),
+        IpcCommand::Sleep(minutes) => {
+            let _ = services
+                .playback
+                .send(PlaybackInput::SetSleepTimer(*minutes));
+        }
         IpcCommand::Stream(change) => {
             let _ = services.playback.send(PlaybackInput::ApplyStreamChange(
                 change.clone(),
@@ -1053,6 +1063,7 @@ fn publish_mpris(snapshot: &Snapshot) {
             proto::RepeatWire::All => "Playlist",
         }
         .to_string(),
+        shuffle: state.shuffle(),
         title: current.map(|track| track.title.clone()).unwrap_or_default(),
         artist: current
             .map(|track| track.artist.clone())

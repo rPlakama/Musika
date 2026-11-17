@@ -329,6 +329,13 @@ reliability and CI items remain roadmap work.
 
 ### Implemented after the audit (2026-11)
 
+- **Queue modes and sleep:** `shuffle queue` is a persistent mode (the
+  visible queue order is untouched; next/gapless walk a shuffled plan and
+  MPRIS reports `Shuffle`). Previous in shuffle walks actual play history,
+  while linear playback keeps index-1. `sleep <minutes>` ramps the volume
+  down over five seconds, pauses and restores the user volume; `sleep off`
+  cancels. Shuffle is persisted with the other playback settings.
+
 - **Stream quality and playback cache:** `stream quality|format` adds
   `maxBitRate`/`format` to `/rest/stream`; `stream cache on|off` and
   `stream size <MiB>` control a purgeable `playback`-tier cache in

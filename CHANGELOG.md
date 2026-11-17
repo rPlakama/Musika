@@ -5,6 +5,12 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Queue modes and sleep:** `shuffle queue` is now a persistent mode instead
+  of reordering the queue: the visible rows stay put, next/gapless follow a
+  shuffled plan, MPRIS reports the mode, and toggling it off keeps the current
+  row. Shuffle Previous follows actual play history; linear Previous keeps
+  index-1. `sleep <minutes|off>` fades the volume over five seconds, pauses,
+  and restores the user volume.
 - **Stream quality and playback cache:** `stream quality <kbps>` /
   `stream format <fmt>` add `maxBitRate`/`format` to the provider stream URL;
   `stream cache on|off` and `stream size <MiB>` control a purgeable

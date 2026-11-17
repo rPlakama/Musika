@@ -214,6 +214,11 @@ impl Bridge {
         _ = self.tx.send(Event::StreamChange(change));
     }
 
+    /// UI request: arm/cancel the sleep timer.
+    pub fn set_sleep_timer(&self, minutes: Option<u64>) {
+        _ = self.tx.send(Event::SleepTimer(minutes));
+    }
+
     pub(crate) fn is_offline(&self) -> bool {
         self.offline.load(Ordering::Relaxed)
     }

@@ -39,6 +39,8 @@ const RETRY_DELAYS: [Duration; 3] = [
     Duration::from_secs(2),
     Duration::from_secs(4),
 ];
+/// Sleep timer's final fade before pausing.
+const SLEEP_FADE: Duration = Duration::from_secs(5);
 
 pub(crate) fn retry_delay(attempt: u32) -> Duration {
     RETRY_DELAYS[(attempt as usize).min(RETRY_DELAYS.len() - 1)]
@@ -65,6 +67,14 @@ pub(crate) fn retry_decision(previous_attempts: Option<u32>) -> RetryDecision {
             delay: retry_delay(attempt),
         }
     }
+}
+
+/// Volume curve for the sleep timer's final fade.
+pub(crate) fn original_fade_volume(original: f64, elapsed: f64, total: f64) -> f64 {
+    if total <= 0.0 {
+        return original;
+    }
+    (original * (1.0 - elapsed / total).clamp(0.0, 1.0)).clamp(0.0, 100.0)
 }
 
 /// Transport/queue actions that make a transparent retry meaningless. Mixing
@@ -117,6 +127,8 @@ pub(crate) enum PlaybackInput {
     },
     /// One live stream-quality/cache change.
     ApplyStreamChange(crate::playback_settings::StreamChange),
+    /// Start (`Some(minutes)`) or cancel (`None`) the sleep timer.
+    SetSleepTimer(Option<u64>),
     Shutdown,
 }
 
@@ -145,6 +157,7 @@ impl std::fmt::Debug for PlaybackInput {
             Self::ApplyStreamChange(change) => {
                 write!(formatter, "ApplyStreamChange({change:?})")
             }
+            Self::SetSleepTimer(minutes) => write!(formatter, "SetSleepTimer({minutes:?})"),
             Self::Shutdown => write!(formatter, "Shutdown"),
         }
     }
@@ -193,6 +206,7 @@ pub(crate) struct Snapshot {
     /// A transparent retry is scheduled or in flight.
     pub retrying: bool,
     pub retry_attempt: u32,
+    pub sleep_remaining_secs: u64,
     pub metrics: crate::player::PlaybackMetrics,
 }
 
@@ -302,6 +316,13 @@ struct Recovery {
     position: f64,
 }
 
+/// Active sleep-timer fade: the service lowers the user volume over
+/// [`SLEEP_FADE`] and restores it after pausing.
+struct SleepFade {
+    started: Instant,
+    original_volume: f64,
+}
+
 struct ServiceState {
     core: PlaybackCore,
     engine: Option<Engine>,
@@ -313,6 +334,8 @@ struct ServiceState {
     recovery: Option<Recovery>,
     offline: bool,
     settings: crate::playback_settings::PlaybackSettings,
+    sleep_deadline: Option<Instant>,
+    sleep_fade: Option<SleepFade>,
     metrics: crate::player::PlaybackMetrics,
 }
 
@@ -451,6 +474,8 @@ fn run(
         recovery: None,
         offline: false,
         settings: crate::playback_settings::PlaybackSettings::default(),
+        sleep_deadline: None,
+        sleep_fade: None,
         metrics: crate::player::PlaybackMetrics::default(),
     };
     let mut published = PlaybackState {
@@ -473,7 +498,10 @@ fn run(
     crate::startup::trace("playback.ready");
 
     loop {
-        let active = published.state() == StateWire::Playing || published.loading();
+        let active = published.state() == StateWire::Playing
+            || published.loading()
+            || service.sleep_deadline.is_some()
+            || service.sleep_fade.is_some();
         // While the transport is stopped or paused nothing changes without an
         // input, so block on the channel. While playing keep a coarse tick for
         // the drift correction; engine events arrive directly in the channel.
@@ -513,6 +541,37 @@ fn run(
                 apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
             } else if let Some(retry) = service.retry.as_mut() {
                 retry.next_at = Some(Instant::now() + ENGINE_RETRY);
+            }
+        }
+
+        if let Some(deadline) = service.sleep_deadline
+            && Instant::now() >= deadline
+        {
+            service.sleep_deadline = None;
+            if service.core.state() == crate::player::State::Playing {
+                service.sleep_fade = Some(SleepFade {
+                    started: Instant::now(),
+                    original_volume: service.core.volume(),
+                });
+            }
+        }
+        if let Some(fade) = service.sleep_fade.as_ref() {
+            let elapsed = fade.started.elapsed().as_secs_f64();
+            let total = SLEEP_FADE.as_secs_f64();
+            if elapsed >= total {
+                let original = fade.original_volume;
+                service.sleep_fade = None;
+                let restore = service.core.apply(CoreCommand::SetVolume(original));
+                apply_outcome(&service, &restore, &mut force, &mut queue_reset);
+                if service.core.state() == crate::player::State::Playing {
+                    let pause = service.core.apply(CoreCommand::Pause);
+                    apply_outcome(&service, &pause, &mut force, &mut queue_reset);
+                }
+                force = true;
+            } else {
+                let volume = original_fade_volume(fade.original_volume, elapsed, total);
+                let step = service.core.apply(CoreCommand::SetVolume(volume));
+                apply_outcome(&service, &step, &mut force, &mut queue_reset);
             }
         }
 
@@ -613,8 +672,12 @@ fn run(
                 };
                 let normalization =
                     crate::player::Normalization::from_code(service.settings.normalization);
+                let shuffle = service.settings.shuffle;
                 let mut outcome = service.core.apply(CoreCommand::SetRepeat(repeat));
                 for extra in [
+                    service
+                        .core
+                        .apply(CoreCommand::SetShuffle(shuffle)),
                     service.core.apply(CoreCommand::SetNormalization(normalization)),
                     service.core.apply(CoreCommand::SetCrossfade(
                         service.settings.crossfade,
@@ -641,6 +704,28 @@ fn run(
                 change.apply(&mut service.settings);
                 crate::playback_settings::install(&service.settings);
                 capture_settings(&mut service);
+                force = true;
+            }
+            Some(ServiceInput::Command(PlaybackInput::SetSleepTimer(minutes))) => {
+                match minutes {
+                    Some(minutes) => {
+                        service.sleep_deadline =
+                            Some(Instant::now() + Duration::from_secs(minutes.saturating_mul(60)));
+                    }
+                    None => {
+                        service.sleep_deadline = None;
+                        if let Some(fade) = service.sleep_fade.take() {
+                            let restore =
+                                service.core.apply(CoreCommand::SetVolume(fade.original_volume));
+                            apply_outcome(
+                                &service,
+                                &restore,
+                                &mut force,
+                                &mut queue_reset,
+                            );
+                        }
+                    }
+                }
                 force = true;
             }
             Some(ServiceInput::Command(PlaybackInput::SetOffline(offline))) => {
@@ -842,6 +927,7 @@ fn capture_settings(service: &mut ServiceState) {
     service.settings.repeat = service.core.repeat().code();
     service.settings.normalization = service.core.normalization().code();
     service.settings.crossfade = service.core.crossfade();
+    service.settings.shuffle = service.core.shuffle();
     _ = service
         .outputs
         .send(PlaybackOutput::SettingsChanged(Box::new(
@@ -953,6 +1039,17 @@ fn store_snapshot(
             .retry
             .as_ref()
             .map_or(0, |retry| retry.attempts + 1),
+        sleep_remaining_secs: service
+            .sleep_deadline
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()).as_secs())
+            .or_else(|| {
+                service.sleep_fade.as_ref().map(|fade| {
+                    SLEEP_FADE
+                        .saturating_sub(fade.started.elapsed())
+                        .as_secs()
+                })
+            })
+            .unwrap_or(0),
         metrics: service.metrics,
     });
     *snapshot

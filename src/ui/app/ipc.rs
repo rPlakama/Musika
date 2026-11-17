@@ -78,6 +78,9 @@ impl AppRoot {
             IpcCommand::Crossfade(_) | IpcCommand::Normalize(_) => {
                 unreachable!("IPC playback mapping returned a playback op")
             }
+            IpcCommand::Sleep(minutes) => {
+                self.bridge.set_sleep_timer(minutes);
+            }
             IpcCommand::Stream(change) => {
                 self.bridge.set_stream_change(change);
             }

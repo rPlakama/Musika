@@ -881,37 +881,43 @@ fn set_track_favorite_patches_the_matching_row() {
 }
 
 #[test]
-fn shuffle_permutes_and_restarts_the_queue() {
+fn shuffle_is_a_mode_and_does_not_reorder_the_queue() {
     let mut core = PlaybackCore::new();
     _ = core.load(tracks(32), 0, false);
-    core.apply(CoreCommand::CycleRepeat);
-    core.apply(CoreCommand::CycleRepeat); // All
-    core.apply(CoreCommand::Jump(17));
-    core.apply(CoreCommand::CycleRepeat);
-    core.apply(CoreCommand::CycleRepeat); // All again after the jump resets it
     let before = ids(&core);
 
     let outcome = core.apply(CoreCommand::ShuffleQueue);
-    let after = ids(&core);
-    let mut sorted_before = before.clone();
-    sorted_before.sort();
-    let mut sorted_after = after.clone();
-    sorted_after.sort();
-    assert_eq!(sorted_before, sorted_after, "every row survives once");
-    assert_ne!(before, after, "the order really changed (32! odds)");
-    assert_eq!(core.index(), 0);
-    assert_eq!(core.repeat(), Repeat::Off);
-    assert!(outcome.queue_reset);
-    assert_eq!(outcome.audio.len(), 1, "the shuffled head is loaded once");
-    assert_eq!(core.state(), State::Playing);
+    assert!(core.shuffle());
+    assert!(outcome.changed);
+    assert!(!outcome.queue_reset, "the queue rows are untouched");
+    assert_eq!(ids(&core), before);
+
+    // Next walks the shuffled plan, not the visible row order.
+    let first = core.index();
+    let outcome = core.apply(CoreCommand::Next);
+    assert_ne!(core.index(), first);
+    assert_eq!(outcome.audio.len(), 1);
+
+    // Toggling the mode off keeps the visible queue and the current row.
+    let current = core.index();
+    core.apply(CoreCommand::ShuffleQueue);
+    assert!(!core.shuffle());
+    assert_eq!(ids(&core), before);
+    assert_eq!(core.index(), current);
 }
 
 #[test]
-fn shuffle_of_an_empty_queue_is_a_no_op() {
+fn shuffle_can_be_armed_before_a_queue_exists() {
     let mut core = PlaybackCore::new();
     let outcome = core.apply(CoreCommand::ShuffleQueue);
-    assert!(!outcome.changed);
+    assert!(outcome.changed);
+    assert!(core.shuffle());
     assert!(outcome.audio.is_empty());
+
+    // Loading later builds the plan without reordering.
+    core.load(tracks(8), 0, false);
+    assert!(core.shuffle());
+    assert_eq!(core.index(), 0);
 }
 
 // --- seek / volume -------------------------------------------------------
@@ -1048,7 +1054,8 @@ fn snapshot_encodes_the_transport() {
 fn queue_reset_is_reported_by_load_and_shuffle() {
     let mut core = PlaybackCore::new();
     assert!(core.load(tracks(2), 0, false).queue_reset);
-    assert!(core.apply(CoreCommand::ShuffleQueue).queue_reset);
+    // Shuffle is a mode now, not a row re-stream.
+    assert!(!core.apply(CoreCommand::ShuffleQueue).queue_reset);
     // Plain transport and row edits do not reset the queue.
     assert!(!core.apply(CoreCommand::Next).queue_reset);
     assert!(!core.apply(CoreCommand::Remove(0)).queue_reset);
@@ -1786,4 +1793,34 @@ fn an_auth_failure_stops_instead_of_draining_the_queue() {
 
     assert_eq!(core.index(), 0);
     assert_eq!(core.state(), State::Stopped);
+}
+
+#[test]
+fn shuffle_previous_walks_play_history_and_linear_previous_does_not() {
+    let mut core = PlaybackCore::new();
+    core.load(tracks(6), 0, false);
+    core.apply(CoreCommand::SetShuffle(true));
+    let first = core.index();
+    core.apply(CoreCommand::Next);
+    let second = core.index();
+    assert_ne!(second, first);
+    // Shuffle Previous returns to the actual played row, not index-1.
+    core.apply(CoreCommand::Previous);
+    assert_eq!(core.index(), first);
+
+    core.apply(CoreCommand::SetShuffle(false));
+    core.apply(CoreCommand::Jump(4));
+    core.apply(CoreCommand::Previous);
+    assert_eq!(core.index(), 3, "linear previous is still index-1");
+}
+
+#[test]
+fn sleep_fade_curve_reaches_zero_without_overshooting() {
+    use crate::daemon::playback::original_fade_volume;
+
+    assert!((original_fade_volume(80.0, 0.0, 5.0) - 80.0).abs() < f64::EPSILON);
+    assert!((original_fade_volume(80.0, 2.5, 5.0) - 40.0).abs() < f64::EPSILON);
+    assert!((original_fade_volume(80.0, 5.0, 5.0)).abs() < f64::EPSILON);
+    assert!((original_fade_volume(80.0, 9.0, 5.0)).abs() < f64::EPSILON);
+    assert!((original_fade_volume(500.0, 0.0, 5.0) - 100.0).abs() < f64::EPSILON);
 }

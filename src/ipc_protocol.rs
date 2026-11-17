@@ -554,6 +554,8 @@ pub const STATE_FLAG_SEEKING: u32 = 1 << 4;
 pub const STATE_FLAG_ENDED: u32 = 1 << 5;
 /// The service is retrying the current row at the stored position.
 pub const STATE_FLAG_RETRYING: u32 = 1 << 6;
+/// Persistent queue shuffle mode.
+pub const STATE_FLAG_SHUFFLE: u32 = 1 << 7;
 
 impl PlaybackState {
     pub const ENCODED_BYTES: usize = 48;
@@ -592,6 +594,10 @@ impl PlaybackState {
 
     pub fn retrying(&self) -> bool {
         self.flags & STATE_FLAG_RETRYING != 0
+    }
+
+    pub fn shuffle(&self) -> bool {
+        self.flags & STATE_FLAG_SHUFFLE != 0
     }
 
     pub fn volume(&self) -> f64 {

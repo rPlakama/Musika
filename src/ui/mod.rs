@@ -58,7 +58,7 @@ use self::text_modal::TextModal;
 use self::widgets::marquee::{MarqueeText, line_width, marquee_offset};
 use self::widgets::cover_image::CoverImage;
 use self::widgets::media::{
-    CoverSource, FAVORITE_GOLD, RowMarks, collage_art_from_sources, cover_source_with_remote,
+    CoverRole, CoverSource, FAVORITE_GOLD, RowMarks, collage_art_from_sources, cover_source_with_remote,
     format_time, full_cover_source_with_remote, highlighted_text, icon, icon_rotated,
     loading_placeholder, loading_skeleton, page_key, repeat_label, progress_bar,
     row_mark_icons, spinning_icon, transport_controls, volume_meter,

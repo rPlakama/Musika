@@ -193,6 +193,29 @@ impl CoverSource {
     }
 }
 
+/// The role a cover surface plays. `Row` intentionally uses the 320 px
+/// thumbnail; hero/collage/fullscreen surfaces must use the provider original.
+/// Keeping the choice in one enum prevents a surface from silently picking the
+/// cheaper source at a large size (the playlist low-resolution regression).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoverRole {
+    Row,
+    Hero,
+    Collage,
+    Fullscreen,
+}
+
+impl CoverRole {
+    pub(crate) fn source(self, url: &str, remote: &str) -> Option<CoverSource> {
+        match self {
+            Self::Row => cover_source_with_remote(url, remote),
+            Self::Hero | Self::Collage | Self::Fullscreen => {
+                full_cover_source_with_remote(url, remote)
+            }
+        }
+    }
+}
+
 /// Temporary diagnostic switch: make every cover surface resolve no source,
 /// so the UI paints placeholders and never decodes/uploads cover pixels.
 /// Used by the UI memory harness to separate cover cost from row/list cost.
@@ -658,6 +681,17 @@ mod tests {
         let row = cover_source_with_remote(&url, "").expect("row source");
         let CoverSource::Path(path) = row else {
             panic!("expected local thumbnail");
+        };
+        assert_eq!(path, thumb);
+
+        let collage = CoverRole::Collage.source(&url, "").expect("collage source");
+        let CoverSource::Path(path) = collage else {
+            panic!("expected local original for collage");
+        };
+        assert_eq!(path, original);
+        let row_role = CoverRole::Row.source(&url, "").expect("row role");
+        let CoverSource::Path(path) = row_role else {
+            panic!("expected thumbnail for row role");
         };
         assert_eq!(path, thumb);
 

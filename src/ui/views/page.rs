@@ -20,14 +20,14 @@ impl AppRoot {
         let cover = if profile.collage {
             None
         } else {
-            full_cover_source_with_remote(&page.header.cover_url, &page.header.cover_remote)
+            CoverRole::Hero.source(&page.header.cover_url, &page.header.cover_remote)
         };
         // The row thumbnail is already on disk: paint it immediately while
         // the untouched original decodes to the hero size.
         let cover_preview = if profile.collage {
             None
         } else {
-            cover_source_with_remote(&page.header.cover_url, &page.header.cover_remote)
+            CoverRole::Row.source(&page.header.cover_url, &page.header.cover_remote)
         };
         let header_h = cover_bottom.max(240.0);
 
@@ -96,7 +96,7 @@ impl AppRoot {
                             .iter()
                             .enumerate()
                             .map(|(index, url)| {
-                                full_cover_source_with_remote(
+                                CoverRole::Collage.source(
                                     url,
                                     page.header
                                         .collage_remote

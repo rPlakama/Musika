@@ -87,16 +87,16 @@ impl AppRoot {
                     .justify_center()
                     .overflow_hidden()
                     .child(if profile.collage {
-                        // Collage panes are ~250 px or less: the row thumbnail
-                        // is already the right size, with the provider URL as
-                        // the fallback when the local copy is missing.
+                        // Collage panes sit on the hero and must use the
+                        // untouched provider original, not the 320 px row
+                        // thumbnail (which visibly softens at this size).
                         let sources = page
                             .header
                             .collage
                             .iter()
                             .enumerate()
                             .map(|(index, url)| {
-                                cover_source_with_remote(
+                                full_cover_source_with_remote(
                                     url,
                                     page.header
                                         .collage_remote

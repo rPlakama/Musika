@@ -636,6 +636,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn full_cover_source_prefers_the_original_over_the_row_thumbnail() {
+        let dir = std::env::temp_dir().join(format!(
+            "musika-cover-source-{}-{}",
+            std::process::id(),
+            crate::consts::now_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = dir.join("cover.jpg");
+        let thumb = dir.join("cover.thumb.jpg");
+        std::fs::write(&original, b"original").unwrap();
+        std::fs::write(&thumb, b"thumb").unwrap();
+        let url = reqwest::Url::from_file_path(&original).unwrap().to_string();
+
+        let full = full_cover_source_with_remote(&url, "").expect("full source");
+        let CoverSource::Path(path) = full else {
+            panic!("expected local original");
+        };
+        assert_eq!(path, original);
+
+        let row = cover_source_with_remote(&url, "").expect("row source");
+        let CoverSource::Path(path) = row else {
+            panic!("expected local thumbnail");
+        };
+        assert_eq!(path, thumb);
+
+        _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn volume_meter_greys_out_while_muted() {
         assert_eq!(volume_fill_color(false), palette::primary());
         assert_eq!(volume_fill_color(true), palette::outline());

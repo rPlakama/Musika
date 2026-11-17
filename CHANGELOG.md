@@ -5,6 +5,9 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **High-resolution collage art:** playlist/radio header panes now resolve the
+  provider original (the same source as the page hero) instead of the 320 px
+  row thumbnail, so large collage cells are no longer visibly softened.
 - **Stable playlist artwork:** playlist pages prefer the provider's
   `cover_art` (single, cached hero) and otherwise build a fixed-size ordered
   collage from unique album entries, including panes whose local file is still

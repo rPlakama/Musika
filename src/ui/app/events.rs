@@ -19,6 +19,21 @@ impl AppRoot {
             Event::Scrobble(_) => {
                 // A UI request; the daemon consumes it.
             }
+            Event::CycleEq => {
+                // A UI request; the daemon consumes it.
+            }
+            Event::EqChanged(name) => {
+                let changed = self.eq_profile != name;
+                self.eq_profile = name;
+                if changed {
+                    let message = self
+                        .eq_profile
+                        .as_ref()
+                        .map(|name| format!("EQ: {name}"))
+                        .unwrap_or_else(|| "EQ off".to_string());
+                    self.push_toast(message, ToastKind::Notice, None);
+                }
+            }
             Event::OutputDevices { devices } => {
                 let message = if devices.is_empty() {
                     "No PipeWire output sinks.".to_string()
@@ -836,6 +851,7 @@ impl AppRoot {
         self.current_cover.clear();
         self.playback_error = None;
         self.connection_offline = false;
+        self.eq_profile = None;
         self.view = ViewState::default();
         self.generation = 0;
         self.page = None;

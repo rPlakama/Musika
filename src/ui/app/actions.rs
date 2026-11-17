@@ -352,6 +352,20 @@ impl AppRoot {
         cx.notify();
     }
 
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "action handlers share the mutable receiver signature"
+    )]
+    pub(in crate::ui) fn on_eq_cycle(
+        &mut self,
+        _: &EqCycle,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.bridge.cycle_eq();
+        cx.notify();
+    }
+
     pub(in crate::ui) fn on_repeat_cycle(
         &mut self,
         _: &RepeatCycle,

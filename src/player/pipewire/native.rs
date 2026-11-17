@@ -89,6 +89,10 @@ impl Native {
         self.sink.set_target(target)
     }
 
+    pub(crate) fn set_eq(&self, profile: Option<std::sync::Arc<crate::eq::EqProfile>>) {
+        self.shared.set_eq(profile);
+    }
+
     pub(crate) fn set_normalization(&self, mode: Normalization) {
         self.shared
             .normalization

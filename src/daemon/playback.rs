@@ -131,6 +131,8 @@ pub(crate) enum PlaybackInput {
     SetSleepTimer(Option<u64>),
     /// Enable/disable scrobbling.
     SetScrobble(bool),
+    /// Cycle `eqs/*.{txt,eq}` -> OFF -> first.
+    CycleEq,
     Shutdown,
 }
 
@@ -161,6 +163,7 @@ impl std::fmt::Debug for PlaybackInput {
             }
             Self::SetSleepTimer(minutes) => write!(formatter, "SetSleepTimer({minutes:?})"),
             Self::SetScrobble(enabled) => write!(formatter, "SetScrobble({enabled})"),
+            Self::CycleEq => write!(formatter, "CycleEq"),
             Self::Shutdown => write!(formatter, "Shutdown"),
         }
     }
@@ -196,6 +199,8 @@ pub(crate) enum PlaybackOutput {
     /// A user command changed one of the persisted playback preferences. The
     /// daemon writes the document back to `status.db`.
     SettingsChanged(Box<crate::playback_settings::PlaybackSettings>),
+    /// Active EQ profile name (`None` = bypass).
+    EqChanged(Option<String>),
 }
 
 /// Read-only projection of the playback thread's state.
@@ -466,6 +471,45 @@ impl ServiceState {
         });
     }
 
+    /// Loads `settings.eq_profile` from disk and installs it into the engine.
+    /// A missing/invalid file clears the selection instead of keeping a stale
+    /// profile.
+    fn apply_eq_from_settings(&mut self) {
+        let name = self.settings.eq_profile.clone();
+        let profile = match name.as_deref() {
+            Some(name) => match crate::eq::load_profile(name) {
+                Ok(profile) => Some(std::sync::Arc::new(profile)),
+                Err(error) => {
+                    crate::debug_log!("eq: cannot load profile '{name}': {error:#}");
+                    None
+                }
+            },
+            None => None,
+        };
+        self.settings.eq_profile = profile.as_ref().map(|profile| profile.name.clone());
+        if let Some(engine) = self.engine.as_ref() {
+            engine.send(AudioCommand::SetEq(profile.clone()));
+        }
+        _ = self.outputs.send(PlaybackOutput::EqChanged(
+            profile.as_ref().map(|profile| profile.name.clone()),
+        ));
+    }
+
+    fn cycle_eq(&mut self) {
+        let profiles = crate::eq::list_profiles();
+        let current = self.settings.eq_profile.clone();
+        let position = current
+            .as_ref()
+            .and_then(|name| profiles.iter().position(|candidate| candidate == name));
+        let next = match position {
+            Some(index) if index + 1 < profiles.len() => Some(profiles[index + 1].clone()),
+            Some(_) => None,
+            None => profiles.first().cloned(),
+        };
+        self.settings.eq_profile = next;
+        self.apply_eq_from_settings();
+    }
+
     /// Any explicit transport/queue action supersedes a pending retry or a
     /// post-recovery auto-resume.
     fn cancel_retry(&mut self) {
@@ -500,6 +544,7 @@ impl ServiceState {
             Ok(engine) => {
                 self.engine = Some(engine);
                 self.apply_output_target();
+                self.apply_eq_from_settings();
                 crate::startup::trace("engine.ready");
                 crate::debug_log!("playback: engine ready");
                 true
@@ -774,6 +819,7 @@ fn run(
                 }
                 apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
                 service.apply_output_target();
+                service.apply_eq_from_settings();
             }
             Some(ServiceInput::Command(PlaybackInput::SetOutputDevice {
                 device,
@@ -811,6 +857,11 @@ fn run(
                         }
                     }
                 }
+                force = true;
+            }
+            Some(ServiceInput::Command(PlaybackInput::CycleEq)) => {
+                service.cycle_eq();
+                capture_settings(&mut service);
                 force = true;
             }
             Some(ServiceInput::Command(PlaybackInput::SetScrobble(enabled))) => {

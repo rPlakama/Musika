@@ -49,6 +49,8 @@ pub(crate) enum AudioCommand {
     SetCrossfade(bool),
     /// Retarget the output stream to a PipeWire sink (`None` = default).
     SetOutputTarget(Option<String>),
+    /// Install/replace the EQ profile (`None` = bypass).
+    SetEq(Option<std::sync::Arc<crate::eq::EqProfile>>),
     Stop,
 }
 
@@ -323,6 +325,7 @@ fn apply_command(native: &Native, command: AudioCommand, paused: &mut bool) {
                 crate::debug_log!("pipewire: cannot change output device: {error}");
             }
         }
+        AudioCommand::SetEq(profile) => native.set_eq(profile),
         AudioCommand::Stop => {
             native.stop();
             *paused = true;

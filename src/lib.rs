@@ -207,3 +207,4 @@ pub(crate) mod test_alloc {
 static TEST_ALLOCATOR: test_alloc::TrackingAllocator = test_alloc::TrackingAllocator;
 
 pub mod entry;
+mod eq;

@@ -377,6 +377,11 @@ struct Current {
     preload_started: Option<Instant>,
     first_pcm: bool,
     stop: Option<Arc<AtomicBool>>,
+    /// EQ chain for the current decoder; rebuilt when the profile or rate
+    /// changes.
+    eq: Option<crate::eq::EqRuntime>,
+    eq_epoch: u64,
+    eq_rate: u32,
     /// The decoder is kept open but not read: pause with a seekable input.
     paused: bool,
     paused_at: Option<Instant>,
@@ -387,6 +392,9 @@ struct Current {
 struct CrossfadeState {
     next: Decoder,
     next_stop: Option<Arc<AtomicBool>>,
+    /// EQ state for the incoming decoder (independent filter history).
+    next_eq: Option<crate::eq::EqRuntime>,
+    eq_epoch: u64,
     /// Frames of `next` consumed by the fade so far.
     next_frames: u64,
     /// Total frames of the fade (the remaining duration when it started).
@@ -820,6 +828,11 @@ fn worker_thread(
             apply_normalization(&mut pcm[..frames * ring::CHANNELS], gain);
         }
 
+        refresh_eq(&mut current, &shared);
+        if let Some(eq) = current.eq.as_mut() {
+            eq.process(&mut pcm[..frames * ring::CHANNELS], frames);
+        }
+
         current.written_frames += frames as u64;
         if current.first_pcm {
             current.first_pcm = false;
@@ -904,6 +917,9 @@ fn start_decoder(
     }
     current.first_pcm = true;
     current.stopped = false;
+    current.eq = None;
+    current.eq_epoch = 0;
+    current.eq_rate = 0;
     shared.decode_done.store(false, Ordering::Release);
     let stop = Arc::new(AtomicBool::new(false));
     *shared
@@ -1029,15 +1045,39 @@ fn maybe_start_crossfade(current: &mut Current, shared: &Shared) {
         return;
     };
     let total_frames = (remaining * f64::from(current.rate)).round().max(1.0) as u64;
+    let (eq_epoch, eq_profile) = shared.eq_snapshot();
+    let next_eq = eq_profile
+        .map(|profile| crate::eq::EqRuntime::new(profile, current.rate, ring::CHANNELS));
     current.crossfade = Some(CrossfadeState {
         next,
         next_stop: current.preload_stop.take(),
+        next_eq,
+        eq_epoch,
         next_frames: 0,
         total_frames,
         next_failed: false,
     });
     current.preload_requested = false;
     current.preload_started = None;
+}
+
+/// Recompiles the current decoder's EQ chain when the profile epoch or the
+/// pipeline rate changes. The lock is only taken on a real change; the steady
+/// state costs one atomic load per chunk.
+fn refresh_eq(current: &mut Current, shared: &Shared) {
+    let epoch = shared.eq_epoch.load(Ordering::Acquire);
+    if current.eq_epoch == epoch && current.eq_rate == current.rate {
+        return;
+    }
+    let profile = shared
+        .eq
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    current.eq = profile
+        .map(|profile| crate::eq::EqRuntime::new(profile, current.rate, ring::CHANNELS));
+    current.eq_epoch = epoch;
+    current.eq_rate = current.rate;
 }
 
 /// Complementary-gain mix for one PCM block. Frames past `next_frames` (or
@@ -1109,6 +1149,9 @@ fn run_crossfade_chunk(
         let Some(crossfade) = current.crossfade.take() else {
             return;
         };
+        current.eq = crossfade.next_eq;
+        current.eq_epoch = crossfade.eq_epoch;
+        current.eq_rate = current.rate;
         let offset = crossfade.next_frames as f64 / f64::from(current.rate);
         handoff_to_decoder(
             current,
@@ -1163,6 +1206,32 @@ fn run_crossfade_chunk(
         }
     }
 
+    refresh_eq(current, shared);
+    if let Some(eq) = current.eq.as_mut() {
+        eq.process(&mut pcm[..cur_frames * ring::CHANNELS], cur_frames);
+    }
+    if next_frames > 0
+        && let Some(crossfade) = current.crossfade.as_mut()
+    {
+        let epoch = shared.eq_epoch.load(Ordering::Acquire);
+        if crossfade.eq_epoch != epoch {
+            let profile = shared
+                .eq
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            crossfade.next_eq = profile.map(|profile| {
+                crate::eq::EqRuntime::new(profile, current.rate, ring::CHANNELS)
+            });
+            crossfade.eq_epoch = epoch;
+        }
+        if let Some(eq) = crossfade.next_eq.as_mut() {
+            eq.process(
+                &mut next_pcm[..next_frames * ring::CHANNELS],
+                next_frames,
+            );
+        }
+    }
     let (played, total, next_failed) = {
         let Some(crossfade) = current.crossfade.as_ref() else {
             return;

@@ -70,6 +70,8 @@ mod db;
 
 mod download;
 
+mod eq;
+
 #[cfg(feature = "gpuui")]
 mod download_command;
 

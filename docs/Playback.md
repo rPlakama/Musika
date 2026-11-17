@@ -329,6 +329,12 @@ reliability and CI items remain roadmap work.
 
 ### Implemented after the audit (2026-11)
 
+- **Equalizer:** `Ctrl-E` cycles sorted `~/.config/musika/eqs/*.{txt,eq}`
+  profiles through OFF. Profiles use an Equalizer APO subset (`Preamp:`,
+  parametric `Filter: ON PK|LS|HS|LP|HP|BP|NO ...`, and `GraphicEQ:` bands);
+  a per-channel biquad chain runs after ReplayGain and before the ring,
+  recompiles on rate/profile changes, and the selected profile persists.
+
 - **Scrobbling:** playback sends a now-playing notification on the first PCM
   and one completed `scrobble` after `min(4 min, half the track)`, with the
   provider timestamp. A failed/offline submission is queued in

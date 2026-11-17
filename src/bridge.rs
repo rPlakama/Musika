@@ -58,6 +58,10 @@ pub enum Event {
     SleepTimer(Option<u64>),
     /// UI request: enable/disable scrobbling.
     Scrobble(bool),
+    /// UI request: cycle the EQ profile through OFF.
+    CycleEq,
+    /// Core answer: the active EQ profile (`None` = off).
+    EqChanged(Option<String>),
     LoggedIn {
         server_url: String,
         username: String,

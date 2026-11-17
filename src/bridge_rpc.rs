@@ -42,6 +42,7 @@ macro_rules! for_each_bridge_rpc {
             set_stream_change(change: $crate::playback_settings::StreamChange),
             set_sleep_timer(minutes: Option<u64>),
             set_scrobble(enabled: bool),
+            cycle_eq(),
             logout(),
             // Library and search.
             load_library(scope: $crate::model::Scope, order: usize),

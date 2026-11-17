@@ -188,6 +188,7 @@ async fn run_async() {
     let mut header: Option<Event> = None;
     let mut auth: Option<Event> = None;
     let mut connection: Option<Event> = None;
+    let mut eq_state: Option<Event> = None;
     let mut ui_clients: HashMap<u64, UiClient> = HashMap::new();
     let mut ui_child: Option<std::process::Child> = None;
     let mut status_dirty = true;
@@ -223,6 +224,7 @@ async fn run_async() {
                 match &event {
                     Event::Header { .. } => header = Some(event.clone()),
                     Event::Connection { .. } => connection = Some(event.clone()),
+                    Event::EqChanged(_) => eq_state = Some(event.clone()),
                     Event::OutputDevice { .. } => {
                         if let Event::OutputDevice {
                             device,
@@ -245,6 +247,9 @@ async fn run_async() {
                     }
                     Event::Scrobble(enabled) => {
                         let _ = playback_control.send(PlaybackInput::SetScrobble(*enabled));
+                    }
+                    Event::CycleEq => {
+                        let _ = playback_control.send(PlaybackInput::CycleEq);
                     }
                     Event::LoginRequired { .. } => {
                         auth = Some(event.clone());
@@ -393,6 +398,7 @@ async fn run_async() {
                         | Event::StreamChange(_)
                         | Event::SleepTimer(_)
                         | Event::Scrobble(_)
+                        | Event::CycleEq
                 );
                 if forward {
                     let dead = broadcast_event(&ui_clients, &event);
@@ -441,6 +447,7 @@ async fn run_async() {
                         header.as_ref(),
                         auth.as_ref(),
                         connection.as_ref(),
+                        eq_state.as_ref(),
                         &page,
                     );
                     ui_clients.insert(conn, UiClient { role, features, outbox });
@@ -987,6 +994,9 @@ fn handle_playback_output(
             );
             drop_clients(ui_clients, dead);
         }
+        PlaybackOutput::EqChanged(name) => {
+            bridge.eq_changed(name);
+        }
         PlaybackOutput::SettingsChanged(next) => {
             *settings = *next;
             *settings_dirty = true;
@@ -1036,6 +1046,7 @@ fn bootstrap_client(
     header: Option<&Event>,
     auth: Option<&Event>,
     connection: Option<&Event>,
+    eq: Option<&Event>,
     page: &LastPage,
 ) {
     let mut state = snapshot.state;
@@ -1044,7 +1055,7 @@ fn bootstrap_client(
     for frame in playback::reset_frames(snapshot.queue_rev, &snapshot.queue) {
         let _ = outbox.send_bytes(frame);
     }
-    for event in [header, auth, connection].into_iter().flatten() {
+    for event in [header, auth, connection, eq].into_iter().flatten() {
         if let Ok(frame) = proto::event_frame(event) {
             let _ = outbox.send(&frame);
         }

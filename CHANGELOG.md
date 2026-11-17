@@ -5,6 +5,12 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Equalizer:** `Ctrl-E` cycles Equalizer APO–style profiles from
+  `~/.config/musika/eqs/*.{txt,eq}` through OFF. The parser supports
+  `Preamp:`, parametric `Filter:` lines (PK/PEQ, LS, HS, LP, HP, BP, NO) and
+  `GraphicEQ:` bands; a per-channel biquad chain runs after ReplayGain,
+  recompiles on rate/profile changes, and the selection persists. The active
+  EQ is marked in the bottom bar and announced by toast.
 - **Scrobbling:** playback reports a now-playing notification on first PCM and
   submits one completed play after `min(4 minutes, half the track)`, with the
   provider timestamp. Offline/failed submissions queue in `pending_scrobble`

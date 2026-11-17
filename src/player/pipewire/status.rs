@@ -6,7 +6,7 @@
 //! (see `crate::player::engine`).
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Status {
@@ -86,6 +86,9 @@ pub(crate) struct Shared {
     pub(crate) normalization: AtomicU32,
     /// Optional crossfade between tracks.
     pub(crate) crossfade: AtomicBool,
+    /// Active EQ profile; the worker recompiles when `eq_epoch` changes.
+    pub(crate) eq: Mutex<Option<Arc<crate::eq::EqProfile>>>,
+    pub(crate) eq_epoch: AtomicU64,
     /// Engine wakeup, written from the RT process callback (gapless boundary),
     /// the sink loop thread (stream status) and the decode worker (lifecycle).
     wake_fd: libc::c_int,
@@ -125,6 +128,8 @@ impl Shared {
             sink_seen: AtomicU64::new(0),
             normalization: AtomicU32::new(0),
             crossfade: AtomicBool::new(false),
+            eq: Mutex::new(None),
+            eq_epoch: AtomicU64::new(0),
             wake_fd: if wake_fd < 0 { -1 } else { wake_fd },
         }
     }
@@ -181,6 +186,24 @@ impl Shared {
     }
 
     /// Records a PipeWire stream transition and wakes the engine.
+    /// Installs/replaces the EQ profile and wakes the worker so the new chain
+    /// is compiled before the next PCM block.
+    pub(crate) fn set_eq(&self, profile: Option<Arc<crate::eq::EqProfile>>) {
+        *self.eq.lock().unwrap_or_else(PoisonError::into_inner) = profile;
+        self.eq_epoch.fetch_add(1, Ordering::AcqRel);
+        self.signal();
+    }
+
+    pub(crate) fn eq_snapshot(&self) -> (u64, Option<Arc<crate::eq::EqProfile>>) {
+        let epoch = self.eq_epoch.load(Ordering::Acquire);
+        let profile = self
+            .eq
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        (epoch, profile)
+    }
+
     pub(crate) fn set_sink_state(&self, state: SinkState, error: Option<String>) {
         {
             let mut sink = self.sink.lock().unwrap_or_else(PoisonError::into_inner);

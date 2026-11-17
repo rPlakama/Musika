@@ -224,6 +224,15 @@ impl Bridge {
         _ = self.tx.send(Event::Scrobble(enabled));
     }
 
+    /// UI request: cycle the EQ profile through OFF.
+    pub fn cycle_eq(&self) {
+        _ = self.tx.send(Event::CycleEq);
+    }
+
+    pub fn eq_changed(&self, name: Option<String>) {
+        _ = self.tx.send(Event::EqChanged(name));
+    }
+
     pub(crate) fn is_offline(&self) -> bool {
         self.offline.load(Ordering::Relaxed)
     }

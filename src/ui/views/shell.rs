@@ -834,6 +834,16 @@ impl AppRoot {
                                         .child("N"),
                                 )
                             })
+                            .when_some(self.eq_profile.clone(), |this, _name| {
+                                this.child(
+                                    div()
+                                        .flex_none()
+                                        .text_size(px(m.time_size))
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(rgb(palette::primary()))
+                                        .child("EQ"),
+                                )
+                            })
                             .child(
                                 div()
                                     .w(px(m.volume_bar))

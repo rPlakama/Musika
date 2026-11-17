@@ -130,6 +130,7 @@ actions!(
         RepeatCycle,
         CrossfadeToggle,
         NormalizationCycle,
+        EqCycle,
         SearchScopeNext,
         SearchScopePrev,
         ToggleFullscreen,
@@ -158,6 +159,7 @@ pub fn run() {
                 KeyBinding::new("ctrl-r", RepeatCycle, Some("main")),
                 KeyBinding::new("ctrl-f", CrossfadeToggle, Some("main")),
                 KeyBinding::new("ctrl-shift-n", NormalizationCycle, Some("main")),
+                KeyBinding::new("ctrl-e", EqCycle, Some("main")),
                 KeyBinding::new("tab", SearchScopeNext, Some("main")),
                 KeyBinding::new("shift-tab", SearchScopePrev, Some("main")),
                 KeyBinding::new("shift-enter", ToggleFullscreen, Some("main")),
@@ -848,6 +850,8 @@ struct AppRoot {
     /// The core's health probe reports the server unreachable: lists serve the
     /// downloaded catalog, and the top bar says so.
     connection_offline: bool,
+    /// Active EQ profile name (`None` = bypass), mirrored from the core.
+    eq_profile: Option<String>,
     error: Option<String>,
     generation: u64,
     library_scroll: scroll_modal::ScrollModal,
@@ -1181,6 +1185,7 @@ impl AppRoot {
             view,
             header: None,
             connection_offline: false,
+            eq_profile: None,
             error: None,
             generation: 0,
             library_scroll: scroll_modal::ScrollModal::new(scroll_modal::LIBRARY),

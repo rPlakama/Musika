@@ -48,6 +48,7 @@ work, including the command line.
 | `Tab` / `Shift-Tab` | Walk panes, header stops and status-bar actions |
 | `Shift-J` / `Shift-K` | Next / previous library scope (Albums, Songs, Artists, Playlists) |
 | `Shift-L` / `Shift-H` | Next / previous list ordering |
+| `Ctrl-E` | Cycle Equalizer APO-style EQ profiles from `~/.config/musika/eqs` through OFF |
 | `/` | In-surface line search |
 | `Shift-Space F` or `i` | Open the floating search |
 | Mouse click | Place the cursor and open/play the row |

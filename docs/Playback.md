@@ -453,3 +453,38 @@ expected to land with tests and documentation; nothing is committed on a date.
   crossfade control and is tracked with that change.
 - Loudness normalization ships **default off**, and ReplayGain tags are read
   first: tag-driven gain comes before any analysis or fallback policy.
+
+## Telemetry and measurements (Phase 10)
+
+The core `status` document (one JSON line over `ipc.sock`, also the `status`
+command) carries the playback telemetry added by the resilience phase:
+
+- `retrying` / `retry_attempt`: a retryable stream failure is being reopened;
+  the UI shows a spinner and the attempt budget is 3 (1 s, 2 s, 4 s).
+- `sleep_remaining`: seconds until the sleep timer pauses, or during its final
+  five-second fade.
+- `metrics.retries`: retryable failures that scheduled a reopen.
+- `metrics.reconnects`: automatic resumes after the server health probe
+  returns.
+- `metrics.sink_rebuilds`: engine rebuilds after a PipeWire stream failure.
+- `metrics.buffered_frames`: PCM frames queued in the lock-free ring at the
+  last snapshot.
+- `metrics.underruns`: graph requests the ring could not satisfy.
+
+A healthy steady-state run has `underruns` flat, `sink_rebuilds` only changing
+on an actual device/stream failure, and `retries`/`reconnects` only after
+server loss. The counters are process-local and reset on restart; they are
+meant for `status` sampling and regression comparisons, not persistence.
+
+### Known playback limits
+
+- **Rate-change boundary:** when the next track needs a different native rate,
+  the sink rebuilds at the boundary and flushes queued PCM for the new rate.
+  The resulting small gap is still present; crossfade/gapless covers
+  same-rate transitions.
+- **Exclusive/bit-perfect output:** the backend is PipeWire; there is no
+  optional direct ALSA `hw` path, and PipeWire may still mix/resample. S16
+  fallback is deliberately not negotiated.
+- **Multichannel/DSD:** the pipeline is packed F32 stereo end-to-end. DSD is a
+  feasibility item, not a supported format; multichannel output is not wired
+  through the ring or the sink.

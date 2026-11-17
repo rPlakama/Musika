@@ -5,6 +5,9 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Telemetry/docs:** document the `status` playback counters (`retries`,
+  `reconnects`, `sink_rebuilds`, `buffered_frames`, `underruns`) and the
+  remaining rate-change/exclusive/multichannel/DSD limits in `Playback.md`.
 - **MPRIS:** `CanRaise`/`Raise` and `CanQuit`/`Quit` now drive `show` and
   `quit`; the existing playback, seek, volume, loop, shuffle and metadata
   properties remain.

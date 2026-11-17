@@ -5,6 +5,9 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **MPRIS:** `CanRaise`/`Raise` and `CanQuit`/`Quit` now drive `show` and
+  `quit`; the existing playback, seek, volume, loop, shuffle and metadata
+  properties remain.
 - **Idle inhibition:** playing audio holds a systemd-logind `Inhibit("idle")`
   lock in a background task and releases it on pause/stop, so the desktop's
   idle timeout does not suspend under playback.

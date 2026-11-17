@@ -329,6 +329,10 @@ reliability and CI items remain roadmap work.
 
 ### Implemented after the audit (2026-11)
 
+- **MPRIS:** the player exposes playback/seek/volume/loop/shuffle/metadata as
+  before, and now honours `Raise` (show the window) and `Quit` (shut down the
+  daemon) from the root interface.
+
 - **Idle inhibition:** while the transport is Playing, a background logind
   `Inhibit("idle")` file descriptor is held; it is released on pause/stop.
   Headless sessions without logind simply skip the request.

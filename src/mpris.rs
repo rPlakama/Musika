@@ -310,12 +310,12 @@ impl MprisRoot {
 
     #[zbus(property)]
     fn can_quit(&self) -> bool {
-        false
+        true
     }
 
     #[zbus(property)]
     fn can_raise(&self) -> bool {
-        false
+        true
     }
 
     #[zbus(property)]
@@ -338,9 +338,13 @@ impl MprisRoot {
         Vec::new()
     }
 
-    fn raise(&self) {}
+    fn raise(&self) {
+        submit("show".to_string());
+    }
 
-    fn quit(&self) {}
+    fn quit(&self) {
+        submit("quit".to_string());
+    }
 }
 
 struct MprisPlayer;

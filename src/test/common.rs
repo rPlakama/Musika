@@ -52,8 +52,11 @@ pub(crate) async fn search_pool() -> SqlitePool {
     crate::test::memory_pool(sqlx::migrate!("./migrations_search")).await
 }
 
+/// The production status pool is an alias of the library file, so tests use
+/// the same schema tree instead of maintaining a second status-only migration
+/// set.
 pub(crate) async fn status_pool() -> SqlitePool {
-    crate::test::memory_pool(sqlx::migrate!("./migrations_status")).await
+    crate::test::memory_pool(sqlx::migrate!("./migrations_library")).await
 }
 
 pub(crate) async fn playlist_pool() -> SqlitePool {

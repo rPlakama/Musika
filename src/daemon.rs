@@ -136,6 +136,7 @@ async fn run_async() {
     let (playback_out_tx, mut playback_rx) = mpsc::unbounded_channel::<PlaybackOutput>();
     let playback = PlaybackService::spawn(playback_out_tx);
     let playback_control = playback.control();
+    bridge.attach_playback(playback_control.clone());
     let mut settings_dirty = false;
 
     let (lifecycle_tx, mut lifecycle_rx) = mpsc::unbounded_channel::<Lifecycle>();
@@ -227,51 +228,6 @@ async fn run_async() {
                     Event::Header { .. } => header = Some(event.clone()),
                     Event::Connection { .. } => connection = Some(event.clone()),
                     Event::EqChanged(_) => eq_state = Some(event.clone()),
-                    Event::OutputDevice { .. } => {
-                        if let Event::OutputDevice {
-                            device,
-                            follow_default,
-                        } = &event
-                        {
-                            let _ = playback_control.send(PlaybackInput::SetOutputDevice {
-                                device: device.clone(),
-                                follow_default: *follow_default,
-                            });
-                        }
-                    }
-                    Event::StreamChange(change) => {
-                        let _ = playback_control.send(PlaybackInput::ApplyStreamChange(
-                            change.clone(),
-                        ));
-                    }
-                    Event::SleepTimer(minutes) => {
-                        let _ = playback_control.send(PlaybackInput::SetSleepTimer(*minutes));
-                    }
-                    Event::Scrobble(enabled) => {
-                        let _ = playback_control.send(PlaybackInput::SetScrobble(*enabled));
-                    }
-                    Event::CycleEq => {
-                        let _ = playback_control.send(PlaybackInput::CycleEq);
-                    }
-                    Event::OutputBackend { backend, device } => {
-                        let _ = playback_control.send(PlaybackInput::SetOutputBackend {
-                            backend: *backend,
-                            device: device.clone(),
-                        });
-                    }
-                    Event::OutputMode {
-                        exclusive,
-                        bit_perfect,
-                    } => {
-                        let _ = playback_control.send(PlaybackInput::SetOutputMode {
-                            exclusive: *exclusive,
-                            bit_perfect: *bit_perfect,
-                        });
-                    }
-                    Event::CrossfadeChange(change) => {
-                        let _ = playback_control
-                            .send(PlaybackInput::SetCrossfadeConfig(*change));
-                    }
                     Event::LoginRequired { .. } => {
                         auth = Some(event.clone());
                         connection = None;
@@ -415,14 +371,6 @@ async fn run_async() {
                         | Event::QueueAppend { .. }
                         | Event::QueuePaste { .. }
                         | Event::Restore { .. }
-                        | Event::OutputDevice { .. }
-                        | Event::StreamChange(_)
-                        | Event::SleepTimer(_)
-                        | Event::Scrobble(_)
-                        | Event::CycleEq
-                        | Event::CrossfadeChange(_)
-                        | Event::OutputMode { .. }
-                        | Event::OutputBackend { .. }
                 );
                 if forward {
                     let dead = broadcast_event(&ui_clients, &event);

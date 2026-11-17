@@ -570,20 +570,24 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "output",
-        usage: "output <list|default|device-name>",
-        description: "List PipeWire outputs, follow the default, or target a named sink",
+        usage: "output <list|default|device-name|exclusive on|off|bitperfect on|off|backend pipewire|alsa|alsa device-name>",
+        description: "List outputs, follow the default, target a named sink, request exclusive/bit-perfect mode, or select the backend/device",
         form: CommandForm::Advanced(ArgHints::Values(&[
             "list",
             "default",
             "exclusive",
             "bitperfect",
+            "backend",
+            "alsa",
         ])),
     },
     CommandSpec {
         name: "stream",
-        usage: "stream <quality|format|cache|size> <value>",
-        description: "Set the stream bitrate (0 original), format, cache on/off or cache size in MiB",
-        form: CommandForm::Advanced(ArgHints::Values(&["quality", "format", "cache", "size"])),
+        usage: "stream <quality|format|cache|size|fixed> <value>",
+        description: "Set the stream bitrate (0 original), format, cache on/off/size, or a fixed pipeline rate",
+        form: CommandForm::Advanced(ArgHints::Values(&[
+            "quality", "format", "cache", "size", "fixed",
+        ])),
     },
     CommandSpec {
         name: "eq",
@@ -2437,6 +2441,43 @@ mod tests {
         assert_eq!(parse("sleep off"), Ok(IpcCommand::Sleep(None)));
         assert!(parse("sleep").is_err());
         assert!(parse("sleep later").is_err());
+    }
+
+    #[test]
+    fn advanced_command_usage_advertises_every_parser_literal() {
+        for (name, literals) in [
+            ("stream", &["quality", "format", "cache", "size", "fixed"][..]),
+            (
+                "output",
+                &[
+                    "list",
+                    "default",
+                    "exclusive",
+                    "bitperfect",
+                    "backend",
+                    "alsa",
+                ][..],
+            ),
+        ] {
+            let spec = COMMANDS
+                .iter()
+                .find(|spec| spec.name == name)
+                .expect("command spec");
+            for literal in literals {
+                assert!(
+                    spec.usage.contains(literal),
+                    "{name} usage does not advertise {literal}: {}",
+                    spec.usage
+                );
+                let CommandForm::Advanced(ArgHints::Values(values)) = spec.form else {
+                    panic!("{name} must be an advanced values command");
+                };
+                assert!(
+                    values.contains(literal),
+                    "{name} hints do not advertise {literal}"
+                );
+            }
+        }
     }
 
     #[test]

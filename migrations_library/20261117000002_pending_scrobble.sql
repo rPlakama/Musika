@@ -1,5 +1,5 @@
--- See migrations_status/20261117000001_pending_scrobble.sql: the production
--- status pool is the library file, so the retry queue must exist here too.
+-- SCROBBLE-1: completed plays whose submission failed or happened offline.
+-- The status pool aliases this library file; this is the one schema owner.
 CREATE TABLE IF NOT EXISTS pending_scrobble (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     song_id    TEXT    NOT NULL,

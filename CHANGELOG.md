@@ -5,6 +5,11 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Inheritance cleanup (R1):** one status-schema owner (the production
+  library migration tree; tests use the same tree instead of a parallel
+  `migrations_status`), command metadata now advertises `stream fixed` and the
+  output mode/backend words, and UI settings requests go straight to the
+  playback service instead of travelling as core→UI `Event`s. Protocol v4.
 - **High-resolution collage art:** playlist/radio header panes now resolve the
   provider original (the same source as the page hero) instead of the 320 px
   row thumbnail, so large collage cells are no longer visibly softened.

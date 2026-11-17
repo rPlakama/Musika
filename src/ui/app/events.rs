@@ -7,30 +7,6 @@ impl AppRoot {
         match event {
             Event::Command(_) => {}
             Event::IpcRan(command) => self.toast_ipc(&command),
-            Event::OutputDevice { .. } => {
-                // A UI request; the daemon consumes it and never echoes it.
-            }
-            Event::StreamChange(_) => {
-                // A UI request; the daemon consumes it.
-            }
-            Event::SleepTimer(_) => {
-                // A UI request; the daemon consumes it.
-            }
-            Event::Scrobble(_) => {
-                // A UI request; the daemon consumes it.
-            }
-            Event::CycleEq => {
-                // A UI request; the daemon consumes it.
-            }
-            Event::CrossfadeChange(_) => {
-                // A UI request; the daemon consumes it.
-            }
-            Event::OutputMode { .. } => {
-                // A UI request; the daemon consumes it.
-            }
-            Event::OutputBackend { .. } => {
-                // A UI request; the daemon consumes it.
-            }
             Event::EqChanged(name) => {
                 let changed = self.eq_profile != name;
                 self.eq_profile = name;

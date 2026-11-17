@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
-//! Core/UI IPC protocol v3: framed messages over a Unix socket.
+//! Core/UI IPC protocol v4: framed messages over a Unix socket.
 //!
 //! The daemon (`musika`) owns playback and all state; `musika-ui` is a client.
 //! This module is the one wire contract between them:
@@ -49,7 +49,7 @@ use crate::bridge::Event;
 use crate::player::{Repeat, State, Track};
 
 /// Wire protocol version. Bumped whenever a message layout changes.
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 /// Largest accepted frame. The queue row chunks are sized well below this.
 pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;

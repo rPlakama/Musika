@@ -31,7 +31,6 @@ fn main() {
         "migrations_media",
         "migrations_playlist",
         "migrations_search",
-        "migrations_status",
         "src/icons",
     ] {
         println!("cargo:rerun-if-changed={dir}");

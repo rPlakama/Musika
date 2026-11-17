@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::model::PageHeader;
 use tokio::sync::mpsc::UnboundedSender;
@@ -43,37 +43,12 @@ pub enum Event {
     Connection {
         online: bool,
     },
-    /// UI request: retarget the playback stream.
-    OutputDevice {
-        device: Option<String>,
-        follow_default: bool,
-    },
     /// Core answer: the available PipeWire output sinks.
     OutputDevices {
         devices: Vec<crate::player::pipewire::OutputDevice>,
     },
-    /// UI request: change the stream-quality/cache policy.
-    StreamChange(crate::playback_settings::StreamChange),
-    /// UI request: arm/cancel the sleep timer (minutes, `None` = off).
-    SleepTimer(Option<u64>),
-    /// UI request: enable/disable scrobbling.
-    Scrobble(bool),
-    /// UI request: cycle the EQ profile through OFF.
-    CycleEq,
     /// Core answer: the active EQ profile (`None` = off).
     EqChanged(Option<String>),
-    /// UI request: change one crossfade field.
-    CrossfadeChange(crate::playback_settings::CrossfadeChange),
-    /// UI request: exclusive/bit-perfect output mode.
-    OutputMode {
-        exclusive: Option<bool>,
-        bit_perfect: Option<bool>,
-    },
-    /// UI request: select the output backend/ALSA device.
-    OutputBackend {
-        backend: Option<crate::playback_settings::OutputBackend>,
-        device: Option<String>,
-    },
     LoggedIn {
         server_url: String,
         username: String,
@@ -339,6 +314,10 @@ pub struct Bridge {
     search_generation: Arc<AtomicU64>,
     marks_generation: AtomicU64,
     offline: AtomicBool,
+    /// Attached by the daemon immediately after the playback service is
+    /// created. Settings requests go straight to the service; only core→UI
+    /// notifications use `Event`.
+    playback: OnceLock<crate::daemon::playback::PlaybackControl>,
     palette_inflight: Arc<Mutex<Option<String>>>,
 }
 
@@ -351,10 +330,26 @@ impl Bridge {
             search_generation: Arc::new(AtomicU64::new(0)),
             marks_generation: AtomicU64::new(0),
             offline: AtomicBool::new(false),
+            playback: OnceLock::new(),
             palette_inflight: Arc::new(Mutex::new(None)),
         };
         bridge.refresh_header();
         bridge
+    }
+
+    pub(crate) fn attach_playback(
+        &self,
+        playback: crate::daemon::playback::PlaybackControl,
+    ) {
+        if self.playback.set(playback).is_err() {
+            crate::debug_log!("bridge: playback control was already attached");
+        }
+    }
+
+    fn send_playback(&self, input: crate::daemon::playback::PlaybackInput) {
+        if let Some(playback) = self.playback.get() {
+            let _ = playback.send(input);
+        }
     }
 
     /// Emits a user-facing error event (toast) for a core-side rejection.

@@ -181,10 +181,9 @@ impl Bridge {
         self.offline.store(offline, Ordering::Relaxed);
     }
 
-    /// UI request: retarget the output stream (or follow the default). The
-    /// daemon owns the playback control, so this travels as an event.
+    /// UI request: retarget the output stream (or follow the default).
     pub fn set_output_device(&self, device: Option<String>, follow_default: bool) {
-        _ = self.tx.send(Event::OutputDevice {
+        self.send_playback(crate::daemon::playback::PlaybackInput::SetOutputDevice {
             device,
             follow_default,
         });
@@ -211,22 +210,22 @@ impl Bridge {
 
     /// UI request: change one stream-quality/cache field.
     pub fn set_stream_change(&self, change: crate::playback_settings::StreamChange) {
-        _ = self.tx.send(Event::StreamChange(change));
+        self.send_playback(crate::daemon::playback::PlaybackInput::ApplyStreamChange(change));
     }
 
     /// UI request: arm/cancel the sleep timer.
     pub fn set_sleep_timer(&self, minutes: Option<u64>) {
-        _ = self.tx.send(Event::SleepTimer(minutes));
+        self.send_playback(crate::daemon::playback::PlaybackInput::SetSleepTimer(minutes));
     }
 
     /// UI request: enable/disable scrobbling.
     pub fn set_scrobble(&self, enabled: bool) {
-        _ = self.tx.send(Event::Scrobble(enabled));
+        self.send_playback(crate::daemon::playback::PlaybackInput::SetScrobble(enabled));
     }
 
     /// UI request: cycle the EQ profile through OFF.
     pub fn cycle_eq(&self) {
-        _ = self.tx.send(Event::CycleEq);
+        self.send_playback(crate::daemon::playback::PlaybackInput::CycleEq);
     }
 
     pub fn eq_changed(&self, name: Option<String>) {
@@ -235,12 +234,12 @@ impl Bridge {
 
     /// UI request: change one crossfade field.
     pub fn set_crossfade_change(&self, change: crate::playback_settings::CrossfadeChange) {
-        _ = self.tx.send(Event::CrossfadeChange(change));
+        self.send_playback(crate::daemon::playback::PlaybackInput::SetCrossfadeConfig(change));
     }
 
     /// UI request: change exclusive/bit-perfect output mode.
     pub fn set_output_mode(&self, exclusive: Option<bool>, bit_perfect: Option<bool>) {
-        _ = self.tx.send(Event::OutputMode {
+        self.send_playback(crate::daemon::playback::PlaybackInput::SetOutputMode {
             exclusive,
             bit_perfect,
         });
@@ -252,7 +251,9 @@ impl Bridge {
         backend: Option<crate::playback_settings::OutputBackend>,
         device: Option<String>,
     ) {
-        _ = self.tx.send(Event::OutputBackend { backend, device });
+        self.send_playback(
+            crate::daemon::playback::PlaybackInput::SetOutputBackend { backend, device },
+        );
     }
 
     pub(crate) fn is_offline(&self) -> bool {

@@ -101,7 +101,7 @@ mpris_position:5000000
 
 | Command | Usage | What it does |
 | --- | --- | --- |
-| `sync` | `sync [all|repair]` | Incremental sync by default; `all` performs the deep pass; `repair` rebuilds the search/library indexes. |
+| `sync` | `sync [all|repair]` | Incremental sync by default; `all` performs the deep pass; `repair` rebuilds the search/library indexes. The first successful server ping after the app opens (or after a login) starts one `sync all` automatically. |
 | `refresh` | `refresh` | Start an incremental sync. |
 | `wipe` | `wipe <album|lyrics|covers>` | Clear downloaded album files, cached lyrics, or cached covers. |
 | `wipe_databases` | `wipe_databases` | Open the destructive database wipe chooser; this is not an immediate wipe. |

@@ -96,6 +96,18 @@ impl std::ops::DerefMut for Track {
     }
 }
 
+/// The one user-facing message for a track the server was supposed to serve
+/// but could not: it is not in the download tier, and the stream never opened.
+/// Shared by the core decision and the daemon's toast so the wording cannot
+/// drift.
+pub(crate) const SERVER_UNAVAILABLE: &str = "Unable to play track, server unavailable";
+
+/// A queue row whose URL leaves the machine (the only rows that need a live
+/// server; downloaded blobs are `file://`).
+pub(crate) fn is_remote_url(url: &str) -> bool {
+    url.starts_with("http://") || url.starts_with("https://")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Repeat {
     #[default]

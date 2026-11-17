@@ -128,7 +128,7 @@ impl Bridge {
                 if let Err(err) = result {
                     _ = tx.send(Event::Error(format!("Could not remove download: {err:#}")));
                 } else {
-                    _ = tx.send(Event::DownloadSettled);
+                    send_download_settled(&tx);
                 }
                 return;
             }
@@ -154,7 +154,7 @@ impl Bridge {
                     _ = tx.send(Event::Error(format!("Download failed: {err:#}")));
                 }
             }
-            _ = tx.send(Event::DownloadSettled);
+            send_download_settled(&tx);
         });
     }
 

@@ -54,6 +54,14 @@ work, including the command line.
 | `Shift` + click | Extend the visual selection to the row |
 | Mouse Back / Forward | Previous / next place in the travel log |
 
+The **Downloaded** order is a filter as well as an order: Albums and Songs
+cycle Artist → Name → Year → Recent → Downloaded, Artists cycle Name → Albums
+→ Downloaded, and Playlists cycle Name → Downloaded. It lists only local
+downloads. When the core's 5 s server ping fails, every scope serves that
+downloaded catalog (the top bar reads **Offline**) and an undownloaded remote
+row stops playback with “Unable to play track, server unavailable”; the first
+successful ping restores the full library, without a toast.
+
 Visual selections are also addressable from the command line and the IPC
 socket: `: playlist add selected; "Rated R Mix"` appends every selected row to
 a playlist, expanding album and artist rows to their songs.

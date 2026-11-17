@@ -182,8 +182,10 @@ fn order_cycles_both_ways() {
     assert_eq!(cycle_order("Artist", 1), "Name");
     assert_eq!(cycle_order("Name", 1), "Year");
     assert_eq!(cycle_order("Year", 1), "Recent");
-    assert_eq!(cycle_order("Recent", 1), "Artist");
-    assert_eq!(cycle_order("Artist", -1), "Recent");
+    assert_eq!(cycle_order("Recent", 1), DOWNLOADED_ORDER);
+    assert_eq!(cycle_order(DOWNLOADED_ORDER, 1), "Artist");
+    assert_eq!(cycle_order("Artist", -1), DOWNLOADED_ORDER);
+    assert_eq!(cycle_order(DOWNLOADED_ORDER, -1), "Recent");
     assert_eq!(cycle_order("Recent", -1), "Year");
     assert_eq!(cycle_order("Year", -1), "Name");
     // Unknown values snap back to the first order.
@@ -193,9 +195,17 @@ fn order_cycles_both_ways() {
 #[test]
 fn artist_order_cycles_both_ways() {
     assert_eq!(cycle_artist_order("Name", 1), "Albums");
-    assert_eq!(cycle_artist_order("Albums", 1), "Name");
-    assert_eq!(cycle_artist_order("Name", -1), "Albums");
+    assert_eq!(cycle_artist_order("Albums", 1), DOWNLOADED_ORDER);
+    assert_eq!(cycle_artist_order(DOWNLOADED_ORDER, 1), "Name");
+    assert_eq!(cycle_artist_order("Name", -1), DOWNLOADED_ORDER);
     assert_eq!(cycle_artist_order("", 1), "Albums");
+}
+
+#[test]
+fn playlist_order_cycles_both_ways() {
+    assert_eq!(cycle_playlist_order("Name", 1), DOWNLOADED_ORDER);
+    assert_eq!(cycle_playlist_order(DOWNLOADED_ORDER, 1), "Name");
+    assert_eq!(cycle_playlist_order("Name", -1), DOWNLOADED_ORDER);
 }
 
 #[tokio::test]

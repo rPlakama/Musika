@@ -791,6 +791,13 @@ fn playlist_segment_row(row: &PlaylistListRow) -> crate::model::Row {
 
 /// The segment payload: every playlist, m3u and Subsonic, as typed list rows.
 pub async fn list(dbs: &Dbs) -> Result<Vec<crate::model::Row>> {
+    list_filtered(dbs, false).await
+}
+
+/// [`list`] restricted to playlists holding at least one downloaded song.
+/// Offline mode and the downloaded ordering use this so a playlist whose
+/// entries are all server-only cannot lead to an empty, unplayable page.
+pub async fn list_filtered(dbs: &Dbs, downloaded_only: bool) -> Result<Vec<crate::model::Row>> {
     let rows: Vec<PlaylistListRow> = sqlx::query_as(
         "SELECT id, source, name, song_count, duration, owner
          FROM playlist
@@ -799,7 +806,27 @@ pub async fn list(dbs: &Dbs) -> Result<Vec<crate::model::Row>> {
     )
     .fetch_all(&dbs.playlist)
     .await?;
-    Ok(rows.iter().map(playlist_segment_row).collect())
+    if !downloaded_only {
+        return Ok(rows.iter().map(playlist_segment_row).collect());
+    }
+    let Some(filter) = crate::offline::load(dbs, true).await? else {
+        return Ok(rows.iter().map(playlist_segment_row).collect());
+    };
+    let entries: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT playlist_id, song_id FROM playlist_song")
+            .fetch_all(&dbs.playlist)
+            .await?;
+    let mut playable: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (playlist_id, song_id) in entries {
+        if song_id.is_some_and(|song_id| filter.contains_song(&song_id)) {
+            playable.insert(playlist_id);
+        }
+    }
+    Ok(rows
+        .iter()
+        .filter(|row| playable.contains(&row.id))
+        .map(playlist_segment_row)
+        .collect())
 }
 
 /// M2: fetch one Subsonic playlist's contents on demand. The list refresh only
@@ -1031,6 +1058,7 @@ async fn store_deduped_page_rows(
 pub async fn page(
     dbs: &Dbs,
     playlist_id: &str,
+    offline: bool,
 ) -> Result<(crate::model::PageHeader, Vec<crate::model::Row>)> {
     let mut playlist = playlist_page_row(dbs, playlist_id).await?;
     let mut rows = playlist_song_rows(dbs, playlist_id).await?;
@@ -1040,7 +1068,10 @@ pub async fn page(
     // An empty page always fetches and a count mismatch fetches again so the
     // page cannot show fewer songs than its own header claims; a cached row
     // list with duplicates fetches so the server copy can be cleaned too.
-    let stale = playlist.source == "subsonic"
+    // Offline pages never touch the server: the cached entries are the
+    // catalog, and a failed request would only delay the local view.
+    let stale = !offline
+        && playlist.source == "subsonic"
         && (rows.is_empty()
             || rows.len() as i64 != playlist.song_count
             || has_duplicate_song_rows(&rows));
@@ -1199,6 +1230,11 @@ pub async fn page(
         rating: 0,
         starred: false,
     };
+    // Filter only the rendered rows: the cache and the header keep describing
+    // the whole playlist, while an offline page shows just what is playable.
+    if offline && let Some(filter) = crate::offline::load(dbs, true).await? {
+        list_rows.retain(|row| filter.contains_song(&row.song_id));
+    }
     Ok((header, list_rows))
 }
 

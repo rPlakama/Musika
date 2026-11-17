@@ -173,11 +173,32 @@ impl Bridge {
                     )));
                 }
             }
-            _ = tx.send(Event::DownloadSettled);
+            send_download_settled(&tx);
         });
     }
 
     pub fn set_offline(&self, offline: bool) {
         self.offline.store(offline, Ordering::Relaxed);
+    }
+
+    pub(crate) fn is_offline(&self) -> bool {
+        self.offline.load(Ordering::Relaxed)
+    }
+
+    /// Applies a connectivity verdict from the background health probe.
+    ///
+    /// The bridge flag and the session flag move together: list loaders read
+    /// the former, the cover/network paths read the latter. Only a transition
+    /// reaches the UI, and it is deliberately toast-free — the 5 s probe must
+    /// never spam the user.
+    pub(crate) fn note_connection(&self, online: bool) {
+        let was_online = !self.offline.swap(!online, Ordering::Relaxed);
+        crate::session::set_online(online);
+        if was_online != online {
+            _ = self.tx.send(Event::Connection { online });
+            if online {
+                self.refresh_header();
+            }
+        }
     }
 }

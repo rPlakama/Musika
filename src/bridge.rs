@@ -37,6 +37,12 @@ pub enum Event {
     LoginRequired {
         offline_available: bool,
     },
+    /// The server health probe changed the effective connection state. No
+    /// toast is attached: pings are a background invariant, and the UI only
+    /// refreshes its catalog on a transition.
+    Connection {
+        online: bool,
+    },
     LoggedIn {
         server_url: String,
         username: String,
@@ -372,6 +378,7 @@ mod serde_tests {
                 ),
             },
             Event::IpcRan("playlist add selected; \"Mix\"".to_string()),
+            Event::Connection { online: false },
         ] {
             let json = serde_json::to_string(&event).unwrap();
             let back: Event = serde_json::from_str(&json).unwrap();

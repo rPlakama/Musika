@@ -97,6 +97,18 @@ pub(crate) fn dbs_with_media(library: &SqlitePool, media: &SqlitePool) -> Dbs {
     }
 }
 
+/// [`dbs_with_media`] with a real download ledger (downloaded-order tests).
+pub(crate) fn dbs_with_download(
+    library: &SqlitePool,
+    media: &SqlitePool,
+    download: &SqlitePool,
+) -> Dbs {
+    Dbs {
+        download: download.clone(),
+        ..dbs_with_media(library, media)
+    }
+}
+
 /// Playlist tests: the playlist database is separate from the library, and
 /// the remote-create test keeps its own credential pool.
 pub(crate) fn dbs_with_credentials(

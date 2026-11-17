@@ -7,6 +7,32 @@ impl AppRoot {
         match event {
             Event::Command(_) => {}
             Event::IpcRan(command) => self.toast_ipc(&command),
+            Event::Connection { online } => {
+                let changed = self.connection_offline == online;
+                self.connection_offline = !online;
+                if !changed {
+                    return;
+                }
+                // The catalog behind every list changed shape (full library
+                // vs downloads only). Re-run the active surfaces so a row the
+                // server no longer serves cannot stay clickable. The health
+                // probe emits this, so there is deliberately no toast.
+                self.error = if online {
+                    None
+                } else {
+                    Some("Offline · downloaded catalog only".to_string())
+                };
+                self.marks.signature = None;
+                self.reload();
+                if let Some(page) = self.page.as_ref() {
+                    let descriptor = page.descriptor.clone();
+                    self.bridge.load_page(descriptor);
+                }
+                if let Some(search) = self.search.as_ref() {
+                    // Even the empty query (most-played) is catalog-backed.
+                    self.bridge.search(search.editor.text.clone());
+                }
+            }
             Event::Header {
                 server_url,
                 username,
@@ -303,6 +329,14 @@ impl AppRoot {
                 self.push_toast("Download updated.".to_string(), ToastKind::Notice, None);
                 self.marks.signature = None;
                 self.ensure_marks();
+                // The downloaded-catalog views gain or lose rows with the
+                // ledger, so they must be rebuilt (marks alone cannot add a
+                // row the server-backed list never had).
+                if self.connection_offline
+                    || self.view.order_label() == crate::library::DOWNLOADED_ORDER
+                {
+                    self.reload();
+                }
                 if let Some((kind, id)) = self.page.as_ref().and_then(|page| {
                     matches!(page.descriptor.kind, PageKind::Album | PageKind::Artist)
                         .then(|| (page.descriptor.kind, page.descriptor.id.clone()))
@@ -437,6 +471,7 @@ impl AppRoot {
                 offline,
             } => {
                 self.reset_for_account();
+                self.connection_offline = offline;
                 self.login = None;
                 self.header = Some(Header {
                     server_url,
@@ -779,6 +814,7 @@ impl AppRoot {
         // it replay a fresh state/queue rather than mutating the view here.
         self.current_cover.clear();
         self.playback_error = None;
+        self.connection_offline = false;
         self.view = ViewState::default();
         self.generation = 0;
         self.page = None;

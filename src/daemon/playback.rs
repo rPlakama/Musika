@@ -49,6 +49,8 @@ pub(crate) enum PlaybackInput {
     },
     /// Re-send the full playback state and queue to every UI client.
     Resync { conn: u64, req: u32 },
+    /// Connectivity verdict from the daemon's health probe.
+    SetOffline(bool),
     Shutdown,
 }
 
@@ -65,6 +67,7 @@ impl std::fmt::Debug for PlaybackInput {
             Self::Resync { conn, req } => {
                 write!(formatter, "Resync {{ conn: {conn}, req: {req} }}")
             }
+            Self::SetOffline(offline) => write!(formatter, "SetOffline({offline})"),
             Self::Shutdown => write!(formatter, "Shutdown"),
         }
     }
@@ -93,6 +96,10 @@ pub(crate) enum PlaybackOutput {
     },
     Error(String),
     EngineUnavailable(String),
+    /// A remote row could not be opened because the server is unreachable.
+    /// The daemon switches the whole app to the downloaded catalog and shows
+    /// one canonical toast.
+    ServerUnavailable,
 }
 
 /// Read-only projection of the playback thread's state.
@@ -396,6 +403,10 @@ fn run(
                 force = true;
                 queue_reset = true;
             }
+            Some(ServiceInput::Command(PlaybackInput::SetOffline(offline))) => {
+                let outcome = service.core.set_offline(offline);
+                apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
+            }
             Some(ServiceInput::Command(PlaybackInput::Resync { conn, req })) => {
                 force = true;
                 queue_reset = true;
@@ -425,12 +436,28 @@ fn run(
                 | EngineEvent::Failed { .. }
                 | EngineEvent::SinkRecovered
                 | EngineEvent::LoadingCleared) => {
-                    if let EngineEvent::Failed { message } = &event {
-                        service.last_error = Some(message.clone());
-                        _ = service.outputs.send(PlaybackOutput::Error(message.clone()));
-                    }
+                    let failure = if let EngineEvent::Failed { message } = &event {
+                        Some(message.clone())
+                    } else {
+                        None
+                    };
                     let now = crate::linux::monotonic_ns();
                     let outcome = service.core.on_engine(event, now);
+                    if outcome.server_unavailable {
+                        // The core already chose the canonical message; the
+                        // outcome emits `ServerUnavailable` once.
+                        service.last_error = Some(crate::player::SERVER_UNAVAILABLE.to_string());
+                    } else if let Some(message) = failure {
+                        // A paused restore's pre-open failure is reported on
+                        // the play attempt, not as a startup toast.
+                        if outcome.deferred_failure {
+                            service.last_error =
+                                Some(crate::player::SERVER_UNAVAILABLE.to_string());
+                        } else {
+                            service.last_error = Some(message.clone());
+                            _ = service.outputs.send(PlaybackOutput::Error(message));
+                        }
+                    }
                     apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
                 }
             },
@@ -473,6 +500,9 @@ fn apply_outcome(
     queue_reset: &mut bool,
 ) {
     service.send_audio(outcome);
+    if outcome.server_unavailable {
+        _ = service.outputs.send(PlaybackOutput::ServerUnavailable);
+    }
     if let Some(delta) = outcome.delta.clone() {
         _ = service.outputs.send(PlaybackOutput::Delta(delta));
         *force = true;

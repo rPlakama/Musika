@@ -254,9 +254,12 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn home_bar(&self, cx: &Context<Self>) -> gpui::AnyElement {
-        let (welcome, offline) = match self.header.as_ref() {
-            Some(header) => (format!("Welcome, {}", header.username), false),
-            None => ("Welcome".to_string(), false),
+        let offline = self.connection_offline;
+        let welcome = match (self.header.as_ref(), offline) {
+            (Some(header), true) => format!("Welcome, {} · Offline", header.username),
+            (Some(header), false) => format!("Welcome, {}", header.username),
+            (None, true) => "Welcome · Offline".to_string(),
+            (None, false) => "Welcome".to_string(),
         };
         let sync_label = self
             .header
@@ -414,6 +417,19 @@ impl AppRoot {
             .px_4()
             .gap_2()
             .child(identity_viewport);
+        if self.connection_offline {
+            row = row.child(
+                div()
+                    .flex_none()
+                    .px_2()
+                    .py_1()
+                    .rounded_full()
+                    .bg(rgb(palette::tertiary_container()))
+                    .text_size(px(10.0))
+                    .text_color(rgb(palette::on_tertiary_container()))
+                    .child("Offline"),
+            );
+        }
         match mode {
             SuperiorMode::Album | SuperiorMode::Artist => {
                 if page.starred {

@@ -5,12 +5,13 @@ use super::*;
 impl Bridge {
     pub fn restore(&self) {
         let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let Ok(Some(status)) = crate::status::load(&dbs.status).await else {
                 return;
             };
-            let resume = crate::queue::resume(&dbs, &status, false).await.ok();
+            let resume = crate::queue::resume(&dbs, &status, offline).await.ok();
             let tracks = resume
                 .as_ref()
                 .map(|resume| resume.tracks.clone())
@@ -155,8 +156,9 @@ impl Bridge {
 
     pub fn play_song(&self, song_id: String, order: String) {
         let tx = self.tx.clone();
+        let offline = self.offline.load(Ordering::Relaxed);
         crate::app::runtime().spawn(async move {
-            let event = match queue_for_song(&song_id, &order).await {
+            let event = match queue_for_song(&song_id, &order, offline).await {
                 Ok((tracks, start)) => {
                     crate::debug_log!("GPUI: queue {} tracks start {}", tracks.len(), start);
                     Event::Queue { tracks, start }

@@ -185,9 +185,23 @@ impl AppRoot {
                 + effect_width(crossfade_on)
                 + effect_width(normalization_on),
         );
-        let cover_focus = self.fullscreen_focus == FullscreenFocus::Cover;
-        let title_focus = self.fullscreen_focus == FullscreenFocus::Title;
-        let lyrics_focus = self.fullscreen_focus == FullscreenFocus::Lyrics;
+        // The same predicate that blocks Tab in `on_tab` gates the focus
+        // chrome: while the lyrics overlay owns the keyboard, the player
+        // underneath must not advertise a focused pane. Keep the 1 px border
+        // box so nothing shifts, but paint it transparent.
+        let focus_chrome = self.fullscreen_focus_walk_available();
+        let cover_focus = focus_chrome && self.fullscreen_focus == FullscreenFocus::Cover;
+        let title_focus = focus_chrome && self.fullscreen_focus == FullscreenFocus::Title;
+        let lyrics_focus = focus_chrome && self.fullscreen_focus == FullscreenFocus::Lyrics;
+        let focus_border = |highlighted: bool| {
+            if !focus_chrome {
+                gpui::rgba(0x0000_0000)
+            } else if highlighted {
+                rgb(palette::primary())
+            } else {
+                rgb(palette::outline_variant())
+            }
+        };
         let cover_anchor_slot = self.fullscreen_anchors.clone();
         let title_anchor_slot = self.fullscreen_anchors.clone();
         let position = self.player.position_now();
@@ -259,11 +273,7 @@ impl AppRoot {
                             .overflow_hidden()
                             .rounded_md()
                             .border_1()
-                            .border_color(rgb(if cover_focus {
-                                palette::primary()
-                            } else {
-                                palette::outline_variant()
-                            }))
+                            .border_color(focus_border(cover_focus))
                             .on_children_prepainted(move |bounds, _, _| {
                                 if let Some(bounds) = bounds.first() {
                                     let x = f32::from(bounds.origin.x)
@@ -307,11 +317,7 @@ impl AppRoot {
                             .min_w_0()
                             .rounded_md()
                             .border_1()
-                            .border_color(rgb(if lyrics_focus {
-                                palette::primary()
-                            } else {
-                                palette::outline_variant()
-                            }))
+                            .border_color(focus_border(lyrics_focus))
                             .overflow_hidden()
                             .relative()
                             .on_scroll_wheel(cx.listener(Self::on_lyrics_wheel))
@@ -361,11 +367,7 @@ impl AppRoot {
                             .w_full()
                             .rounded_md()
                             .border_1()
-                            .border_color(rgb(if title_focus {
-                                palette::primary()
-                            } else {
-                                palette::outline_variant()
-                            }))
+                            .border_color(focus_border(title_focus))
                             .px_2()
                             .py_1()
                             .on_children_prepainted(move |bounds, _, _| {

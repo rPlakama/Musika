@@ -352,6 +352,57 @@ async fn create_local_writes_a_named_m3u_and_scans_it() {
 }
 
 #[tokio::test]
+async fn downloaded_scope_needs_a_downloaded_entry() {
+    let _guard = lock_offline_catalog().await;
+    crate::offline::clear_cache();
+    let library = library_pool().await;
+    let playlist = playlist_pool().await;
+    let download = download_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    let mut dbs = playlist_dbs(&library, &playlist);
+    dbs.download = download.clone();
+
+    for (id, title) in [("s1", "First"), ("s2", "Second")] {
+        sqlx::query(
+            "INSERT INTO songs (id, title, artist_id, album_id) VALUES (?1, ?2, 'a1', 'al1')",
+        )
+        .bind(id)
+        .bind(title)
+        .execute(&library)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO playlist (id, source, name, song_count, fetched_at) VALUES
+             ('p1', 'subsonic', 'Downloaded Mix', 1, 0),
+             ('p2', 'subsonic', 'Server Only', 1, 0)",
+    )
+    .execute(&playlist)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO playlist_song (playlist_id, position, song_id, title) VALUES
+             ('p1', 0, 's1', 'First'),
+             ('p2', 0, 's2', 'Second')",
+    )
+    .execute(&playlist)
+    .await
+    .unwrap();
+    crate::download::set_state(&download, "s1", crate::download::DONE, None)
+        .await
+        .unwrap();
+
+    let lists = list_filtered(&dbs, true).await.unwrap();
+    assert_eq!(lists.len(), 1);
+    assert_eq!(lists[0].id, "p1");
+    // The unfiltered segment still shows both.
+    assert_eq!(list(&dbs).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn create_rejects_empty_names_and_empty_song_lists() {
     let library = playlist_pool().await;
     let playlist = playlist_pool().await;
@@ -766,7 +817,7 @@ async fn page_json_refreshes_a_stale_subsonic_cache() {
     .unwrap();
 
     let dbs = dbs_with_credentials(&credentials, &library, &playlist);
-    let (header, rows) = page(&dbs, "pl1").await.unwrap();
+    let (header, rows) = page(&dbs, "pl1", false).await.unwrap();
     assert_eq!(header.title, "Too Much");
     assert_eq!(rows.len(), 3, "the page must show every server entry");
     assert_eq!(rows[0].title, "Too Much");
@@ -1753,7 +1804,7 @@ async fn page_hides_and_persists_deduplicated_cached_rows() {
     // cache to work with.
     let dbs = playlist_dbs(&library, &playlist);
 
-    let (header, rows) = page(&dbs, "pl1").await.unwrap();
+    let (header, rows) = page(&dbs, "pl1", false).await.unwrap();
     assert_eq!(header.subtitle, "Playlist · 3 songs");
     let ids: Vec<&str> = rows.iter().map(|row| row.item.id.as_str()).collect();
     assert_eq!(ids, vec!["s1", "s2", "s3"], "keep first, drop later copies");
@@ -1781,7 +1832,7 @@ async fn page_hides_and_persists_deduplicated_cached_rows() {
     assert_eq!((count, duration), (3, 600));
 
     // The next load sees a consistent page: no repeat dedupe/refetch needed.
-    let (header, rows) = page(&dbs, "pl1").await.unwrap();
+    let (header, rows) = page(&dbs, "pl1", false).await.unwrap();
     assert_eq!(header.subtitle, "Playlist · 3 songs");
     assert_eq!(rows.len(), 3);
 }
@@ -1983,7 +2034,7 @@ async fn server_duplicate_cleanup_rebuilds_order_and_counts() {
     .unwrap();
     let dbs = dbs_with_credentials(&credentials, &library, &playlist);
 
-    let (header, rows) = page(&dbs, "pl1").await.unwrap();
+    let (header, rows) = page(&dbs, "pl1", false).await.unwrap();
     assert_eq!(header.subtitle, "Playlist · 3 songs");
     let ids: Vec<&str> = rows.iter().map(|row| row.item.id.as_str()).collect();
     assert_eq!(ids, vec!["s1", "s2", "s3"], "keep first, drop the later copy");

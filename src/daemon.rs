@@ -45,6 +45,30 @@ enum Lifecycle {
     Show,
 }
 
+/// Server health cadence. One cheap `ping` every five seconds is the contract:
+/// while the probe fails the app serves the downloaded catalog only, and the
+/// first successful probe restores online behaviour without a toast.
+const CONNECTIVITY_PROBE: Duration = Duration::from_secs(5);
+/// A probe that outlives this budget counts as a failure, so a wedged request
+/// can never stall the next tick behind the inflight guard.
+const CONNECTIVITY_TIMEOUT: Duration = Duration::from_secs(4);
+
+/// One health probe against the active account's server.
+///
+/// Credentials come from the stored account, so this works for both a normal
+/// and an offline login; without an account there is nothing to probe.
+async fn server_reachable() -> bool {
+    let Some(dbs) = crate::app::dbs() else {
+        return false;
+    };
+    let Ok(client) = crate::session::client(&dbs).await else {
+        return false;
+    };
+    tokio::time::timeout(CONNECTIVITY_TIMEOUT, client.ping())
+        .await
+        .is_ok_and(|result| result.is_ok())
+}
+
 /// Services shared with the synchronous text-socket dispatcher.
 #[derive(Clone)]
 struct Services {
@@ -157,16 +181,27 @@ async fn run_async() {
     let mut page: LastPage = None;
     let mut header: Option<Event> = None;
     let mut auth: Option<Event> = None;
+    let mut connection: Option<Event> = None;
     let mut ui_clients: HashMap<u64, UiClient> = HashMap::new();
     let mut ui_child: Option<std::process::Child> = None;
     let mut status_dirty = true;
     let status_inflight = Arc::new(AtomicBool::new(false));
+    // A stored account means the shell is (or will be) a live session; a
+    // logout clears this until the next successful login.
+    let mut connectivity_active = crate::accounts::active_identity().is_some();
+    let connectivity_inflight = Arc::new(AtomicBool::new(false));
+    // One full pass is owed per app opening (and per account switch): the
+    // first health probe that reaches the server claims it. Later reconnects
+    // must not trigger another deep sync.
+    let startup_sync_owed = Arc::new(AtomicBool::new(connectivity_active));
     let restore_started = Instant::now();
-    restore_status(&playback_control, &mut page).await;
+    restore_status(&playback_control, &mut page, bridge.is_offline()).await;
     crate::startup::trace_elapsed("status.restore", restore_started.elapsed());
 
     let mut ticker = tokio::time::interval(Duration::from_secs(1));
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut connectivity_tick = tokio::time::interval(CONNECTIVITY_PROBE);
+    connectivity_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut last_status = Instant::now();
     let mut quit = false;
     crate::startup::trace("daemon.ready");
@@ -176,10 +211,50 @@ async fn run_async() {
             Some(event) = event_rx.recv() => {
                 match &event {
                     Event::Header { .. } => header = Some(event.clone()),
-                    Event::LoginRequired { .. }
-                    | Event::LoggedIn { .. }
-                    | Event::LoggedOut
-                    | Event::AccountRemoved { .. } => auth = Some(event.clone()),
+                    Event::Connection { .. } => connection = Some(event.clone()),
+                    Event::LoginRequired { .. } => {
+                        auth = Some(event.clone());
+                        connection = None;
+                        connectivity_active = false;
+                        startup_sync_owed.store(false, Ordering::Release);
+                        let _ = playback_control.send(PlaybackInput::SetOffline(true));
+                    }
+                    Event::LoggedIn { offline, .. } => {
+                        auth = Some(event.clone());
+                        connection = Some(Event::Connection { online: !offline });
+                        connectivity_active = true;
+                        let _ = playback_control.send(PlaybackInput::SetOffline(*offline));
+                        if *offline {
+                            // Offline login: the first successful probe owns
+                            // the full pass.
+                            startup_sync_owed.store(true, Ordering::Release);
+                        } else {
+                            // `authenticate` already answered a ping, so the
+                            // sync can start now instead of waiting a tick.
+                            startup_sync_owed.store(false, Ordering::Release);
+                            bridge.sync(SyncMode::All);
+                        }
+                    }
+                    Event::LoggedOut => {
+                        auth = Some(event.clone());
+                        connection = None;
+                        connectivity_active = false;
+                        startup_sync_owed.store(false, Ordering::Release);
+                        let _ = playback_control.send(PlaybackInput::SetOffline(true));
+                    }
+                    Event::AccountRemoved { next, .. } => {
+                        auth = Some(event.clone());
+                        connection = None;
+                        connectivity_active = next.is_some();
+                        startup_sync_owed.store(next.is_some(), Ordering::Release);
+                    }
+                    Event::AuthError(_) => {
+                        // A failed login is not a live session; a later
+                        // successful login re-arms the probe.
+                        if header.is_none() {
+                            connectivity_active = false;
+                        }
+                    }
                     Event::OpenPage { descriptor } => update_page(&mut page, descriptor),
                     Event::OpenPageReveal { descriptor, .. } => update_page(&mut page, descriptor),
                     Event::Queue { tracks, start } => {
@@ -245,8 +320,7 @@ async fn run_async() {
                     Event::Error(message) => eprintln!("daemon: backend error: {message}"),
                     // Everything else is UI-side only; the forwarding below
                     // still delivers it to every attached client verbatim.
-                    Event::AuthError(_)
-                    | Event::CommandSuggestions { .. }
+                    Event::CommandSuggestions { .. }
                     | Event::PlaylistDeleted { .. }
                     | Event::PlaylistSaved { .. }
                     | Event::LibraryCount { .. }
@@ -308,13 +382,26 @@ async fn run_async() {
                 let _ = dispatch_text(&services, &line, false);
             }
             Some(output) = playback_rx.recv() => {
-                handle_playback_output(&mut ui_clients, output, &playback_control, &mut status_dirty);
+                handle_playback_output(
+                    &mut ui_clients,
+                    output,
+                    &playback_control,
+                    &bridge,
+                    &mut status_dirty,
+                );
             }
             Some(server_event) = server_rx.recv() => match server_event {
                 ServerEvent::Connected { conn, role, features, client, outbox } => {
                     crate::debug_log!("daemon: client {conn} ({client:?}, {role:?}) connected");
                     let snapshot = playback_control.snapshot();
-                    bootstrap_client(&outbox, &snapshot, header.as_ref(), auth.as_ref(), &page);
+                    bootstrap_client(
+                        &outbox,
+                        &snapshot,
+                        header.as_ref(),
+                        auth.as_ref(),
+                        connection.as_ref(),
+                        &page,
+                    );
                     ui_clients.insert(conn, UiClient { role, features, outbox });
                     status_dirty = true;
                 }
@@ -355,6 +442,34 @@ async fn run_async() {
                     spawn_status_flush(&playback_control, &page, Arc::clone(&status_inflight));
                 }
             }
+            _ = connectivity_tick.tick() => {
+                // The health probe is the only thing that changes connectivity
+                // on its own. It never toasts and never blocks the loop: the
+                // request runs off-loop and the inflight guard coalesces ticks.
+                if connectivity_active
+                    && !connectivity_inflight.swap(true, Ordering::AcqRel)
+                {
+                    let bridge = Arc::clone(&bridge);
+                    let playback = playback_control.clone();
+                    let inflight = Arc::clone(&connectivity_inflight);
+                    let sync_owed = Arc::clone(&startup_sync_owed);
+                    tokio::spawn(async move {
+                        let online = server_reachable().await;
+                        inflight.store(false, Ordering::Release);
+                        bridge.note_connection(online);
+                        let _ = playback.send(PlaybackInput::SetOffline(!online));
+                        if online && sync_owed.swap(false, Ordering::AcqRel) {
+                            // First reachable probe since the app opened (or
+                            // since an offline login / account switch): one
+                            // deep pass, never on plain reconnects.
+                            crate::debug_log!(
+                                "daemon: first reachable probe; starting a full sync"
+                            );
+                            bridge.sync(SyncMode::All);
+                        }
+                    });
+                }
+            }
         }
     }
 
@@ -388,7 +503,7 @@ fn update_page(page: &mut LastPage, descriptor: &PageDescriptor) {
     *page = Some(descriptor.clone());
 }
 
-async fn restore_status(playback: &PlaybackControl, page: &mut LastPage) {
+async fn restore_status(playback: &PlaybackControl, page: &mut LastPage, offline: bool) {
     let Some(dbs) = crate::app::dbs() else {
         return;
     };
@@ -396,7 +511,7 @@ async fn restore_status(playback: &PlaybackControl, page: &mut LastPage) {
         return;
     };
     *page = PageDescriptor::from_stored_parts(&status.page_kind, &status.page_id);
-    let Ok(resume) = crate::queue::resume(&dbs, &status, false).await else {
+    let Ok(resume) = crate::queue::resume(&dbs, &status, offline).await else {
         return;
     };
     if !resume.tracks.is_empty() {
@@ -699,6 +814,7 @@ fn handle_playback_output(
     ui_clients: &mut HashMap<u64, UiClient>,
     output: PlaybackOutput,
     playback: &PlaybackControl,
+    bridge: &Bridge,
     status_dirty: &mut bool,
 ) {
     match output {
@@ -770,6 +886,16 @@ fn handle_playback_output(
             );
             drop_clients(ui_clients, dead);
         }
+        PlaybackOutput::ServerUnavailable => {
+            // The core already stopped the transport. Flip the whole app to
+            // the downloaded catalog and surface the one canonical message;
+            // the 5 s health probe owns the way back online.
+            eprintln!("daemon: server unavailable; serving local downloads");
+            bridge.note_connection(false);
+            let _ = playback.send(PlaybackInput::SetOffline(true));
+            bridge.error(crate::player::SERVER_UNAVAILABLE);
+            *status_dirty = true;
+        }
     }
     publish_mpris(&playback.snapshot());
 }
@@ -804,6 +930,7 @@ fn bootstrap_client(
     snapshot: &Snapshot,
     header: Option<&Event>,
     auth: Option<&Event>,
+    connection: Option<&Event>,
     page: &LastPage,
 ) {
     let mut state = snapshot.state;
@@ -812,7 +939,7 @@ fn bootstrap_client(
     for frame in playback::reset_frames(snapshot.queue_rev, &snapshot.queue) {
         let _ = outbox.send_bytes(frame);
     }
-    for event in [header, auth].into_iter().flatten() {
+    for event in [header, auth, connection].into_iter().flatten() {
         if let Ok(frame) = proto::event_frame(event) {
             let _ = outbox.send(&frame);
         }

@@ -28,6 +28,18 @@ impl AppRoot {
                     .text_color(rgb(palette::on_surface_variant()))
                     .child(hint),
             )
+            .when(self.connection_offline, |this| {
+                this.child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .rounded_full()
+                        .bg(rgb(palette::tertiary_container()))
+                        .text_size(px(11.0))
+                        .text_color(rgb(palette::on_tertiary_container()))
+                        .child("Offline · downloads only"),
+                )
+            })
             .child(div().flex_1())
             .child(icon(
                 "outline-shuffle.svg",

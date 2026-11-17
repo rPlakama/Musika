@@ -577,15 +577,30 @@ pub struct ArtistRow {
     pub starred: Option<String>,
 }
 
+/// The filter ordering shared by every scope: unlike the other labels this
+/// one selects rows rather than only sorting them, so `Shift-H`/`Shift-L`
+/// leaves the list showing local downloads exclusively. The row layer applies
+/// the downloaded catalog to albums, songs and artists alike.
+pub const DOWNLOADED_ORDER: &str = "Downloaded";
+
 /// Orderings offered by the album list and the song list (`Shift-H`/
 /// `Shift-L`). The labels map to the Subsonic `getAlbumList2` types they
 /// approximate: Artist = alphabeticalByArtist, Name = alphabeticalByName,
 /// Year = byYear, Recent = newest (the provider's `created` timestamp).
-pub const ORDERS: [&str; 4] = ["Artist", "Name", "Year", "Recent"];
+pub const ORDERS: [&str; 5] = ["Artist", "Name", "Year", "Recent", DOWNLOADED_ORDER];
 
 /// Orderings offered by the artist list (`Shift-H`/`Shift-L`): alphabetical,
-/// or most albums first.
-pub const ARTIST_ORDERS: [&str; 2] = ["Name", "Albums"];
+/// most albums first, or the downloaded subset.
+pub const ARTIST_ORDERS: [&str; 3] = ["Name", "Albums", DOWNLOADED_ORDER];
+
+/// Orderings offered by the playlist list: alphabetical, or only playlists
+/// that contain at least one downloaded song.
+pub const PLAYLIST_ORDERS: [&str; 2] = ["Name", DOWNLOADED_ORDER];
+
+/// True when `order` is the downloaded-only filter ordering.
+pub fn is_downloaded_order(order: &str) -> bool {
+    order == DOWNLOADED_ORDER
+}
 
 /// Cycles one of the order lists by `delta`; shared so lists never drift.
 fn cycle_in(orders: &[&'static str], current: &str, delta: i64) -> &'static str {
@@ -605,6 +620,11 @@ pub fn cycle_order(current: &str, delta: i64) -> &'static str {
 /// Cycles an artist order label by `delta` ([`ARTIST_ORDERS`]).
 pub fn cycle_artist_order(current: &str, delta: i64) -> &'static str {
     cycle_in(&ARTIST_ORDERS, current, delta)
+}
+
+/// Cycles a playlist order label by `delta` ([`PLAYLIST_ORDERS`]).
+pub fn cycle_playlist_order(current: &str, delta: i64) -> &'static str {
+    cycle_in(&PLAYLIST_ORDERS, current, delta)
 }
 
 /// Applies `delta` to `current`, treating empty as the first order.

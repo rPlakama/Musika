@@ -970,12 +970,19 @@ impl AppRoot {
         self.on_tab(true, cx);
     }
 
+    /// Whether Tab may walk the fullscreen cover/title/lyrics panes. The
+    /// lyrics overlay owns the keyboard while it is open, so the renderer
+    /// hides the player's focus chrome for exactly this window.
+    pub(in crate::ui) fn fullscreen_focus_walk_available(&self) -> bool {
+        !self.lyrics_overlay
+    }
+
     /// Tab's contextual walk. The superior bar exposes the current page's
     /// chips (the artist entry adds Download/Shuffle/Favorite) followed by
     /// the status actions; leaving the end drops back to the content.
     pub(in crate::ui) fn on_tab(&mut self, backward: bool, cx: &mut Context<Self>) {
         if self.fullscreen {
-            if !self.lyrics_overlay {
+            if self.fullscreen_focus_walk_available() {
                 self.cycle_fullscreen_focus(backward);
             }
             cx.notify();

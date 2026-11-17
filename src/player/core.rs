@@ -89,6 +89,14 @@ pub(crate) struct Outcome {
     pub(crate) changed: bool,
     /// Re-stream every row (metadata/cover refresh, shuffle, block reorder).
     pub(crate) queue_reset: bool,
+    /// A remote row could not be played because the server is unreachable;
+    /// the service reports the one canonical toast and the daemon flips to
+    /// the downloaded catalog.
+    pub(crate) server_unavailable: bool,
+    /// A paused restore pre-opened the stream and failed. The verdict is kept
+    /// for the next play attempt instead of toasting before the user asked to
+    /// play anything.
+    pub(crate) deferred_failure: bool,
 }
 
 pub(crate) struct PlaybackCore {
@@ -108,6 +116,13 @@ pub(crate) struct PlaybackCore {
     seekable: bool,
     loading: bool,
     failed: bool,
+    /// The current remote row opened (the decoder reported `Loaded`). A
+    /// failure before that point is an unreachable server, not a codec error
+    /// in the middle of a playing stream.
+    loaded_current: bool,
+    /// Offline: `file://` rows are playable, remote rows are refused before
+    /// the engine can stall on an HTTP connect.
+    offline: bool,
     last_error: Option<String>,
     /// The row the engine was told to predecode after the current one.
     gapless_next: Option<usize>,
@@ -140,6 +155,8 @@ impl PlaybackCore {
             seekable: false,
             loading: false,
             failed: false,
+            loaded_current: false,
+            offline: false,
             last_error: None,
             gapless_next: None,
             anchor_position: 0.0,
@@ -210,6 +227,22 @@ impl PlaybackCore {
     /// Last track/engine error (diagnostics and UI toasts).
     pub(crate) fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
+    }
+
+    pub(crate) fn offline(&self) -> bool {
+        self.offline
+    }
+
+    /// Applies a connectivity verdict. This only governs *future* loads: a
+    /// stream that is already open and playing is left alone (it may well
+    /// finish from the read-ahead buffer).
+    pub(crate) fn set_offline(&mut self, offline: bool) -> Outcome {
+        let mut outcome = Outcome::default();
+        if self.offline != offline {
+            self.offline = offline;
+            outcome.changed = true;
+        }
+        outcome
     }
 
     pub(crate) fn position_at(&self, now_ns: u64) -> f64 {
@@ -392,6 +425,7 @@ impl PlaybackCore {
                 self.stream_size = stream_size;
                 self.seekable = seekable;
                 self.failed = false;
+                self.loaded_current = true;
                 outcome.changed = changed;
             }
             EngineEvent::Boundary {
@@ -401,6 +435,30 @@ impl PlaybackCore {
             } => self.boundary(duration, stream_size, position, now_ns, &mut outcome),
             EngineEvent::Ended => self.advance_after_error(&mut outcome),
             EngineEvent::Failed { message } => {
+                let remote = self
+                    .queue
+                    .get(self.index)
+                    .is_some_and(|track| crate::player::is_remote_url(&track.url));
+                if remote && (!self.loaded_current || self.offline) {
+                    if self.state == State::Paused {
+                        // A restored queue pre-opens its row while paused.
+                        // That failure is not a play attempt: keep the paused
+                        // row and let the next Play retry and report it.
+                        self.failed = true;
+                        self.last_error = Some(crate::player::SERVER_UNAVAILABLE.to_string());
+                        outcome.deferred_failure = true;
+                        return outcome;
+                    }
+                    // The stream never opened: the row is not in the download
+                    // tier and the server did not answer. Stop instead of
+                    // skipping through the rest of the queue and toasting once
+                    // per row.
+                    self.failed = true;
+                    self.last_error = Some(crate::player::SERVER_UNAVAILABLE.to_string());
+                    self.stop(&mut outcome);
+                    outcome.server_unavailable = true;
+                    return outcome;
+                }
                 let title = self
                     .queue
                     .get(self.index)
@@ -479,6 +537,10 @@ impl PlaybackCore {
     fn resume(&mut self, outcome: &mut Outcome) {
         match self.state {
             State::Paused => {
+                if self.offline_blocks_current() {
+                    self.refuse_offline(outcome);
+                    return;
+                }
                 self.state = State::Playing;
                 // The anchor was frozen at pause; re-base it to the clock
                 // without moving the displayed position.
@@ -495,10 +557,29 @@ impl PlaybackCore {
         }
     }
 
+    /// The selected row needs the server while the transport is offline.
+    fn offline_blocks_current(&self) -> bool {
+        self.offline
+            && self
+                .queue
+                .get(self.index)
+                .is_some_and(|track| crate::player::is_remote_url(&track.url))
+    }
+
+    /// Stops with the canonical server-unavailable verdict.
+    fn refuse_offline(&mut self, outcome: &mut Outcome) {
+        self.failed = true;
+        self.last_error = Some(crate::player::SERVER_UNAVAILABLE.to_string());
+        self.stop(outcome);
+        outcome.server_unavailable = true;
+        outcome.changed = true;
+    }
+
     fn stop(&mut self, outcome: &mut Outcome) {
         let was_active = self.state != State::Stopped || self.loading;
         self.state = State::Stopped;
         self.loading = false;
+        self.loaded_current = false;
         self.gapless_next = None;
         self.anchor_position = 0.0;
         self.rebase = true;
@@ -669,9 +750,17 @@ impl PlaybackCore {
             self.state = State::Stopped;
             return;
         };
+        // Offline rows are local-only. Refusing the load here (instead of
+        // letting FFmpeg wait on an HTTP connect) is what makes a stale remote
+        // queue row fail gracefully and immediately.
+        if !paused && self.offline_blocks_current() {
+            self.refuse_offline(outcome);
+            return;
+        }
         self.duration = 0.0;
         self.stream_size = 0;
         self.seekable = false;
+        self.loaded_current = false;
         // A paused load is not going to start audio, so it must not claim the
         // loading state: on app open the restored queue loads paused and the
         // transport should read "Paused" immediately, not spin until the
@@ -709,11 +798,16 @@ impl PlaybackCore {
         let Some(track) = self.queue.get(self.index).cloned() else {
             return;
         };
+        if self.offline_blocks_current() {
+            self.refuse_offline(outcome);
+            return;
+        }
         let paused = self.state != State::Playing;
         let position = position.max(0.0);
         self.duration = 0.0;
         self.stream_size = 0;
         self.seekable = false;
+        self.loaded_current = false;
         self.loading = !paused;
         self.failed = false;
         self.gapless_next = self.gapless_index();

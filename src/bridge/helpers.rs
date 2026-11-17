@@ -10,13 +10,16 @@ pub(crate) fn order_name(scope: crate::model::Scope, order: usize) -> String {
         crate::model::Scope::Artists => crate::library::ARTIST_ORDERS
             [order.min(crate::library::ARTIST_ORDERS.len() - 1)]
         .to_string(),
-        crate::model::Scope::Playlists => "Name".to_string(),
+        crate::model::Scope::Playlists => crate::library::PLAYLIST_ORDERS
+            [order.min(crate::library::PLAYLIST_ORDERS.len() - 1)]
+        .to_string(),
     }
 }
 
 pub(crate) async fn library_rows(
     scope: crate::model::Scope,
     order: usize,
+    offline: bool,
 ) -> anyhow::Result<Vec<crate::model::Row>> {
     use crate::model::{Row, RowKind, Scope};
     let dbs = crate::app::dbs().ok_or_else(|| anyhow::anyhow!("databases not ready"))?;
@@ -134,7 +137,12 @@ pub(crate) async fn library_rows(
                 })
                 .collect())
         }
-        Scope::Playlists => crate::playlists::list(&dbs).await,
+        Scope::Playlists => {
+            let order = crate::library::PLAYLIST_ORDERS
+                [order.min(crate::library::PLAYLIST_ORDERS.len() - 1)];
+            let downloaded_only = offline || crate::library::is_downloaded_order(order);
+            crate::playlists::list_filtered(&dbs, downloaded_only).await
+        }
     }
 }
 
@@ -157,7 +165,9 @@ pub(crate) async fn page_data(
             let album = crate::library::album(&dbs.library, &descriptor.id)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("album not found"))?;
-            let songs = crate::library::album_songs(&dbs.library, &descriptor.id).await?;
+            let mut songs = crate::library::album_songs(&dbs.library, &descriptor.id).await?;
+            crate::offline::retain_songs(&dbs, offline, &mut songs).await?;
+            let shown_tracks = songs.len() as i64;
             let mut ids: Vec<&Option<String>> = songs.iter().map(|song| &song.cover_art).collect();
             ids.push(&album.cover_art);
             let covers = crate::covers::url_map_for(&dbs, ids.iter().copied()).await?;
@@ -173,7 +183,11 @@ pub(crate) async fn page_data(
                 subtitle: album.artist.unwrap_or_default(),
                 meta: format!(
                     "{} Tracks{}{}",
-                    album.song_count,
+                    if offline {
+                        shown_tracks
+                    } else {
+                        album.song_count
+                    },
                     album
                         .year
                         .map(|year| format!(" · {year}"))
@@ -231,8 +245,12 @@ pub(crate) async fn page_data(
             let artist = crate::library::artist(&dbs.library, &descriptor.id)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("artist not found"))?;
-            let albums =
+            let mut albums =
                 crate::library::artist_albums(&dbs.library, &descriptor.id, "Name").await?;
+            if offline && let Some(filter) = crate::offline::load(&dbs, true).await? {
+                albums.retain(|album| filter.contains_album(&album.id));
+            }
+            let shown_albums = albums.len() as i64;
             let covers =
                 crate::covers::url_map_for(&dbs, albums.iter().map(|album| &album.cover_art))
                     .await?;
@@ -252,7 +270,11 @@ pub(crate) async fn page_data(
                 .unwrap_or_default();
             let header = PageHeader {
                 title: artist.name,
-                subtitle: albums_label(artist.album_count),
+                subtitle: albums_label(if offline {
+                    shown_albums
+                } else {
+                    artist.album_count
+                }),
                 meta: String::new(),
                 // Hero surfaces paint the untouched original; the album rows
                 // further down keep their thumbnail URLs.
@@ -302,7 +324,7 @@ pub(crate) async fn page_data(
             let seed_kind = descriptor.radio_seed_kind.as_deref().unwrap_or("album");
             crate::radio::page(&dbs, seed_kind, &descriptor.id, offline).await
         }
-        PageKind::Playlist => crate::playlists::page(&dbs, &descriptor.id).await,
+        PageKind::Playlist => crate::playlists::page(&dbs, &descriptor.id, offline).await,
     }
 }
 
@@ -412,9 +434,10 @@ pub(crate) async fn search_rows(
 pub(crate) async fn queue_for_song(
     song_id: &str,
     order: &str,
+    offline: bool,
 ) -> anyhow::Result<(Vec<crate::player::Track>, usize)> {
     let dbs = crate::app::dbs().ok_or_else(|| anyhow::anyhow!("databases not ready"))?;
-    crate::queue::library_queue(&dbs, song_id, order, false).await
+    crate::queue::library_queue(&dbs, song_id, order, offline).await
 }
 
 pub(crate) fn unix_ms_for_cover() -> u128 {
@@ -426,6 +449,14 @@ pub(crate) fn unix_ms_for_cover() -> u128 {
 
 pub(crate) fn send_event(tx: &UnboundedSender<Event>, event: Event) {
     _ = tx.send(event);
+}
+
+/// Emits `DownloadSettled` after dropping the downloaded-catalog cache: the
+/// ledger just changed, and a `Downloaded` / offline reload triggered by the
+/// UI must see the new rows immediately rather than a stale 2 s snapshot.
+pub(crate) fn send_download_settled(tx: &UnboundedSender<Event>) {
+    crate::offline::clear_cache();
+    send_event(tx, Event::DownloadSettled);
 }
 
 pub(crate) fn emit_queue(

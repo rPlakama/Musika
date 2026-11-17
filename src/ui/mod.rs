@@ -845,6 +845,9 @@ struct AppRoot {
     bridge: RemoteBridge,
     view: ViewState,
     header: Option<Header>,
+    /// The core's health probe reports the server unreachable: lists serve the
+    /// downloaded catalog, and the top bar says so.
+    connection_offline: bool,
     error: Option<String>,
     generation: u64,
     library_scroll: scroll_modal::ScrollModal,
@@ -1177,6 +1180,7 @@ impl AppRoot {
             bridge,
             view,
             header: None,
+            connection_offline: false,
             error: None,
             generation: 0,
             library_scroll: scroll_modal::ScrollModal::new(scroll_modal::LIBRARY),

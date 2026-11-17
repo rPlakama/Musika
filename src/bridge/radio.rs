@@ -67,7 +67,7 @@ impl Bridge {
                     _ = tx.send(Event::Error(format!("Download failed: {err:#}")));
                 }
             }
-            _ = tx.send(Event::DownloadSettled);
+            send_download_settled(&tx);
         });
     }
 

@@ -5,6 +5,41 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Downloaded ordering in every scope:** `Shift-H`/`Shift-L` now cycles a
+  `Downloaded` entry after the alphabetical orders in Albums, Songs and
+  Artists, and after `Name` in Playlists. Unlike the other labels it filters
+  as well as sorts: the scope lists only rows backed by the download ledger
+  (playlists need at least one downloaded song). The filter is applied before
+  the virtual list slices its window, so paging never leaves holes, and the
+  same catalog backs offline mode.
+
+- **Automatic offline fallback:** the core probes the active server with a
+  `ping` every five seconds. A failed probe flips the whole app to the
+  downloaded catalog (lists, pages, search and queues) and the top bar reads
+  **Offline**; failures are not toasted, and the first successful probe
+  restores the full library and refreshes the header. `play_song`, restored
+  sessions, artist/album pages and playlist pages now honour the same offline
+  filter instead of mixing server-only rows into local playback.
+
+- **Startup sync:** the first successful health probe at app opening now
+  starts one `SyncMode::All` pass. A successful online login triggers it
+  immediately (the login already answered a ping); an offline login waits for
+  the probe that reaches the server. Plain reconnects after that do not re-run
+  the deep sync.
+
+- **Graceful server-unavailable playback:** a remote row that never opened
+  (not downloaded, server unreachable) now stops the transport with the
+  canonical **“Unable to play track, server unavailable”** toast and flips the
+  app offline, instead of skipping through the queue and toasting each row.
+  Remote failures after the stream opened keep the ordinary codec-error path;
+  local file failures are unchanged.
+
+- **Lyrics overlay focus chrome:** the lyrics overlay blocks the fullscreen
+  Tab walk, but the cover/title focus borders stayed painted underneath it.
+  They are now transparent for as long as the overlay owns the keyboard (the
+  1 px border box stays, so nothing shifts); closing the overlay restores the
+  regular focused-pane highlight.
+
 - **Local radio:** `radio song|album` now expands entirely from `library.db`
   instead of calling the server's `getSimilarSongs`. Similar artists come from
   the `getArtistInfo2` graph cached with the artist biography when available,

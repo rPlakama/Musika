@@ -180,7 +180,10 @@ impl ViewState {
                 crate::library::ARTIST_ORDERS
                     [self.order.min(crate::library::ARTIST_ORDERS.len() - 1)]
             }
-            Scope::Playlists => "Name",
+            Scope::Playlists => {
+                crate::library::PLAYLIST_ORDERS
+                    [self.order.min(crate::library::PLAYLIST_ORDERS.len() - 1)]
+            }
         }
     }
 
@@ -188,7 +191,7 @@ impl ViewState {
         match self.scope {
             Scope::Albums | Scope::Songs => crate::library::ORDERS.len(),
             Scope::Artists => crate::library::ARTIST_ORDERS.len(),
-            Scope::Playlists => 1,
+            Scope::Playlists => crate::library::PLAYLIST_ORDERS.len(),
         }
     }
 
@@ -275,6 +278,12 @@ mod tests {
         view.scope = Scope::Artists;
         view.order = 1;
         assert_eq!(view.order_label(), "Albums");
+        assert_eq!(view.order_len(), 3);
+        view.order = 2;
+        assert_eq!(view.order_label(), crate::library::DOWNLOADED_ORDER);
+        view.scope = Scope::Playlists;
+        view.order = 1;
+        assert_eq!(view.order_label(), crate::library::DOWNLOADED_ORDER);
         assert_eq!(view.order_len(), 2);
     }
 

@@ -51,6 +51,19 @@ fn tracks(count: usize) -> Vec<Track> {
         .collect()
 }
 
+fn remote_track(id: &str, duration: f64) -> Track {
+    Track {
+        url: format!("http://server.test/rest/stream?id={id}"),
+        ..track(id, duration)
+    }
+}
+
+fn remote_tracks(count: usize) -> Vec<Track> {
+    (0..count)
+        .map(|index| remote_track(&index.to_string(), 100.0))
+        .collect()
+}
+
 fn ids(core: &PlaybackCore) -> Vec<String> {
     core.queue().iter().map(|track| track.id.clone()).collect()
 }
@@ -413,6 +426,122 @@ fn failed_advances_and_keeps_the_error() {
         error.contains("Song 0"),
         "the old player prefixed the title: {error}"
     );
+}
+
+#[test]
+fn offline_refuses_a_remote_row_before_the_engine_sees_it() {
+    let mut core = PlaybackCore::new();
+    assert!(core.set_offline(true).changed);
+    assert!(core.offline());
+
+    let outcome = core.load(remote_tracks(2), 0, false);
+
+    assert!(outcome.server_unavailable);
+    assert_eq!(core.state(), State::Stopped, "nothing may start playing");
+    assert_eq!(core.index(), 0, "the refused row stays selected");
+    assert!(
+        !outcome
+            .audio
+            .iter()
+            .any(|command| matches!(command, AudioCommand::Load { .. })),
+        "a remote URL must never reach the engine while offline"
+    );
+    assert_eq!(core.last_error(), Some(crate::player::SERVER_UNAVAILABLE));
+
+    // Pressing play again repeats the graceful refusal instead of stalling.
+    let retry = core.apply(CoreCommand::Play);
+    assert!(retry.server_unavailable);
+    assert_eq!(core.last_error(), Some(crate::player::SERVER_UNAVAILABLE));
+}
+
+#[test]
+fn remote_open_failure_stops_instead_of_skipping_the_queue() {
+    let mut core = PlaybackCore::new();
+    core.load(remote_tracks(3), 0, false);
+
+    let outcome = core.on_engine(
+        EngineEvent::Failed {
+            message: "decoder: cannot open 'http://server.test/x': Connection refused".to_string(),
+        },
+        SECOND,
+    );
+
+    assert!(outcome.server_unavailable);
+    assert_eq!(core.index(), 0, "the queue must not advance");
+    assert_eq!(core.state(), State::Stopped);
+    assert_eq!(core.last_error(), Some(crate::player::SERVER_UNAVAILABLE));
+}
+
+#[test]
+fn a_paused_remote_preopen_failure_waits_for_the_play_attempt() {
+    let mut core = PlaybackCore::new();
+    core.load(remote_tracks(1), 0, true);
+    assert_eq!(core.state(), State::Paused);
+
+    let outcome = core.on_engine(
+        EngineEvent::Failed {
+            message: "decoder: cannot open 'http://server.test/x': Connection refused".to_string(),
+        },
+        SECOND,
+    );
+    assert!(outcome.deferred_failure);
+    assert!(!outcome.server_unavailable);
+    assert_eq!(core.state(), State::Paused, "a restore must stay quiet");
+
+    // The user asks to play: the worker reopens and its failure is reported.
+    let play = core.apply(CoreCommand::Play);
+    assert!(!play.server_unavailable);
+    assert_eq!(core.state(), State::Playing);
+    let failed = core.on_engine(
+        EngineEvent::Failed {
+            message: "decoder: cannot open 'http://server.test/x': Connection refused".to_string(),
+        },
+        2 * SECOND,
+    );
+    assert!(failed.server_unavailable);
+    assert_eq!(core.state(), State::Stopped);
+    assert_eq!(core.last_error(), Some(crate::player::SERVER_UNAVAILABLE));
+}
+
+#[test]
+fn offline_refuses_to_resume_a_paused_remote_row() {
+    let mut core = PlaybackCore::new();
+    // A restored session can hold a paused remote row loaded while online.
+    core.load(remote_tracks(1), 0, true);
+    assert_eq!(core.state(), State::Paused);
+    core.set_offline(true);
+
+    let outcome = core.apply(CoreCommand::Play);
+
+    assert!(outcome.server_unavailable);
+    assert_eq!(core.state(), State::Stopped);
+    assert_eq!(core.last_error(), Some(crate::player::SERVER_UNAVAILABLE));
+}
+
+#[test]
+fn a_remote_failure_after_the_stream_opened_keeps_the_generic_path() {
+    let mut core = PlaybackCore::new();
+    core.load(remote_tracks(3), 0, false);
+    core.on_engine(
+        EngineEvent::Loaded {
+            duration: 100.0,
+            stream_size: 1_000,
+            seekable: true,
+        },
+        SECOND,
+    );
+
+    let outcome = core.on_engine(
+        EngineEvent::Failed {
+            message: "decoder: cannot read audio packet".to_string(),
+        },
+        2 * SECOND,
+    );
+
+    assert!(!outcome.server_unavailable);
+    assert_eq!(core.index(), 1, "a mid-stream failure still advances");
+    let error = core.last_error().expect("error stored");
+    assert!(error.contains("cannot read audio packet"), "{error}");
 }
 
 #[test]

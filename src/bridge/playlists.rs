@@ -41,7 +41,7 @@ impl Bridge {
             let Some(dbs) = crate::app::dbs() else { return };
             match crate::download_command::execute(&dbs, &request, current.as_ref()).await {
                 Ok(()) => {
-                    _ = tx.send(Event::DownloadSettled);
+                    send_download_settled(&tx);
                 }
                 Err(err) => {
                     _ = tx.send(Event::Error(format!("Download command failed: {err:#}")));

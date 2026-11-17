@@ -65,7 +65,7 @@ impl Bridge {
         let offline = self.offline.load(Ordering::Relaxed);
         if scope == crate::model::Scope::Playlists {
             crate::app::runtime().spawn(async move {
-                let event = match library_rows(scope, order).await {
+                let event = match library_rows(scope, order, offline).await {
                     Ok(rows) => {
                         crate::debug_log!("GPUI: {} {} rows", scope.label(), rows.len());
                         Event::Library {

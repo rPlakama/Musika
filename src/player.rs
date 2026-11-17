@@ -115,11 +115,56 @@ pub struct PlaybackMetrics {
     pub underruns: u64,
 }
 
+/// Crossfade policy shared by core, engine and persisted settings.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CrossfadeConfig {
+    pub enabled: bool,
+    /// Fade length in seconds (1..=12 when enabled).
+    pub seconds: f64,
+    /// Equal-power (`sin`/`cos`) instead of the legacy linear gains.
+    pub equal_power: bool,
+    /// Only crossfade adjacent rows from the same (non-empty) album.
+    pub album_only: bool,
+}
+
+impl Default for CrossfadeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            seconds: 5.0,
+            equal_power: true,
+            album_only: false,
+        }
+    }
+}
+
+impl CrossfadeConfig {
+    pub fn sanitized(mut self) -> Self {
+        if !self.seconds.is_finite() {
+            self.seconds = 5.0;
+        }
+        self.seconds = self.seconds.clamp(1.0, 12.0);
+        self
+    }
+}
+
 /// The one user-facing message for a track the server was supposed to serve
 /// but could not: it is not in the download tier, and the stream never opened.
 /// Shared by the core decision and the daemon's toast so the wording cannot
 /// drift.
 pub(crate) const SERVER_UNAVAILABLE: &str = "Unable to play track, server unavailable";
+
+/// Complementary gains for one crossfade position. Equal-power keeps the
+/// summed power constant (`cos/sin`); the legacy curve is linear.
+pub(crate) fn crossfade_gains(progress: f32, equal_power: bool) -> (f32, f32) {
+    let progress = progress.clamp(0.0, 1.0);
+    if equal_power {
+        let angle = progress * std::f32::consts::FRAC_PI_2;
+        (angle.cos(), angle.sin())
+    } else {
+        (1.0 - progress, progress)
+    }
+}
 
 /// A queue row whose URL leaves the machine (the only rows that need a live
 /// server; downloaded blobs are `file://`).

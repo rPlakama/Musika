@@ -78,6 +78,9 @@ impl AppRoot {
             IpcCommand::Crossfade(_) | IpcCommand::Normalize(_) => {
                 unreachable!("IPC playback mapping returned a playback op")
             }
+            IpcCommand::CrossfadeConfig(change) => {
+                self.bridge.set_crossfade_change(change);
+            }
             IpcCommand::Scrobble(enabled) => {
                 self.bridge.set_scrobble(enabled);
             }

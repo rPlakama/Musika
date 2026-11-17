@@ -93,6 +93,14 @@ impl Native {
         self.shared.set_eq(profile);
     }
 
+    pub(crate) fn set_crossfade_config(&self, config: crate::player::CrossfadeConfig) {
+        self.shared.set_crossfade_config(config);
+    }
+
+    pub(crate) fn set_crossfade_allowed(&self, allowed: bool) {
+        self.shared.set_crossfade_allowed(allowed);
+    }
+
     pub(crate) fn set_normalization(&self, mode: Normalization) {
         self.shared
             .normalization

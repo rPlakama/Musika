@@ -33,7 +33,10 @@ const PAUSE_REOPEN_AFTER: Duration = Duration::from_secs(30);
 /// when enabled from the UI. The fade starts when the decoded position is this
 /// close to the end; the next decoder is preloaded at the current pipeline rate
 /// so both streams can be mixed without a graph rebuild.
-const CROSSFADE_SECS: f64 = 5.0;
+/// Crossfade length from the shared config, clamped defensively.
+fn crossfade_secs(shared: &Shared) -> f64 {
+    f64::from(shared.crossfade_millis.load(Ordering::Acquire)) / 1000.0
+}
 
 /// Target temporal size of one decode read: 20 ms (`rate / 50` frames). Keeping
 /// the chunk time-constant (not frame-constant) keeps seek/stop responses fast
@@ -395,6 +398,7 @@ struct CrossfadeState {
     /// EQ state for the incoming decoder (independent filter history).
     next_eq: Option<crate::eq::EqRuntime>,
     eq_epoch: u64,
+    equal_power: bool,
     /// Frames of `next` consumed by the fade so far.
     next_frames: u64,
     /// Total frames of the fade (the remaining duration when it started).
@@ -697,7 +701,7 @@ fn worker_thread(
             && current.preload.is_none()
             && current.preload_requested
             && let Some(remaining) = crossfade_remaining(&current)
-            && remaining <= CROSSFADE_SECS
+            && remaining <= crossfade_secs(&shared)
         {
             // A local file can be decoded far faster than the preload thread
             // gets scheduled; wait at the fade threshold so a short local
@@ -1008,7 +1012,7 @@ fn crossfade_remaining(current: &Current) -> Option<f64> {
 }
 
 /// Starts an equal-length crossfade when the decoded playhead is within
-/// [`CROSSFADE_SECS`] of the current track's end and the preloaded decoder
+/// configured crossfade seconds of the current track's end and the preloaded decoder
 /// runs at the same pipeline rate.
 fn maybe_start_crossfade(current: &mut Current, shared: &Shared) {
     if !shared.crossfade.load(Ordering::Acquire)
@@ -1026,7 +1030,11 @@ fn maybe_start_crossfade(current: &mut Current, shared: &Shared) {
     }
     let decoded = current.timeline_start + current.written_frames as f64 / f64::from(current.rate);
     let remaining = duration - decoded;
-    if remaining <= 0.0 || remaining > CROSSFADE_SECS || current.preload.is_none() {
+    if remaining <= 0.0
+        || remaining > crossfade_secs(shared)
+        || current.preload.is_none()
+        || !shared.crossfade_allowed.load(Ordering::Acquire)
+    {
         return;
     }
     // Repeat-one preloads the same row; mixing its head into its own tail would
@@ -1053,6 +1061,7 @@ fn maybe_start_crossfade(current: &mut Current, shared: &Shared) {
         next_stop: current.preload_stop.take(),
         next_eq,
         eq_epoch,
+        equal_power: shared.crossfade_equal_power.load(Ordering::Acquire),
         next_frames: 0,
         total_frames,
         next_failed: false,
@@ -1243,14 +1252,19 @@ fn run_crossfade_chunk(
         )
     };
     let progress = (played as f64 / total.max(1) as f64).clamp(0.0, 1.0) as f32;
+    let equal_power = current
+        .crossfade
+        .as_ref()
+        .is_some_and(|crossfade| crossfade.equal_power);
+    let (gain_out, gain_in) = crate::player::crossfade_gains(progress, equal_power);
     mix_crossfade(
         pcm,
         next_pcm,
         cur_frames,
         next_frames,
         next_failed,
-        1.0 - progress,
-        progress,
+        gain_out,
+        gain_in,
     );
     if let Some(crossfade) = current.crossfade.as_mut() {
         crossfade.next_frames = crossfade.next_frames.saturating_add(next_frames as u64);

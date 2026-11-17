@@ -22,6 +22,9 @@ impl AppRoot {
             Event::CycleEq => {
                 // A UI request; the daemon consumes it.
             }
+            Event::CrossfadeChange(_) => {
+                // A UI request; the daemon consumes it.
+            }
             Event::EqChanged(name) => {
                 let changed = self.eq_profile != name;
                 self.eq_profile = name;

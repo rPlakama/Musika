@@ -62,6 +62,8 @@ pub enum Event {
     CycleEq,
     /// Core answer: the active EQ profile (`None` = off).
     EqChanged(Option<String>),
+    /// UI request: change one crossfade field.
+    CrossfadeChange(crate::playback_settings::CrossfadeChange),
     LoggedIn {
         server_url: String,
         username: String,

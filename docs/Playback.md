@@ -329,6 +329,13 @@ reliability and CI items remain roadmap work.
 
 ### Implemented after the audit (2026-11)
 
+- **Configurable crossfade:** on top of the existing toggle, `crossfade length
+  <1..12>`, `crossfade curve <equal|linear>` and `crossfade album <on|off>`
+  update the shared sink policy and persist it. The worker reads the length
+  and curve per transition; the core decides album-only from the current and
+  next rows and publishes a per-pair `crossfade_allowed` flag after every
+  load/boundary.
+
 - **Equalizer:** `Ctrl-E` cycles sorted `~/.config/musika/eqs/*.{txt,eq}`
   profiles through OFF. Profiles use an Equalizer APO subset (`Preamp:`,
   parametric `Filter: ON PK|LS|HS|LP|HP|BP|NO ...`, and `GraphicEQ:` bands);

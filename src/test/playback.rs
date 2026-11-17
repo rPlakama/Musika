@@ -143,18 +143,20 @@ fn normalization_and_crossfade_commands_reach_the_engine_and_snapshot() {
 
     let outcome = core.apply(CoreCommand::ToggleCrossfade);
     assert!(core.crossfade());
-    assert!(
-        outcome
-            .audio
-            .contains(&AudioCommand::SetCrossfade(true))
-    );
+    assert!(outcome.audio.iter().any(|command| matches!(
+        command,
+        AudioCommand::SetCrossfadeConfig(config) if config.enabled
+    )));
     let snapshot = core.snapshot(3, 0);
     assert!(snapshot.crossfade());
     assert_eq!(snapshot.normalization_code(), 2);
 
     let sync = core.audio_sync();
     assert!(sync.contains(&AudioCommand::SetNormalization(Normalization::Album)));
-    assert!(sync.contains(&AudioCommand::SetCrossfade(true)));
+    assert!(sync.iter().any(|command| matches!(
+        command,
+        AudioCommand::SetCrossfadeConfig(config) if config.enabled
+    )));
 
     // Explicit setters are idempotent and only mark the state changed when the
     // mode actually moves (the text `crossfade on|off` / `normalize album`
@@ -174,7 +176,10 @@ fn normalization_and_crossfade_commands_reach_the_engine_and_snapshot() {
     let outcome = core.apply(CoreCommand::SetCrossfade(false));
     assert!(outcome.changed);
     assert!(!core.crossfade());
-    assert!(outcome.audio.contains(&AudioCommand::SetCrossfade(false)));
+    assert!(outcome.audio.iter().any(|command| matches!(
+        command,
+        AudioCommand::SetCrossfadeConfig(config) if !config.enabled
+    )));
 }
 
 #[test]
@@ -1823,4 +1828,62 @@ fn sleep_fade_curve_reaches_zero_without_overshooting() {
     assert!((original_fade_volume(80.0, 5.0, 5.0)).abs() < f64::EPSILON);
     assert!((original_fade_volume(80.0, 9.0, 5.0)).abs() < f64::EPSILON);
     assert!((original_fade_volume(500.0, 0.0, 5.0) - 100.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn crossfade_config_respects_album_only_and_publishes_the_allowed_flag() {
+    use crate::player::CrossfadeConfig;
+
+    let mut first = track("0", 100.0);
+    first.album_id = "album-a".to_string();
+    let mut second = track("1", 100.0);
+    second.album_id = "album-a".to_string();
+    let mut other = track("2", 100.0);
+    other.album_id = "album-b".to_string();
+
+    let config = CrossfadeConfig {
+        enabled: true,
+        seconds: 3.0,
+        equal_power: true,
+        album_only: true,
+    };
+
+    let mut core = PlaybackCore::new();
+    core.load(vec![first, second], 0, false);
+    let outcome = core.apply(CoreCommand::SetCrossfadeConfig(config));
+    assert!(core.crossfade());
+    assert!(outcome.changed);
+    assert!(outcome.audio.iter().any(|command| matches!(
+        command,
+        AudioCommand::SetCrossfadeAllowed(true)
+    )));
+    assert!(outcome.audio.iter().any(|command| matches!(
+        command,
+        AudioCommand::SetCrossfadeConfig(config) if config.seconds == 3.0 && config.equal_power
+    )));
+
+    core.load(vec![other, track("3", 100.0)], 0, false);
+    let outcome = core.apply(CoreCommand::SetCrossfadeConfig(config));
+    assert!(
+        outcome
+            .audio
+            .iter()
+            .any(|command| matches!(command, AudioCommand::SetCrossfadeAllowed(false))),
+        "different albums must not crossfade"
+    );
+}
+
+#[test]
+fn crossfade_curves_are_complementary_and_power_preserving() {
+    let (out, next) = crate::player::crossfade_gains(0.0, true);
+    assert!((out - 1.0).abs() < 1e-6 && next.abs() < 1e-6);
+    let (out, next) = crate::player::crossfade_gains(1.0, true);
+    assert!(out.abs() < 1e-6 && (next - 1.0).abs() < 1e-6);
+    for step in 0..=10 {
+        let progress = step as f32 / 10.0;
+        let (out, next) = crate::player::crossfade_gains(progress, true);
+        assert!((out * out + next * next - 1.0).abs() < 1e-5);
+        let (out, next) = crate::player::crossfade_gains(progress, false);
+        assert!((out + next - 1.0).abs() < 1e-6);
+    }
 }

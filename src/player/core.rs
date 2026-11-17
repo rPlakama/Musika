@@ -17,7 +17,7 @@ use crate::ipc_protocol::{
     PlaybackState, QueueDelta, QueueOp, STATE_FLAG_GAPLESS_ARMED, STATE_FLAG_LOADING,
     STATE_FLAG_MUTED, WireTrack,
 };
-use crate::player::{Normalization, Repeat, State, Track};
+use crate::player::{CrossfadeConfig, Normalization, Repeat, State, Track};
 
 use super::engine::{AudioCommand, EngineEvent};
 
@@ -65,6 +65,7 @@ pub(crate) enum CoreCommand {
     ToggleCrossfade,
     SetNormalization(Normalization),
     SetCrossfade(bool),
+    SetCrossfadeConfig(CrossfadeConfig),
     SetTrackFavorite {
         id: String,
         favorite: bool,
@@ -118,7 +119,7 @@ pub(crate) struct PlaybackCore {
     state: State,
     repeat: Repeat,
     normalization: Normalization,
-    crossfade: bool,
+    crossfade: CrossfadeConfig,
     volume: f64,
     muted: bool,
     /// Row revision; bumped by every queue-row mutation.
@@ -170,7 +171,7 @@ impl PlaybackCore {
             state: State::Stopped,
             repeat: Repeat::Off,
             normalization: Normalization::Off,
-            crossfade: false,
+            crossfade: CrossfadeConfig::default(),
             volume: crate::consts::DEFAULT_VOLUME,
             muted: false,
             revision: 0,
@@ -219,6 +220,10 @@ impl PlaybackCore {
     }
 
     pub(crate) fn crossfade(&self) -> bool {
+        self.crossfade.enabled
+    }
+
+    pub(crate) fn crossfade_config(&self) -> CrossfadeConfig {
         self.crossfade
     }
 
@@ -301,12 +306,16 @@ impl PlaybackCore {
     /// Audio commands that re-apply the current volume/mute to a freshly
     /// created engine (used after `EngineEvent::SinkFailed` recovery).
     pub(crate) fn audio_sync(&self) -> Vec<AudioCommand> {
-        vec![
+        let mut commands = vec![
             AudioCommand::SetVolume(self.volume),
             AudioCommand::SetMuted(self.muted),
             AudioCommand::SetNormalization(self.normalization),
-            AudioCommand::SetCrossfade(self.crossfade),
-        ]
+            AudioCommand::SetCrossfadeConfig(self.crossfade),
+        ];
+        if self.crossfade.enabled {
+            commands.push(AudioCommand::SetCrossfadeAllowed(self.crossfade_allowed()));
+        }
+        commands
     }
 
     /// Full playback snapshot; `seq` is the service's frame sequence.
@@ -345,7 +354,7 @@ impl PlaybackCore {
             repeat: self.repeat.code() as u8,
             rate_milli: 1000,
             reserved: u16::from(self.normalization.code())
-                | if self.crossfade {
+                | if self.crossfade.enabled {
                     crate::ipc_protocol::RESERVED_CROSSFADE
                 } else {
                     0
@@ -396,11 +405,14 @@ impl PlaybackCore {
                 self.set_normalization(next, &mut outcome);
             }
             CoreCommand::ToggleCrossfade => {
-                let next = !self.crossfade;
+                let next = !self.crossfade.enabled;
                 self.set_crossfade(next, &mut outcome);
             }
             CoreCommand::SetNormalization(mode) => self.set_normalization(mode, &mut outcome),
             CoreCommand::SetCrossfade(enabled) => self.set_crossfade(enabled, &mut outcome),
+            CoreCommand::SetCrossfadeConfig(config) => {
+                self.set_crossfade_config(config, &mut outcome)
+            }
             CoreCommand::CycleRepeat => {
                 self.repeat = self.repeat.cycle();
                 outcome.changed = true;
@@ -711,9 +723,31 @@ impl PlaybackCore {
     }
 
     fn set_crossfade(&mut self, enabled: bool, outcome: &mut Outcome) {
-        let changed = enabled != self.crossfade;
-        self.crossfade = enabled;
-        outcome.audio.push(AudioCommand::SetCrossfade(enabled));
+        let changed = enabled != self.crossfade.enabled;
+        self.crossfade.enabled = enabled;
+        outcome
+            .audio
+            .push(AudioCommand::SetCrossfadeConfig(self.crossfade));
+        if self.crossfade.enabled {
+            outcome
+                .audio
+                .push(AudioCommand::SetCrossfadeAllowed(self.crossfade_allowed()));
+        }
+        if changed {
+            outcome.changed = true;
+        }
+    }
+
+    fn set_crossfade_config(&mut self, config: CrossfadeConfig, outcome: &mut Outcome) {
+        let config = config.sanitized();
+        let changed = config != self.crossfade;
+        self.crossfade = config;
+        outcome.audio.push(AudioCommand::SetCrossfadeConfig(config));
+        if self.crossfade.enabled {
+            outcome
+                .audio
+                .push(AudioCommand::SetCrossfadeAllowed(self.crossfade_allowed()));
+        }
         if changed {
             outcome.changed = true;
         }
@@ -883,6 +917,12 @@ impl PlaybackCore {
         if self.shuffle {
             self.shuffle_plan.retain(|candidate| *candidate != next);
         }
+        self.gapless_next = self.gapless_index();
+        if self.crossfade.enabled {
+            outcome
+                .audio
+                .push(AudioCommand::SetCrossfadeAllowed(self.crossfade_allowed()));
+        }
         self.duration = duration.max(0.0);
         self.stream_size = stream_size;
         self.loading = false;
@@ -893,6 +933,27 @@ impl PlaybackCore {
         self.anchor_ns = now_ns;
         self.rebase = false;
         outcome.changed = true;
+    }
+
+    /// Crossfade is only legal when the next row exists and, for album-only,
+    /// shares the current non-empty album.
+    fn crossfade_allowed(&self) -> bool {
+        if !self.crossfade.enabled {
+            return false;
+        }
+        let Some(next) = self.gapless_next else {
+            return false;
+        };
+        if !self.crossfade.album_only {
+            return true;
+        }
+        let Some(current) = self.queue.get(self.index) else {
+            return false;
+        };
+        let Some(next) = self.queue.get(next) else {
+            return false;
+        };
+        !current.album_id.is_empty() && current.album_id == next.album_id
     }
 
     /// Loads the current row into the engine (old `Player::rebuild`).
@@ -925,12 +986,18 @@ impl PlaybackCore {
             .and_then(|index| self.queue.get(index))
             .map(|next| next.url.clone());
         self.generation = self.generation.wrapping_add(1);
+        let crossfade_allowed = self.crossfade_allowed();
         outcome.audio.push(AudioCommand::Load {
             url: track.url,
             next_url,
             paused,
             generation: self.generation,
         });
+        if self.crossfade.enabled {
+            outcome
+                .audio
+                .push(AudioCommand::SetCrossfadeAllowed(crossfade_allowed));
+        }
         self.state = if paused {
             State::Paused
         } else {
@@ -984,12 +1051,18 @@ impl PlaybackCore {
             .and_then(|index| self.queue.get(index))
             .map(|next| next.url.clone());
         self.generation = self.generation.wrapping_add(1);
+        let crossfade_allowed = self.crossfade_allowed();
         outcome.audio.push(AudioCommand::Load {
             url: track.url,
             next_url,
             paused,
             generation: self.generation,
         });
+        if self.crossfade.enabled {
+            outcome
+                .audio
+                .push(AudioCommand::SetCrossfadeAllowed(crossfade_allowed));
+        }
         self.state = if paused {
             State::Paused
         } else {

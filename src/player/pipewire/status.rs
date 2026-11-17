@@ -86,6 +86,10 @@ pub(crate) struct Shared {
     pub(crate) normalization: AtomicU32,
     /// Optional crossfade between tracks.
     pub(crate) crossfade: AtomicBool,
+    pub(crate) crossfade_millis: AtomicU32,
+    pub(crate) crossfade_equal_power: AtomicBool,
+    /// Core decision for the current pair (album-only etc.).
+    pub(crate) crossfade_allowed: AtomicBool,
     /// Active EQ profile; the worker recompiles when `eq_epoch` changes.
     pub(crate) eq: Mutex<Option<Arc<crate::eq::EqProfile>>>,
     pub(crate) eq_epoch: AtomicU64,
@@ -128,6 +132,9 @@ impl Shared {
             sink_seen: AtomicU64::new(0),
             normalization: AtomicU32::new(0),
             crossfade: AtomicBool::new(false),
+            crossfade_millis: AtomicU32::new(5000),
+            crossfade_equal_power: AtomicBool::new(true),
+            crossfade_allowed: AtomicBool::new(true),
             eq: Mutex::new(None),
             eq_epoch: AtomicU64::new(0),
             wake_fd: if wake_fd < 0 { -1 } else { wake_fd },
@@ -186,6 +193,21 @@ impl Shared {
     }
 
     /// Records a PipeWire stream transition and wakes the engine.
+    pub(crate) fn set_crossfade_config(&self, config: crate::player::CrossfadeConfig) {
+        let config = config.sanitized();
+        self.crossfade.store(config.enabled, Ordering::Release);
+        self.crossfade_millis.store(
+            (config.seconds * 1000.0).round().clamp(1.0, 12_000.0) as u32,
+            Ordering::Release,
+        );
+        self.crossfade_equal_power
+            .store(config.equal_power, Ordering::Release);
+    }
+
+    pub(crate) fn set_crossfade_allowed(&self, allowed: bool) {
+        self.crossfade_allowed.store(allowed, Ordering::Release);
+    }
+
     /// Installs/replaces the EQ profile and wakes the worker so the new chain
     /// is compiled before the next PCM block.
     pub(crate) fn set_eq(&self, profile: Option<Arc<crate::eq::EqProfile>>) {

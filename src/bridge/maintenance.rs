@@ -233,6 +233,11 @@ impl Bridge {
         _ = self.tx.send(Event::EqChanged(name));
     }
 
+    /// UI request: change one crossfade field.
+    pub fn set_crossfade_change(&self, change: crate::playback_settings::CrossfadeChange) {
+        _ = self.tx.send(Event::CrossfadeChange(change));
+    }
+
     pub(crate) fn is_offline(&self) -> bool {
         self.offline.load(Ordering::Relaxed)
     }

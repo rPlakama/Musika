@@ -104,6 +104,31 @@ impl Default for PlaybackSettings {
     }
 }
 
+/// One live crossfade-policy change from the command line/UI.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum CrossfadeChange {
+    Length(f64),
+    /// `true` = equal-power, `false` = legacy linear.
+    Curve(bool),
+    AlbumOnly(bool),
+}
+
+impl CrossfadeChange {
+    pub fn apply(self, settings: &mut PlaybackSettings) {
+        match self {
+            Self::Length(seconds) => settings.crossfade_seconds = seconds.clamp(1.0, 12.0),
+            Self::Curve(equal_power) => {
+                settings.crossfade_curve = if equal_power {
+                    "equal-power".to_string()
+                } else {
+                    "linear".to_string()
+                };
+            }
+            Self::AlbumOnly(enabled) => settings.crossfade_album_only = enabled,
+        }
+    }
+}
+
 /// One live change to the stream-quality policy. The UI/command line sends a
 /// single field, so changing quality does not reset format/cache/size.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -134,6 +159,16 @@ impl StreamChange {
 }
 
 impl PlaybackSettings {
+    pub fn crossfade_config(&self) -> crate::player::CrossfadeConfig {
+        crate::player::CrossfadeConfig {
+            enabled: self.crossfade,
+            seconds: self.crossfade_seconds,
+            equal_power: self.crossfade_curve != "linear",
+            album_only: self.crossfade_album_only,
+        }
+        .sanitized()
+    }
+
     /// True when no transcode/bitrate cap is requested.
     pub fn stream_is_original(&self) -> bool {
         self.stream_max_bitrate == 0

@@ -251,6 +251,10 @@ async fn run_async() {
                     Event::CycleEq => {
                         let _ = playback_control.send(PlaybackInput::CycleEq);
                     }
+                    Event::CrossfadeChange(change) => {
+                        let _ = playback_control
+                            .send(PlaybackInput::SetCrossfadeConfig(*change));
+                    }
                     Event::LoginRequired { .. } => {
                         auth = Some(event.clone());
                         connection = None;
@@ -399,6 +403,7 @@ async fn run_async() {
                         | Event::SleepTimer(_)
                         | Event::Scrobble(_)
                         | Event::CycleEq
+                        | Event::CrossfadeChange(_)
                 );
                 if forward {
                     let dead = broadcast_event(&ui_clients, &event);
@@ -729,6 +734,11 @@ fn dispatch_core_bridge(services: &Services, command: &IpcCommand) {
             let _ = services
                 .playback
                 .send(PlaybackInput::SetSleepTimer(*minutes));
+        }
+        IpcCommand::CrossfadeConfig(change) => {
+            let _ = services
+                .playback
+                .send(PlaybackInput::SetCrossfadeConfig(*change));
         }
         IpcCommand::Scrobble(enabled) => {
             let _ = services

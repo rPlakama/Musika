@@ -5,6 +5,11 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Configurable crossfade:** `crossfade length 1..12`, `crossfade curve
+  equal|linear` and `crossfade album on|off` persist alongside the existing
+  toggle. The sink reads the length/curve per transition, and the core gates
+  album-only crossfades on the current/next album and republishes the flag on
+  every load and gapless boundary.
 - **Equalizer:** `Ctrl-E` cycles Equalizer APO–style profiles from
   `~/.config/musika/eqs/*.{txt,eq}` through OFF. The parser supports
   `Preamp:`, parametric `Filter:` lines (PK/PEQ, LS, HS, LP, HP, BP, NO) and

@@ -133,6 +133,8 @@ pub(crate) enum PlaybackInput {
     SetScrobble(bool),
     /// Cycle `eqs/*.{txt,eq}` -> OFF -> first.
     CycleEq,
+    /// Change one crossfade field (length/curve/album-only).
+    SetCrossfadeConfig(crate::playback_settings::CrossfadeChange),
     Shutdown,
 }
 
@@ -164,6 +166,9 @@ impl std::fmt::Debug for PlaybackInput {
             Self::SetSleepTimer(minutes) => write!(formatter, "SetSleepTimer({minutes:?})"),
             Self::SetScrobble(enabled) => write!(formatter, "SetScrobble({enabled})"),
             Self::CycleEq => write!(formatter, "CycleEq"),
+            Self::SetCrossfadeConfig(change) => {
+                write!(formatter, "SetCrossfadeConfig({change:?})")
+            }
             Self::Shutdown => write!(formatter, "Shutdown"),
         }
     }
@@ -809,9 +814,11 @@ fn run(
                         .core
                         .apply(CoreCommand::SetShuffle(shuffle)),
                     service.core.apply(CoreCommand::SetNormalization(normalization)),
-                    service.core.apply(CoreCommand::SetCrossfade(
-                        service.settings.crossfade,
-                    )),
+                    service
+                        .core
+                        .apply(CoreCommand::SetCrossfadeConfig(
+                            service.settings.crossfade_config(),
+                        )),
                 ] {
                     outcome.audio.extend(extra.audio);
                     outcome.changed |= extra.changed;
@@ -857,6 +864,16 @@ fn run(
                         }
                     }
                 }
+                force = true;
+            }
+            Some(ServiceInput::Command(PlaybackInput::SetCrossfadeConfig(change))) => {
+                change.apply(&mut service.settings);
+                let config = service.settings.crossfade_config();
+                let outcome = service
+                    .core
+                    .apply(CoreCommand::SetCrossfadeConfig(config));
+                apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
+                capture_settings(&mut service);
                 force = true;
             }
             Some(ServiceInput::Command(PlaybackInput::CycleEq)) => {
@@ -1062,6 +1079,7 @@ fn is_setting_command(command: &CoreCommand) -> bool {
             | CoreCommand::SetNormalization(_)
             | CoreCommand::ToggleCrossfade
             | CoreCommand::SetCrossfade(_)
+            | CoreCommand::SetCrossfadeConfig(_)
     )
 }
 
@@ -1072,6 +1090,14 @@ fn capture_settings(service: &mut ServiceState) {
     service.settings.repeat = service.core.repeat().code();
     service.settings.normalization = service.core.normalization().code();
     service.settings.crossfade = service.core.crossfade();
+    let crossfade = service.core.crossfade_config();
+    service.settings.crossfade_seconds = crossfade.seconds;
+    service.settings.crossfade_curve = if crossfade.equal_power {
+        "equal-power".to_string()
+    } else {
+        "linear".to_string()
+    };
+    service.settings.crossfade_album_only = crossfade.album_only;
     service.settings.shuffle = service.core.shuffle();
     _ = service
         .outputs

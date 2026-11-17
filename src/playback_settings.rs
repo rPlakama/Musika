@@ -96,6 +96,8 @@ pub struct PlaybackSettings {
     /// Material palette contrast offset (-1..=1). 0 is the spec baseline;
     /// the default 0.4 asks for roughly 40% more separation.
     pub color_contrast: f64,
+    /// HCT chroma offset (-1..=1): -1 greyscale, 0 unchanged, +1 double.
+    pub color_saturation: f64,
 }
 
 impl Default for PlaybackSettings {
@@ -123,6 +125,7 @@ impl Default for PlaybackSettings {
             scrobble: true,
             bit_perfect: false,
             color_contrast: crate::colors::engine::DEFAULT_CONTRAST,
+            color_saturation: 0.0,
         }
     }
 }
@@ -275,6 +278,10 @@ impl PlaybackSettings {
             self.color_contrast = crate::colors::engine::DEFAULT_CONTRAST;
         }
         self.color_contrast = self.color_contrast.clamp(-1.0, 1.0);
+        if !self.color_saturation.is_finite() {
+            self.color_saturation = 0.0;
+        }
+        self.color_saturation = self.color_saturation.clamp(-1.0, 1.0);
         self.stream_cache_mib = Self::clamp_cache_mib(self.stream_cache_mib);
         self
     }

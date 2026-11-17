@@ -193,6 +193,8 @@ pub enum IpcCommand {
     Stream(crate::playback_settings::StreamChange),
     /// Set the generated palette contrast offset (-1..=1).
     ColorContrast(f64),
+    /// Set the generated palette chroma offset (-1..=1).
+    ColorSaturation(f64),
     /// Sleep timer: `Some(minutes)` arms it, `None` cancels it.
     Sleep(Option<u64>),
     /// Enable/disable scrobbling.
@@ -272,6 +274,7 @@ impl IpcCommand {
             | Self::OutputBackend { .. }
             | Self::Stream(_)
             | Self::ColorContrast(_)
+            | Self::ColorSaturation(_)
             | Self::Sleep(_)
             | Self::Scrobble(_)
             | Self::EqNext
@@ -594,9 +597,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "colors",
-        usage: "colors contrast <value>",
-        description: "Set generated palette contrast (-1.0 baseline to 1.0 maximum)",
-        form: CommandForm::Advanced(ArgHints::Values(&["contrast"])),
+        usage: "colors <contrast|saturation> <value>",
+        description: "Set generated palette contrast and saturation (-1.0..=1.0)",
+        form: CommandForm::Advanced(ArgHints::Values(&["contrast", "saturation"])),
     },
     CommandSpec {
         name: "eq",
@@ -1382,8 +1385,17 @@ fn advanced_parse(name: &str, rest: &str, usage: &str) -> Result<IpcCommand, Com
                 }
                 Ok(IpcCommand::ColorContrast(contrast))
             }
+            [what, value] if what == "saturation" => {
+                let saturation = parse_number(value, "saturation")?;
+                if !(-1.0..=1.0).contains(&saturation) {
+                    return Err(CommandError(
+                        "saturation must be in -1.0..=1.0".to_string(),
+                    ));
+                }
+                Ok(IpcCommand::ColorSaturation(saturation))
+            }
             _ => Err(CommandError(
-                "usage: colors contrast <value>".to_string(),
+                "usage: colors <contrast|saturation> <value>".to_string(),
             )),
         },
 
@@ -1808,6 +1820,7 @@ fn advanced_canonical(command: &IpcCommand) -> String {
     match command {
 
         ColorContrast(contrast) => format!("colors contrast {contrast}"),
+        ColorSaturation(saturation) => format!("colors saturation {saturation}"),
 
         PlaylistCreate {
             name,
@@ -2520,7 +2533,16 @@ mod tests {
             canonical_string(&IpcCommand::ColorContrast(-0.3)),
             "colors contrast -0.3"
         );
+        assert_eq!(
+            parse("colors saturation 0.5"),
+            Ok(IpcCommand::ColorSaturation(0.5))
+        );
+        assert_eq!(
+            parse("colors saturation -0.5"),
+            Ok(IpcCommand::ColorSaturation(-0.5))
+        );
         assert!(parse("colors contrast 2").is_err());
+        assert!(parse("colors saturation 2").is_err());
         assert!(parse("colors").is_err());
     }
 

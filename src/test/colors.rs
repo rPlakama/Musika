@@ -188,6 +188,12 @@ fn knob_changes_invalidate_the_cache_tag() {
     };
     assert_ne!(base.generator(), dark.generator());
 
+    let saturation = Options {
+        saturation: 0.5,
+        ..Options::default()
+    };
+    assert_ne!(base.generator(), saturation.generator());
+
     let colorful = Options {
         source: SourceMode::Colorful,
         ..Options::default()
@@ -210,9 +216,23 @@ fn knob_changes_invalidate_the_cache_tag() {
 #[test]
 fn contrast_knob_changes_roles() {
     let seed = Rgb::new(58, 95, 205);
-    let standard = scheme::build(seed, VariantChoice::TonalSpot, 0.0, 0.0, Spec::Dms).1;
-    let contrast = scheme::build(seed, VariantChoice::TonalSpot, 0.0, 1.0, Spec::Dms).1;
+    let standard = scheme::build(seed, VariantChoice::TonalSpot, 0.0, 0.0, 0.0, Spec::Dms).1;
+    let contrast = scheme::build(seed, VariantChoice::TonalSpot, 0.0, 1.0, 0.0, Spec::Dms).1;
     assert_ne!(standard, contrast);
+
+    let desaturated = scheme::build(seed, VariantChoice::TonalSpot, 0.0, 0.0, -1.0, Spec::Dms).1;
+    assert_ne!(standard, desaturated, "-1 saturation must greyscale the seed");
+
+    // A high-chroma seed can already be at the sRGB gamut limit; use a soft
+    // seed to prove that +1 actually raises chroma rather than clamping to the
+    // same colour.
+    let soft = Rgb::new(100, 105, 115);
+    let soft_standard = scheme::build(soft, VariantChoice::TonalSpot, 0.0, 0.0, 0.0, Spec::Dms).1;
+    let oversaturated = scheme::build(soft, VariantChoice::TonalSpot, 0.0, 0.0, 1.0, Spec::Dms).1;
+    assert_ne!(
+        soft_standard, oversaturated,
+        "+1 saturation must raise chroma for a soft seed"
+    );
 }
 
 async fn colors_pool() -> SqlitePool {

@@ -726,6 +726,9 @@ fn dispatch_core_bridge(services: &Services, command: &IpcCommand) {
         IpcCommand::ColorContrast(contrast) => {
             bridge.set_color_contrast(*contrast);
         }
+        IpcCommand::ColorSaturation(saturation) => {
+            bridge.set_color_saturation(*saturation);
+        }
         IpcCommand::OutputBackend { backend, device } => {
             let _ = services.playback.send(PlaybackInput::SetOutputBackend {
                 backend: *backend,

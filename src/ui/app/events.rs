@@ -8,10 +8,14 @@ impl AppRoot {
             Event::Command(_) => {}
             Event::IpcRan(command) => self.toast_ipc(&command),
             Event::Settings(settings) => {
-                let contrast_changed =
-                    (self.settings.color_contrast - settings.color_contrast).abs() > 0.001;
+                let colors_changed = (self.settings.color_contrast
+                    - settings.color_contrast)
+                    .abs()
+                    > 0.001
+                    || (self.settings.color_saturation - settings.color_saturation).abs()
+                        > 0.001;
                 self.settings = *settings;
-                if contrast_changed {
+                if colors_changed {
                     let cover = self
                         .player
                         .current()

@@ -105,6 +105,9 @@ impl AppRoot {
             IpcCommand::ColorContrast(contrast) => {
                 self.bridge.set_color_contrast(contrast);
             }
+            IpcCommand::ColorSaturation(saturation) => {
+                self.bridge.set_color_saturation(saturation);
+            }
             IpcCommand::OutputSet(device) => {
                 self.bridge.set_output_device(Some(device), false);
             }

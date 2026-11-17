@@ -35,6 +35,7 @@ enum SettingsRowAction {
     Normalize,
     Eq,
     ColorContrast,
+    ColorSaturation,
     Scrobble,
     BitPerfect,
     Exclusive,
@@ -446,6 +447,11 @@ impl AppRoot {
                 signed_percent(s.color_contrast),
                 SettingsRowAction::ColorContrast,
             ),
+            (
+                "Palette saturation".into(),
+                signed_percent(s.color_saturation),
+                SettingsRowAction::ColorSaturation,
+            ),
             ("Scrobbling".into(), yes_no(s.scrobble), SettingsRowAction::Scrobble),
             ("Bit-perfect DSP".into(), yes_no(s.bit_perfect), SettingsRowAction::BitPerfect),
             ("Exclusive access".into(), yes_no(s.exclusive), SettingsRowAction::Exclusive),
@@ -481,6 +487,10 @@ impl AppRoot {
             SettingsRowAction::ColorContrast => {
                 let next = contrast_after_step(self.settings.color_contrast, direction);
                 self.bridge.set_color_contrast(next);
+            }
+            SettingsRowAction::ColorSaturation => {
+                let next = contrast_after_step(self.settings.color_saturation, direction);
+                self.bridge.set_color_saturation(next);
             }
             SettingsRowAction::Length => {
                 let next =
@@ -557,6 +567,16 @@ impl AppRoot {
                     .find(|step| *step > self.settings.color_contrast + 0.01)
                     .unwrap_or(STEPS[0]);
                 self.bridge.set_color_contrast(next);
+            }
+            SettingsRowAction::ColorSaturation => {
+                const STEPS: [f64; 11] =
+                    [-1.0, -0.8, -0.6, -0.4, -0.2, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0];
+                let next = STEPS
+                    .iter()
+                    .copied()
+                    .find(|step| *step > self.settings.color_saturation + 0.01)
+                    .unwrap_or(STEPS[0]);
+                self.bridge.set_color_saturation(next);
             }
             SettingsRowAction::Scrobble => {
                 self.bridge.set_scrobble(!self.settings.scrobble);

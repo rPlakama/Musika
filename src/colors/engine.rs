@@ -44,6 +44,8 @@ pub const DEFAULT_CONTRAST: f64 = 0.4;
 pub struct Options {
     pub variant: VariantChoice,
     pub contrast: f64,
+    /// HCT chroma offset: -1 greyscale, 0 unchanged, +1 double chroma.
+    pub saturation: f64,
     pub source: SourceMode,
     pub spec: Spec,
     /// Explicit `#rrggbb` seed; skips the image entirely.
@@ -55,6 +57,7 @@ impl Default for Options {
         Self {
             variant: VariantChoice::Smart,
             contrast: DEFAULT_CONTRAST,
+            saturation: 0.0,
             source: SourceMode::Dominant,
             spec: Spec::Dms,
             seed_override: None,
@@ -63,7 +66,8 @@ impl Default for Options {
 }
 
 impl Options {
-    /// Reads `MUSIKA_COLOR_VARIANT` / `_CONTRAST` / `_SOURCE` / `_SPEC`.
+    /// Reads `MUSIKA_COLOR_VARIANT` / `_CONTRAST` / `_SATURATION` / `_SOURCE` /
+    /// `_SPEC`.
     /// (`_SOURCE` accepts `dominant`, `colorful` or a `#rrggbb` seed.)
     pub fn from_env() -> Self {
         let contrast = std::env::var("MUSIKA_COLOR_CONTRAST")
@@ -71,6 +75,11 @@ impl Options {
             .and_then(|value| value.trim().parse().ok())
             .filter(|value: &f64| (-1.0..=1.0).contains(value))
             .unwrap_or_else(|| crate::playback_settings::current().color_contrast);
+        let saturation = std::env::var("MUSIKA_COLOR_SATURATION")
+            .ok()
+            .and_then(|value| value.trim().parse().ok())
+            .filter(|value: &f64| (-1.0..=1.0).contains(value))
+            .unwrap_or_else(|| crate::playback_settings::current().color_saturation);
 
         let mut source = SourceMode::Dominant;
         let mut seed_override = None;
@@ -94,6 +103,7 @@ impl Options {
                 .and_then(|value| VariantChoice::from_name(&value))
                 .unwrap_or_default(),
             contrast,
+            saturation,
             source,
             spec,
             seed_override,
@@ -103,11 +113,12 @@ impl Options {
     /// Cache tag: any knob change invalidates stored schemes.
     pub fn generator(&self) -> String {
         format!(
-            "musika-colors/{}/{}/{}/{:.2}/{}",
+            "musika-colors/{}/{}/{}/{:.2}/{:.2}/{}",
             self.spec.name(),
             self.variant.name(),
             self.source.name(),
             self.contrast,
+            self.saturation,
             self.seed_override
                 .map(|argb| format!("{argb:08x}"))
                 .unwrap_or_else(|| "-".to_string()),
@@ -222,6 +233,7 @@ fn build_scheme(seed: Rgb, colorfulness: f64, options: &Options) -> Result<Cover
         options.variant,
         colorfulness,
         options.contrast,
+        options.saturation,
         options.spec,
     );
     Ok(CoverScheme {

@@ -113,11 +113,23 @@ pub fn build(
     variant: VariantChoice,
     colorfulness: f64,
     contrast: f64,
+    saturation: f64,
     spec: Spec,
 ) -> (String, BTreeMap<String, String>) {
     let variant = variant.resolve(colorfulness);
-    let dynamic = dynamic_scheme(seed, variant, spec, contrast, true);
+    let dynamic = dynamic_scheme(saturated(seed, saturation), variant, spec, contrast, true);
     (variant_name(&variant).to_string(), role_map(&dynamic))
+}
+
+/// Scales the seed's HCT chroma: `-1` removes all colour, `0` keeps the
+/// extracted seed, `+1` doubles it (the HCT solver clamps to the sRGB gamut).
+fn saturated(seed: Rgb, saturation: f64) -> Rgb {
+    if !saturation.is_finite() || saturation.abs() < f64::EPSILON {
+        return seed;
+    }
+    let mut hct = Hct::new(seed);
+    hct.set_chroma((hct.get_chroma() * (1.0 + saturation.clamp(-1.0, 1.0))).clamp(0.0, 200.0));
+    Rgb::from(hct)
 }
 
 /// Builds the `DynamicScheme` for one spec.

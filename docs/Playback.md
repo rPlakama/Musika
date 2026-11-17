@@ -276,8 +276,8 @@ background rather than teed from the live FFmpeg read.
 limit. S24, a configurable resampler and dither remain absent; the sink has no
 S16 fallback negotiation yet — the graph is assumed to accept F32LE. PipeWire
 sinks are enumerated for the `output` command and a named target is persisted;
-follow-default means the stream connects to PipeWire's default on creation and
-stream rebuilds (there is no live default-sink watcher yet).
+follow-default also watches PipeWire's `default.audio.sink` metadata and
+rebuilds the stream when the graph's default moves.
 
 **OS/device integration.** Output is PipeWire-only. There is no output-device
 enumeration or selection (streams target the default node), no suspend/resume
@@ -329,6 +329,10 @@ reliability and CI items remain roadmap work.
 
 ### Implemented after the audit (2026-11)
 
+- **Idle inhibition:** while the transport is Playing, a background logind
+  `Inhibit("idle")` file descriptor is held; it is released on pause/stop.
+  Headless sessions without logind simply skip the request.
+
 - **Configurable crossfade:** on top of the existing toggle, `crossfade length
   <1..12>`, `crossfade curve <equal|linear>` and `crossfade album <on|off>`
   update the shared sink policy and persist it. The worker reads the length
@@ -367,8 +371,8 @@ reliability and CI items remain roadmap work.
 - **Output selection:** `output list|default|<node.name>` enumerates the
   PipeWire sinks, retargets the live stream without dropping queued PCM and
   persists the choice; the stream format rebuild also carries the target.
-  Follow-default currently applies when a stream is created/rebuilt rather
-  than reacting to a live default-sink change.
+  Follow-default tracks PipeWire's `default.audio.sink` metadata live and
+  rebuilds the stream when the default moves.
 
 - **Structured errors, retries and persistence:** `EngineEvent::Failed`
   carries `PlaybackError { kind, stage, message }`; network and 5xx failures

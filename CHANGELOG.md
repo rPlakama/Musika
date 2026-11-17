@@ -5,6 +5,12 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Idle inhibition:** playing audio holds a systemd-logind `Inhibit("idle")`
+  lock in a background task and releases it on pause/stop, so the desktop's
+  idle timeout does not suspend under playback.
+- **Live default output:** follow-default now subscribes to PipeWire's
+  `default.audio.sink` metadata and rebuilds the stream on a default-sink
+  change, so a headset/HDMI switch moves playback without reopening the app.
 - **Configurable crossfade:** `crossfade length 1..12`, `crossfade curve
   equal|linear` and `crossfade album on|off` persist alongside the existing
   toggle. The sink reads the length/curve per transition, and the core gates

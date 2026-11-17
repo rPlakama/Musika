@@ -1082,6 +1082,7 @@ fn bootstrap_client(
 
 fn publish_mpris(snapshot: &Snapshot) {
     let state = snapshot.state;
+    crate::inhibit::set(matches!(state.state(), proto::StateWire::Playing));
     // The tray icon doubles as a playback indicator: the pause glyph while
     // audio plays, the play glyph while the core is paused or stopped.
     crate::tray::set_playing(matches!(state.state(), proto::StateWire::Playing));

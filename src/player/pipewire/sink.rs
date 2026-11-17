@@ -17,7 +17,7 @@
 //! wakes the engine and surfaces as `EngineEvent::SinkFailed` instead of being
 //! folded into a track failure.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -546,6 +546,54 @@ fn run_sink(
         move |command| pending.borrow_mut().push_back(command)
     });
 
+    // Follow the default sink live: PipeWire publishes it through the
+    // `default` metadata object. Rebinding replaces the previous proxy; the
+    // callback only sets a flag, so a graph change never re-enters the stream
+    // builder from inside the loop callback.
+    let registry = core
+        .get_registry_rc()
+        .map_err(|error| format!("cannot read PipeWire registry: {error}"))?;
+    let default_changed = Rc::new(Cell::new(false));
+    let metadata_keep: Rc<RefCell<Option<(pw::metadata::Metadata, pw::metadata::MetadataListener)>>> =
+        Rc::new(RefCell::new(None));
+    let _registry_listener = registry
+        .add_listener_local()
+        .global({
+            let registry = registry.clone();
+            let default_changed = Rc::clone(&default_changed);
+            let metadata_keep = Rc::clone(&metadata_keep);
+            move |global| {
+                if global.type_ != pw::types::ObjectType::Metadata {
+                    return;
+                }
+                let is_default = global
+                    .props
+                    .as_ref()
+                    .and_then(|props| props.get("metadata.name"))
+                    == Some("default");
+                if !is_default {
+                    return;
+                }
+                let Ok(metadata) =
+                    registry.bind::<pw::metadata::Metadata, _>(global)
+                else {
+                    return;
+                };
+                let changed = Rc::clone(&default_changed);
+                let listener = metadata
+                    .add_listener_local()
+                    .property(move |_subject, key, _type, _value| {
+                        if key == Some("default.audio.sink") {
+                            changed.set(true);
+                        }
+                        0
+                    })
+                    .register();
+                *metadata_keep.borrow_mut() = Some((metadata, listener));
+            }
+        })
+        .register();
+
     let mut target: Option<String> = None;
     let mut active = build_stream(&core, &ring, &shared, ring.rate(), target.as_deref())?;
     let mut volume = 1.0f32;
@@ -628,6 +676,21 @@ fn run_sink(
                     }
                 }
                 SinkCommand::Shutdown => running = false,
+            }
+        }
+        if running && default_changed.replace(false) && target.is_none() {
+            let result = rebuild_stream(
+                &mut active,
+                &core,
+                &ring,
+                &shared,
+                ring.rate(),
+                None,
+            );
+            if result.is_ok() {
+                let volume_applied = apply_volume(&active.stream, &ring, volume);
+                let mute_applied = apply_mute(&active.stream, &ring, muted);
+                controls_dirty = !(volume_applied && mute_applied);
             }
         }
         if running

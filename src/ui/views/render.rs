@@ -384,7 +384,7 @@ impl Render for AppRoot {
         if self.player.state() == crate::player::State::Playing {
             perf::request_frame(window, "playing");
         }
-        if self.player.is_loading() {
+        if self.player.is_loading() || self.player.is_retrying() {
             perf::request_frame(window, "loading");
         }
         if self.syncing

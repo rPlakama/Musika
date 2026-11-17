@@ -70,9 +70,9 @@ pub(crate) enum EngineEvent {
     },
     /// Decoder EOF and the sink drained the ring: advance the queue.
     Ended,
-    /// Track/decoder failure: advance the queue (old `advance_after_error`).
+    /// Track/decoder failure: retry or advance depending on the kind.
     Failed {
-        message: String,
+        error: crate::player::PlaybackError,
     },
     /// PipeWire stream failure: recover the engine, do NOT advance.
     SinkFailed {
@@ -88,6 +88,7 @@ pub(crate) enum EngineEvent {
 pub(crate) struct EngineClock {
     pub played_frames: u64,
     pub buffered_frames: u64,
+    pub underruns: u64,
     pub loading: bool,
     pub failed: bool,
 }
@@ -96,6 +97,7 @@ pub(crate) struct EngineClock {
 struct ClockState {
     played_frames: AtomicU64,
     buffered_frames: AtomicU64,
+    underruns: AtomicU64,
     loading: AtomicBool,
     failed: AtomicBool,
 }
@@ -173,6 +175,10 @@ impl Engine {
         EngineClock {
             played_frames: self.clock.played_frames.load(Ordering::Relaxed),
             buffered_frames: self.clock.buffered_frames.load(Ordering::Relaxed),
+            underruns: self
+                .clock
+                .underruns
+                .load(Ordering::Relaxed),
             loading: self.clock.loading.load(Ordering::Relaxed),
             failed: self.clock.failed.load(Ordering::Relaxed),
         }
@@ -274,6 +280,7 @@ fn engine_thread(
         clock
             .buffered_frames
             .store(native.buffered_frames(), Ordering::Relaxed);
+        clock.underruns.store(native.underruns(), Ordering::Relaxed);
         clock.loading.store(native.loading(), Ordering::Relaxed);
         clock.failed.store(native.failed(), Ordering::Relaxed);
     }
@@ -347,8 +354,8 @@ fn pump(
     if native.take_first_pcm() && !emit(EngineEvent::FirstPcm) {
         return false;
     }
-    if let Some(message) = native.take_failed()
-        && !emit(EngineEvent::Failed { message })
+    if let Some(error) = native.take_failed()
+        && !emit(EngineEvent::Failed { error })
     {
         return false;
     }

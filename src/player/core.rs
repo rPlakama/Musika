@@ -56,6 +56,7 @@ pub(crate) enum CoreCommand {
         delta: i32,
     },
     CycleRepeat,
+    SetRepeat(Repeat),
     ShuffleQueue,
     CycleNormalization,
     ToggleCrossfade,
@@ -77,6 +78,9 @@ pub(crate) enum CoreCommand {
     Recover {
         position: f64,
     },
+    /// Retry the current row at `position` as a live playback attempt (the
+    /// service's transparent network retry / post-recovery resume).
+    ResumeAt(f64),
 }
 
 #[derive(Debug, Default)]
@@ -97,6 +101,12 @@ pub(crate) struct Outcome {
     /// for the next play attempt instead of toasting before the user asked to
     /// play anything.
     pub(crate) deferred_failure: bool,
+    /// The structured failure behind `changed`, for the service's retry and
+    /// toast policy.
+    pub(crate) failure: Option<crate::player::PlaybackError>,
+    /// The transport position at the failure, used to reopen at the same
+    /// point. `None` when the outcome is not a failure.
+    pub(crate) failure_position: Option<f64>,
 }
 
 pub(crate) struct PlaybackCore {
@@ -124,6 +134,10 @@ pub(crate) struct PlaybackCore {
     /// the engine can stall on an HTTP connect.
     offline: bool,
     last_error: Option<String>,
+    last_failure: Option<crate::player::PlaybackError>,
+    /// A retryable failure is waiting for the service's retry timer; the row
+    /// stays selected and the transport advertises the retrying flag.
+    retrying: bool,
     /// The row the engine was told to predecode after the current one.
     gapless_next: Option<usize>,
     /// Displayed position at `anchor_ns`.
@@ -158,6 +172,8 @@ impl PlaybackCore {
             loaded_current: false,
             offline: false,
             last_error: None,
+            last_failure: None,
+            retrying: false,
             gapless_next: None,
             anchor_position: 0.0,
             anchor_ns: 0,
@@ -233,6 +249,14 @@ impl PlaybackCore {
         self.offline
     }
 
+    pub(crate) fn last_failure(&self) -> Option<&crate::player::PlaybackError> {
+        self.last_failure.as_ref()
+    }
+
+    pub(crate) fn retrying(&self) -> bool {
+        self.retrying
+    }
+
     /// Applies a connectivity verdict. This only governs *future* loads: a
     /// stream that is already open and playing is left alone (it may well
     /// finish from the read-ahead buffer).
@@ -283,6 +307,9 @@ impl PlaybackCore {
         if self.gapless_next.is_some() {
             flags |= STATE_FLAG_GAPLESS_ARMED;
         }
+        if self.retrying {
+            flags |= crate::ipc_protocol::STATE_FLAG_RETRYING;
+        }
         PlaybackState {
             seq,
             queue_rev: self.revision,
@@ -317,6 +344,8 @@ impl PlaybackCore {
     /// already read `CLOCK_MONOTONIC`.
     pub(crate) fn apply_at(&mut self, command: CoreCommand, now_ns: u64) -> Outcome {
         self.observe(now_ns);
+        // Every user/core command supersedes a pending retry.
+        self.retrying = false;
         let mut outcome = Outcome::default();
         match command {
             CoreCommand::PlayPause => self.play_pause(&mut outcome),
@@ -356,6 +385,12 @@ impl PlaybackCore {
                 self.repeat = self.repeat.cycle();
                 outcome.changed = true;
             }
+            CoreCommand::SetRepeat(repeat) => {
+                if self.repeat != repeat {
+                    self.repeat = repeat;
+                    outcome.changed = true;
+                }
+            }
             CoreCommand::ShuffleQueue => self.shuffle(&mut outcome),
             CoreCommand::SetTrackFavorite { id, favorite } => {
                 self.set_track_favorite(&id, favorite, &mut outcome)
@@ -366,6 +401,7 @@ impl PlaybackCore {
             }
             CoreCommand::InsertMany { at, tracks } => self.insert_rows(at, tracks, &mut outcome),
             CoreCommand::Recover { position } => self.recover(position, &mut outcome),
+            CoreCommand::ResumeAt(position) => self.resume_at(position, &mut outcome),
         }
         outcome
     }
@@ -434,42 +470,50 @@ impl PlaybackCore {
                 position,
             } => self.boundary(duration, stream_size, position, now_ns, &mut outcome),
             EngineEvent::Ended => self.advance_after_error(&mut outcome),
-            EngineEvent::Failed { message } => {
-                let remote = self
-                    .queue
-                    .get(self.index)
-                    .is_some_and(|track| crate::player::is_remote_url(&track.url));
-                if remote && (!self.loaded_current || self.offline) {
-                    if self.state == State::Paused {
-                        // A restored queue pre-opens its row while paused.
-                        // That failure is not a play attempt: keep the paused
-                        // row and let the next Play retry and report it.
-                        self.failed = true;
-                        self.last_error = Some(crate::player::SERVER_UNAVAILABLE.to_string());
-                        outcome.deferred_failure = true;
-                        return outcome;
-                    }
-                    // The stream never opened: the row is not in the download
-                    // tier and the server did not answer. Stop instead of
-                    // skipping through the rest of the queue and toasting once
-                    // per row.
-                    self.failed = true;
-                    self.last_error = Some(crate::player::SERVER_UNAVAILABLE.to_string());
-                    self.stop(&mut outcome);
-                    outcome.server_unavailable = true;
-                    return outcome;
-                }
+            EngineEvent::Failed { error } => {
+                let failure_position = self.position_at(now_ns);
+                outcome.failure_position = Some(failure_position);
                 let title = self
                     .queue
                     .get(self.index)
                     .map(|track| track.title.clone())
                     .unwrap_or_default();
                 self.last_error = Some(if title.is_empty() {
-                    message
+                    error.message.clone()
                 } else {
-                    format!("{title}: {message}")
+                    format!("{title}: {}", error.message)
                 });
                 self.failed = true;
+                self.last_failure = Some(error.clone());
+                outcome.failure = Some(error.clone());
+
+                let remote = self
+                    .queue
+                    .get(self.index)
+                    .is_some_and(|track| crate::player::is_remote_url(&track.url));
+                if remote && !self.loaded_current && self.state == State::Paused {
+                    // A restored queue pre-opens its row while paused. That
+                    // failure is not a play attempt: keep the paused row and
+                    // let the next Play report it. The retry budget is not
+                    // touched by a pre-open.
+                    outcome.deferred_failure = true;
+                    return outcome;
+                }
+
+                if error.retryable() {
+                    // Keep the row/index and let the service reopen the
+                    // stream at the stored position. No advance, no toast yet.
+                    self.retrying = true;
+                    self.loading = false;
+                    outcome.changed = true;
+                    return outcome;
+                }
+                if error.is_auth() {
+                    // Credentials are wrong for every row: advancing would
+                    // toast once per track and drain the queue.
+                    self.stop(&mut outcome);
+                    return outcome;
+                }
                 self.advance_after_error(&mut outcome);
             }
             EngineEvent::SinkFailed { message } => {
@@ -580,6 +624,7 @@ impl PlaybackCore {
         self.state = State::Stopped;
         self.loading = false;
         self.loaded_current = false;
+        self.retrying = false;
         self.gapless_next = None;
         self.anchor_position = 0.0;
         self.rebase = true;
@@ -757,6 +802,7 @@ impl PlaybackCore {
             self.refuse_offline(outcome);
             return;
         }
+        self.retrying = false;
         self.duration = 0.0;
         self.stream_size = 0;
         self.seekable = false;
@@ -795,6 +841,22 @@ impl PlaybackCore {
         if self.queue.is_empty() || self.state == State::Stopped {
             return;
         }
+        let paused = self.state != State::Playing;
+        self.load_current_at(position, paused, outcome);
+    }
+
+    /// Retry path: reload the current row at `position` and play it.
+    fn resume_at(&mut self, position: f64, outcome: &mut Outcome) {
+        if self.queue.is_empty() {
+            return;
+        }
+        self.state = State::Playing;
+        self.load_current_at(position, false, outcome);
+    }
+
+    /// Shared engine reload at an explicit position. `paused` preserves the
+    /// sink-recovery behaviour; the retry path always asks for audio.
+    fn load_current_at(&mut self, position: f64, paused: bool, outcome: &mut Outcome) {
         let Some(track) = self.queue.get(self.index).cloned() else {
             return;
         };
@@ -802,8 +864,8 @@ impl PlaybackCore {
             self.refuse_offline(outcome);
             return;
         }
-        let paused = self.state != State::Playing;
         let position = position.max(0.0);
+        self.retrying = false;
         self.duration = 0.0;
         self.stream_size = 0;
         self.seekable = false;
@@ -822,6 +884,11 @@ impl PlaybackCore {
             paused,
             generation: self.generation,
         });
+        self.state = if paused {
+            State::Paused
+        } else {
+            State::Playing
+        };
         self.anchor_position = position;
         self.anchor_ns = self.now_ns;
         self.rebase = true;

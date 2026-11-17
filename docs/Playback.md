@@ -252,12 +252,11 @@ the audit"); the remaining roadmap phases are still plans.
 
 ### Gaps
 
-**Network resilience.** A transient HTTP open/read failure is not retried:
-`open_input` returns the error, `EngineEvent::Failed` stores `last_error` and
-the queue advances. There is no bounded retry/backoff, no
-reconnect-at-position after a network hiccup, and no offline/latch handling
-inside playback. Long tracks are protected by the 7/8-to-2 s ring
-drain/reopen policy and the 120 s rw timeout, not by retrying a failed request.
+**Network resilience.** A transient HTTP open/read failure used to skip the
+row. The service now classifies the failure and retries retryable network/5xx
+errors at the same position with 1/2/4 s backoff; only a genuinely unreachable
+server stops the transport and flips the app offline. Long tracks are still
+protected by the 7/8-to-2 s ring drain/reopen policy and the 120 s rw timeout.
 
 **Buffering visibility.** The published snapshot exposes `loading` and
 `last_error` only (IPC `status` adds state/position/duration/volume/muted/
@@ -320,6 +319,16 @@ reliability and CI items remain roadmap work.
   prefetch beyond the next track.
 
 ### Implemented after the audit (2026-11)
+
+- **Structured errors, retries and persistence:** `EngineEvent::Failed`
+  carries `PlaybackError { kind, stage, message }`; network and 5xx failures
+  are retried at the failed position (1/2/4 s, three retries), and a network
+  failure that exhausts the budget stops the row, flips the app offline and
+  is resumed once by the next successful health probe. 4xx/auth/decode
+  failures stay online. `status` exposes `retrying`, `retry_attempt` and
+  playback metrics (retries, reconnects, sink rebuilds, buffered frames,
+  underruns); repeat, normalization and crossfade persist in
+  `playback_settings`.
 
 - **F32 pipeline:** decoder/swresample emits packed F32 stereo (normalised to
   `[-1, 1]`), the ring stores F32 (16 MiB for the same ~10.9 s at 192 kHz),

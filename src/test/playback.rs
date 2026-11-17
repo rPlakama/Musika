@@ -25,7 +25,7 @@ use crate::ipc_protocol::{
 };
 use crate::player::core::{CoreCommand, Outcome, PlaybackCore};
 use crate::player::engine::{AudioCommand, EngineEvent};
-use crate::player::{Normalization, Repeat, State, Track};
+use crate::player::{ErrorStage, Normalization, PlaybackError, Repeat, State, Track};
 
 const SECOND: u64 = 1_000_000_000;
 
@@ -414,7 +414,7 @@ fn failed_advances_and_keeps_the_error() {
     let mut core = playing_core(3);
     let outcome = core.on_engine(
         EngineEvent::Failed {
-            message: "decoder: broken".to_string(),
+            error: PlaybackError::classify(ErrorStage::Read, "decoder: broken"),
         },
         SECOND,
     );
@@ -455,21 +455,25 @@ fn offline_refuses_a_remote_row_before_the_engine_sees_it() {
 }
 
 #[test]
-fn remote_open_failure_stops_instead_of_skipping_the_queue() {
+fn a_retryable_open_failure_keeps_the_row_for_the_service_retry() {
     let mut core = PlaybackCore::new();
     core.load(remote_tracks(3), 0, false);
 
     let outcome = core.on_engine(
         EngineEvent::Failed {
-            message: "decoder: cannot open 'http://server.test/x': Connection refused".to_string(),
+            error: PlaybackError::classify(
+                ErrorStage::Open,
+                "decoder: cannot open 'http://server.test/x': Connection refused",
+            ),
         },
         SECOND,
     );
 
-    assert!(outcome.server_unavailable);
+    assert!(outcome.failure.as_ref().is_some_and(PlaybackError::retryable));
+    assert!(core.retrying());
     assert_eq!(core.index(), 0, "the queue must not advance");
-    assert_eq!(core.state(), State::Stopped);
-    assert_eq!(core.last_error(), Some(crate::player::SERVER_UNAVAILABLE));
+    assert_eq!(core.state(), State::Playing, "the transport is retrying");
+    assert!(core.last_error().is_some());
 }
 
 #[test]
@@ -480,7 +484,10 @@ fn a_paused_remote_preopen_failure_waits_for_the_play_attempt() {
 
     let outcome = core.on_engine(
         EngineEvent::Failed {
-            message: "decoder: cannot open 'http://server.test/x': Connection refused".to_string(),
+            error: PlaybackError::classify(
+                ErrorStage::Open,
+                "decoder: cannot open 'http://server.test/x': Connection refused",
+            ),
         },
         SECOND,
     );
@@ -494,13 +501,16 @@ fn a_paused_remote_preopen_failure_waits_for_the_play_attempt() {
     assert_eq!(core.state(), State::Playing);
     let failed = core.on_engine(
         EngineEvent::Failed {
-            message: "decoder: cannot open 'http://server.test/x': Connection refused".to_string(),
+            error: PlaybackError::classify(
+                ErrorStage::Open,
+                "decoder: cannot open 'http://server.test/x': Connection refused",
+            ),
         },
         2 * SECOND,
     );
-    assert!(failed.server_unavailable);
-    assert_eq!(core.state(), State::Stopped);
-    assert_eq!(core.last_error(), Some(crate::player::SERVER_UNAVAILABLE));
+    assert!(failed.failure.as_ref().is_some_and(PlaybackError::retryable));
+    assert!(core.retrying());
+    assert_eq!(core.state(), State::Playing);
 }
 
 #[test]
@@ -533,7 +543,7 @@ fn a_remote_failure_after_the_stream_opened_keeps_the_generic_path() {
 
     let outcome = core.on_engine(
         EngineEvent::Failed {
-            message: "decoder: cannot read audio packet".to_string(),
+            error: PlaybackError::classify(ErrorStage::Read, "decoder: cannot read audio packet"),
         },
         2 * SECOND,
     );
@@ -1551,7 +1561,7 @@ fn engine_crossfade_reports_the_next_track_offset() {
                 boundary = Some((position, duration));
                 break;
             }
-            Ok(EngineEvent::Failed { message }) => panic!("crossfade failed: {message}"),
+            Ok(EngineEvent::Failed { error }) => panic!("crossfade failed: {error}"),
             Ok(_) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -1656,4 +1666,124 @@ fn native_can_be_rebuilt_cleanly() {
         std::thread::sleep(std::time::Duration::from_millis(50));
         drop(native);
     }
+}
+
+#[test]
+fn failure_classification_distinguishes_retryable_causes() {
+    use crate::player::PlaybackError;
+    use crate::player::error::ErrorKind;
+
+    let network = PlaybackError::classify(
+        crate::player::ErrorStage::Open,
+        "decoder: cannot open 'http://server/stream': Connection refused",
+    );
+    assert_eq!(network.kind, ErrorKind::Network);
+    assert!(network.retryable());
+
+    let missing = PlaybackError::classify(
+        crate::player::ErrorStage::Open,
+        "Server returned 404 Not Found",
+    );
+    assert_eq!(missing.kind, ErrorKind::Http(404));
+    assert!(!missing.retryable());
+
+    let unavailable = PlaybackError::classify(
+        crate::player::ErrorStage::Open,
+        "Server returned 503 Service Unavailable",
+    );
+    assert_eq!(unavailable.kind, ErrorKind::Http(503));
+    assert!(unavailable.retryable());
+
+    let auth = PlaybackError::classify(
+        crate::player::ErrorStage::Open,
+        "Server returned 401 Unauthorized",
+    );
+    assert_eq!(auth.kind, ErrorKind::Auth);
+    assert!(!auth.retryable());
+
+    let codec = PlaybackError::classify(
+        crate::player::ErrorStage::Read,
+        "decoder: invalid data found when processing input",
+    );
+    assert_eq!(codec.kind, ErrorKind::Decode);
+    assert!(!codec.retryable());
+}
+
+#[test]
+fn a_missing_remote_track_advances_instead_of_retrying() {
+    let mut core = PlaybackCore::new();
+    core.load(remote_tracks(2), 0, false);
+
+    let outcome = core.on_engine(
+        EngineEvent::Failed {
+            error: PlaybackError::classify(ErrorStage::Open, "Server returned 404 Not Found"),
+        },
+        SECOND,
+    );
+
+    assert!(!outcome.failure.as_ref().is_some_and(PlaybackError::retryable));
+    assert!(!core.retrying());
+    assert_eq!(core.index(), 1, "a permanent failure keeps the old advance path");
+}
+
+#[test]
+fn retry_budget_schedules_three_backoff_steps_then_stops() {
+    use crate::daemon::playback::{RetryDecision, retry_decision};
+
+    assert_eq!(
+        retry_decision(None),
+        RetryDecision::Schedule {
+            attempt: 0,
+            delay: std::time::Duration::from_secs(1)
+        }
+    );
+    assert_eq!(
+        retry_decision(Some(0)),
+        RetryDecision::Schedule {
+            attempt: 1,
+            delay: std::time::Duration::from_secs(2)
+        }
+    );
+    assert_eq!(
+        retry_decision(Some(1)),
+        RetryDecision::Schedule {
+            attempt: 2,
+            delay: std::time::Duration::from_secs(4)
+        }
+    );
+    assert_eq!(retry_decision(Some(2)), RetryDecision::Exhausted);
+}
+
+#[test]
+fn retry_backoff_is_bounded_and_transport_actions_cancel_it() {
+    use crate::daemon::playback::{cancels_retry, retry_delay};
+    use crate::player::core::CoreCommand;
+
+    assert_eq!(retry_delay(0), std::time::Duration::from_secs(1));
+    assert_eq!(retry_delay(1), std::time::Duration::from_secs(2));
+    assert_eq!(retry_delay(2), std::time::Duration::from_secs(4));
+    assert_eq!(retry_delay(99), std::time::Duration::from_secs(4));
+
+    assert!(cancels_retry(&CoreCommand::Next));
+    assert!(cancels_retry(&CoreCommand::Seek(10.0)));
+    assert!(cancels_retry(&CoreCommand::Pause));
+    assert!(!cancels_retry(&CoreCommand::SetVolume(50.0)));
+    assert!(!cancels_retry(&CoreCommand::SetMuted(true)));
+    assert!(!cancels_retry(&CoreCommand::ToggleCrossfade));
+}
+
+#[test]
+fn an_auth_failure_stops_instead_of_draining_the_queue() {
+    let mut core = PlaybackCore::new();
+    core.load(remote_tracks(3), 0, false);
+
+    core.on_engine(
+        EngineEvent::Failed {
+            error: PlaybackError::classify(ErrorStage::Open, "Server returned 401 Unauthorized"),
+        },
+        SECOND,
+    );
+
+    assert_eq!(core.index(), 0);
+    assert_eq!(core.state(), State::Stopped);
 }

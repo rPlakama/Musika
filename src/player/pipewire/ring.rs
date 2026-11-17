@@ -64,6 +64,8 @@ pub(crate) struct Ring {
     volume: AtomicU32,
     /// Pending output envelope request: 0 none, 1 fade in, 2 fade out.
     fade_request: AtomicU32,
+    /// Frames the graph requested but the producer could not supply.
+    underruns: AtomicU64,
     wake_fd: libc::c_int,
 }
 
@@ -112,6 +114,7 @@ impl Ring {
             muted: AtomicBool::new(false),
             volume: AtomicU32::new(1000),
             fade_request: AtomicU32::new(0),
+            underruns: AtomicU64::new(0),
             wake_fd,
         })
     }
@@ -168,6 +171,10 @@ impl Ring {
 
     pub(crate) fn failed(&self) -> bool {
         self.failed.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn underruns(&self) -> u64 {
+        self.underruns.load(Ordering::Relaxed)
     }
 
     pub(crate) fn set_failed(&self, failed: bool) {
@@ -374,7 +381,14 @@ impl Ring {
         let read = self.read.load(Ordering::Relaxed);
         let write = self.write.load(Ordering::Acquire);
         let available = write.saturating_sub(read) as usize;
-        let frames = available.min(max_frames).min(out.len() / CHANNELS);
+        let requested = max_frames.min(out.len() / CHANNELS);
+        let frames = available.min(requested);
+        // A reset/flush intentionally drops queued audio; only a genuine
+        // shortfall is a dropout.
+        if !reset && !flush && !self.paused() && requested > frames {
+            self.underruns
+                .fetch_add((requested - frames) as u64, Ordering::Relaxed);
+        }
         if frames > 0 {
             let start = (read & RING_MASK) as usize;
             let first = frames.min(RING_FRAMES - start);
@@ -449,6 +463,19 @@ pub(crate) fn apply_gain(out: &mut [f32], muted: bool, volume_milli: u32, frames
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn underruns_count_shortfalls_but_not_paused_reads() {
+        let ring = Ring::new().unwrap();
+        let mut out = vec![0.0f32; 64 * CHANNELS];
+        assert_eq!(ring.read_into(&mut out, 64), 0);
+        assert_eq!(ring.underruns(), 64);
+
+        // A paused graph request is not a dropout.
+        ring.set_paused(true);
+        assert_eq!(ring.read_into(&mut out, 64), 0);
+        assert_eq!(ring.underruns(), 64);
+    }
 
     #[test]
     fn ring_wraps_and_preserves_frames() {

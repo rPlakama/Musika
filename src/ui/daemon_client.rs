@@ -753,6 +753,7 @@ pub struct PlaybackView {
     normalization: Normalization,
     crossfade: bool,
     loading: bool,
+    retrying: bool,
     duration: f64,
     anchor: PlaybackState,
     rows: Vec<Track>,
@@ -775,6 +776,7 @@ impl Default for PlaybackView {
             normalization: Normalization::Off,
             crossfade: false,
             loading: false,
+            retrying: false,
             duration: 0.0,
             anchor: PlaybackState::default(),
             rows: Vec::new(),
@@ -808,6 +810,7 @@ impl PlaybackView {
         self.volume = state.volume();
         self.muted = state.muted();
         self.loading = state.loading();
+        self.retrying = state.retrying();
         self.duration = state.duration();
         let index = state.index as usize;
         self.index = if self.count > 0 {
@@ -1024,6 +1027,10 @@ impl PlaybackView {
 
     pub fn is_loading(&self) -> bool {
         self.loading
+    }
+
+    pub fn is_retrying(&self) -> bool {
+        self.retrying
     }
 
     pub fn last_error(&self) -> Option<&str> {
@@ -1281,6 +1288,9 @@ impl AppPlayer {
     }
     pub fn is_loading(&self) -> bool {
         self.view.is_loading()
+    }
+    pub fn is_retrying(&self) -> bool {
+        self.view.is_retrying()
     }
     pub fn last_error(&self) -> Option<&str> {
         self.view.last_error()

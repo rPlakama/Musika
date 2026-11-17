@@ -26,7 +26,10 @@ use std::sync::{LazyLock, Mutex};
 
 pub(crate) mod core;
 pub(crate) mod engine;
+pub(crate) mod error;
 pub(crate) mod pipewire;
+
+pub(crate) use error::{ErrorStage, PlaybackError};
 
 /// The transport is created once at startup, off the daemon's async runtime;
 /// the playback engine takes it from here instead of connecting PipeWire again.
@@ -94,6 +97,22 @@ impl std::ops::DerefMut for Track {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.item
     }
+}
+
+/// Runtime counters for the playback service. Kept small and copyable so the
+/// daemon can publish them without touching the playback thread.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PlaybackMetrics {
+    /// Stream reopen attempts scheduled after a retryable failure.
+    pub retries: u64,
+    /// Automatic resumes after a successful server health probe.
+    pub reconnects: u64,
+    /// Engine rebuilds after a PipeWire stream failure.
+    pub sink_rebuilds: u64,
+    /// Frames queued in the PCM ring at the last published snapshot.
+    pub buffered_frames: u64,
+    /// Frames the graph requested but the ring could not supply.
+    pub underruns: u64,
 }
 
 /// The one user-facing message for a track the server was supposed to serve

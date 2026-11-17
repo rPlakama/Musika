@@ -72,6 +72,7 @@ mod model;
 mod mpris;
 mod offline;
 mod player;
+mod playback_settings;
 mod playlists;
 mod queue;
 mod radio;

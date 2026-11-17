@@ -12,7 +12,7 @@ use std::sync::{Mutex, PoisonError};
 pub(crate) struct Status {
     pub(crate) loading: bool,
     pub(crate) ended: bool,
-    pub(crate) failed: Option<String>,
+    pub(crate) failed: Option<crate::player::PlaybackError>,
     pub(crate) position: f64,
     pub(crate) duration: f64,
     pub(crate) stream_size: u64,

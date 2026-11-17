@@ -129,6 +129,11 @@ async fn run_async() {
     let (playback_out_tx, mut playback_rx) = mpsc::unbounded_channel::<PlaybackOutput>();
     let playback = PlaybackService::spawn(playback_out_tx);
     let playback_control = playback.control();
+    let mut playback_settings = match crate::app::dbs() {
+        Some(dbs) => crate::playback_settings::load(&dbs.status).await,
+        None => crate::playback_settings::PlaybackSettings::default(),
+    };
+    let mut settings_dirty = false;
 
     let (lifecycle_tx, mut lifecycle_rx) = mpsc::unbounded_channel::<Lifecycle>();
     let (ui_forward_tx, mut ui_forward_rx) = mpsc::unbounded_channel::<String>();
@@ -196,6 +201,11 @@ async fn run_async() {
     let startup_sync_owed = Arc::new(AtomicBool::new(connectivity_active));
     let restore_started = Instant::now();
     restore_status(&playback_control, &mut page, bridge.is_offline()).await;
+    // Apply after the restored queue so its `load` repeat reset does not wipe
+    // the persisted mode. Future phases consume the rest of this document.
+    let _ = playback_control.send(PlaybackInput::SetSettings(Box::new(
+        playback_settings.clone(),
+    )));
     crate::startup::trace_elapsed("status.restore", restore_started.elapsed());
 
     let mut ticker = tokio::time::interval(Duration::from_secs(1));
@@ -387,6 +397,8 @@ async fn run_async() {
                     output,
                     &playback_control,
                     &bridge,
+                    &mut playback_settings,
+                    &mut settings_dirty,
                     &mut status_dirty,
                 );
             }
@@ -432,6 +444,18 @@ async fn run_async() {
                 let snapshot = playback_control.snapshot();
                 if snapshot.state.state() == proto::StateWire::Playing {
                     publish_mpris(&snapshot);
+                }
+                if settings_dirty {
+                    settings_dirty = false;
+                    let settings = playback_settings.clone();
+                    crate::app::runtime().spawn(async move {
+                        if let Some(dbs) = crate::app::dbs()
+                            && let Err(err) =
+                                crate::playback_settings::save(&dbs.status, &settings).await
+                        {
+                            eprintln!("daemon: playback settings save failed: {err:#}");
+                        }
+                    });
                 }
                 if status_dirty
                     && last_status.elapsed() >= Duration::from_secs(5)
@@ -488,6 +512,11 @@ async fn run_async() {
     }
     drop(ui_clients);
     flush_status_now(&playback_control, &page).await;
+    if let Some(dbs) = crate::app::dbs()
+        && let Err(err) = crate::playback_settings::save(&dbs.status, &playback_settings).await
+    {
+        eprintln!("daemon: final playback settings save failed: {err:#}");
+    }
     crate::tray::shutdown().await;
     if let Some(mut child) = ui_child.take() {
         _ = child.kill();
@@ -604,6 +633,9 @@ fn query_json(snapshot: &Snapshot, command: &IpcCommand) -> String {
                 "normalization": state.normalization_code(),
                 "crossfade": state.crossfade(),
                 "engine_available": snapshot.engine_available,
+                "retrying": snapshot.retrying,
+                "retry_attempt": snapshot.retry_attempt,
+                "metrics": snapshot.metrics,
                 "current": snapshot
                     .queue
                     .get(state.index as usize)
@@ -815,6 +847,8 @@ fn handle_playback_output(
     output: PlaybackOutput,
     playback: &PlaybackControl,
     bridge: &Bridge,
+    settings: &mut crate::playback_settings::PlaybackSettings,
+    settings_dirty: &mut bool,
     status_dirty: &mut bool,
 ) {
     match output {
@@ -885,6 +919,10 @@ fn handle_playback_output(
                 &Event::Error(format!("Audio engine unavailable: {message}")),
             );
             drop_clients(ui_clients, dead);
+        }
+        PlaybackOutput::SettingsChanged(next) => {
+            *settings = *next;
+            *settings_dirty = true;
         }
         PlaybackOutput::ServerUnavailable => {
             // The core already stopped the transport. Flip the whole app to

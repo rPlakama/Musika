@@ -552,6 +552,8 @@ pub const STATE_FLAG_GAPLESS_ARMED: u32 = 1 << 2;
 pub const STATE_FLAG_ENGINE_UNAVAILABLE: u32 = 1 << 3;
 pub const STATE_FLAG_SEEKING: u32 = 1 << 4;
 pub const STATE_FLAG_ENDED: u32 = 1 << 5;
+/// The service is retrying the current row at the stored position.
+pub const STATE_FLAG_RETRYING: u32 = 1 << 6;
 
 impl PlaybackState {
     pub const ENCODED_BYTES: usize = 48;
@@ -586,6 +588,10 @@ impl PlaybackState {
 
     pub fn seeking(&self) -> bool {
         self.flags & STATE_FLAG_SEEKING != 0
+    }
+
+    pub fn retrying(&self) -> bool {
+        self.flags & STATE_FLAG_RETRYING != 0
     }
 
     pub fn volume(&self) -> f64 {

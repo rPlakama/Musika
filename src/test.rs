@@ -102,6 +102,8 @@ mod mpris;
 
 mod playback;
 
+mod playback_settings;
+
 mod playlists;
 
 mod queue;

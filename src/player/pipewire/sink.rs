@@ -270,6 +270,10 @@ impl Sink {
         self.ring.buffered_frames()
     }
 
+    pub(crate) fn underruns(&self) -> u64 {
+        self.ring.underruns()
+    }
+
     pub(crate) fn failed(&self) -> bool {
         self.ring.failed()
     }

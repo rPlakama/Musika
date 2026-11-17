@@ -158,7 +158,7 @@ impl Native {
     }
 
     /// Takes the decoder/track failure (if any).
-    pub(crate) fn take_failed(&self) -> Option<String> {
+    pub(crate) fn take_failed(&self) -> Option<crate::player::PlaybackError> {
         self.shared.lock().failed.take()
     }
 
@@ -225,6 +225,10 @@ impl Native {
 
     pub(crate) fn buffered_frames(&self) -> u64 {
         self.sink.buffered_frames()
+    }
+
+    pub(crate) fn underruns(&self) -> u64 {
+        self.sink.underruns()
     }
 
     pub(crate) fn failed(&self) -> bool {

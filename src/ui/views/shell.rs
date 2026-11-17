@@ -765,7 +765,7 @@ impl AppRoot {
                     )
                     .child(transport_controls(
                         state,
-                        self.player.is_loading(),
+                        self.player.is_loading() || self.player.is_retrying(),
                         self.stream_loading_angle(),
                         [
                             self.transport_scale(0),

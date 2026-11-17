@@ -5,6 +5,22 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Playback resilience:** retryable network/5xx stream failures now reopen
+  the same row at the same position with 1/2/4 s backoff (three retries);
+  only a genuinely unreachable server stops playback and flips the app
+  offline, and the next successful health probe resumes that row once. 404,
+  auth and decoder failures stay online and keep their precise error instead
+  of masquerading as "server unavailable". The transport shows the loading
+  spinner while reconnecting.
+
+- **Playback observability and persistence:** failures carry a structured
+  kind/stage through the engine, `status` now reports `retrying`,
+  `retry_attempt` and metrics (retries, reconnects, sink rebuilds, buffered
+  frames, underruns), and repeat/normalization/crossfade persist in the new
+  `playback_settings` table instead of resetting on every launch. The
+  settings document is ready for the device/EQ/stream preferences in the
+  following phases.
+
 - **Downloaded ordering in every scope:** `Shift-H`/`Shift-L` now cycles a
   `Downloaded` entry after the alphabetical orders in Albums, Songs and
   Artists, and after `Name` in Playlists. Unlike the other labels it filters

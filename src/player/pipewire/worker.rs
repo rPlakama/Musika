@@ -599,7 +599,7 @@ fn worker_thread(
                                 shared.lock().loading = !paused;
                             }
                             Err(error) => {
-                                fail(&shared, error);
+                                fail_at(&shared, crate::player::ErrorStage::Seek, error);
                                 current.decoder = None;
                                 shared.lock().decoder_live = false;
                             }
@@ -721,7 +721,7 @@ fn worker_thread(
                     match sink.set_format(rate) {
                         Ok(()) => current.rate = rate,
                         Err(error) => {
-                            fail(&shared, error);
+                            fail_at(&shared, crate::player::ErrorStage::Sink, error);
                             shared.lock().decoder_live = false;
                             continue;
                         }
@@ -765,7 +765,7 @@ fn worker_thread(
                 current.stop = None;
                 shared.lock().decoder_live = false;
                 if !superseded {
-                    fail(&shared, error);
+                    fail_at(&shared, crate::player::ErrorStage::Read, error);
                 }
                 continue;
             }
@@ -919,7 +919,7 @@ fn start_decoder(
                 if generation == shared.generation.load(Ordering::Acquire)
                     && !stop.load(Ordering::Acquire)
                 {
-                    fail(shared, error);
+                    fail_at(shared, crate::player::ErrorStage::Seek, error);
                 }
                 shared.lock().decoder_live = false;
                 return;
@@ -936,7 +936,7 @@ fn start_decoder(
                         if generation == shared.generation.load(Ordering::Acquire)
                             && !stop.load(Ordering::Acquire)
                         {
-                            fail(shared, error);
+                            fail_at(shared, crate::player::ErrorStage::Sink, error);
                         }
                         return;
                     }
@@ -975,7 +975,7 @@ fn start_decoder(
             if generation == shared.generation.load(Ordering::Acquire)
                 && !stop.load(Ordering::Acquire)
             {
-                fail(shared, error);
+                fail_at(shared, crate::player::ErrorStage::Open, error);
             }
         }
     }
@@ -1097,7 +1097,7 @@ fn run_crossfade_chunk(
                 current.crossfade = None;
                 shared.lock().decoder_live = false;
                 if !superseded {
-                    fail(shared, error);
+                    fail_at(shared, crate::player::ErrorStage::Read, error);
                 }
                 return;
             }
@@ -1368,10 +1368,14 @@ fn interrupt_stop(current: &mut Current) {
     }
 }
 
-fn fail(shared: &Shared, message: String) {
+fn fail_at(shared: &Shared, stage: crate::player::ErrorStage, error: String) {
+    fail(shared, crate::player::PlaybackError::classify(stage, error));
+}
+
+fn fail(shared: &Shared, error: crate::player::PlaybackError) {
     let mut status = shared.lock();
     status.loading = false;
-    status.failed = Some(message);
+    status.failed = Some(error);
     drop(status);
     shared.signal();
 }

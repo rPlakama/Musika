@@ -131,7 +131,7 @@ impl Default for CrossfadeConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            seconds: 5.0,
+            seconds: Self::DEFAULT_SECONDS,
             equal_power: true,
             album_only: false,
         }
@@ -139,12 +139,24 @@ impl Default for CrossfadeConfig {
 }
 
 impl CrossfadeConfig {
+    pub const MIN_SECONDS: f64 = 1.0;
+    pub const MAX_SECONDS: f64 = 12.0;
+    pub const DEFAULT_SECONDS: f64 = 5.0;
+
     pub fn sanitized(mut self) -> Self {
         if !self.seconds.is_finite() {
-            self.seconds = 5.0;
+            self.seconds = Self::DEFAULT_SECONDS;
         }
-        self.seconds = self.seconds.clamp(1.0, 12.0);
+        self.seconds = self.seconds.clamp(Self::MIN_SECONDS, Self::MAX_SECONDS);
         self
+    }
+
+    pub fn with_seconds(seconds: f64) -> Self {
+        Self {
+            seconds,
+            ..Self::default()
+        }
+        .sanitized()
     }
 }
 

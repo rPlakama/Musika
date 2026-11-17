@@ -134,7 +134,9 @@ impl Shared {
             sink_seen: AtomicU64::new(0),
             normalization: AtomicU32::new(0),
             crossfade: AtomicBool::new(false),
-            crossfade_millis: AtomicU32::new(5000),
+            crossfade_millis: AtomicU32::new(
+                (crate::player::CrossfadeConfig::DEFAULT_SECONDS * 1000.0) as u32,
+            ),
             crossfade_equal_power: AtomicBool::new(true),
             crossfade_allowed: AtomicBool::new(true),
             bit_perfect: AtomicBool::new(false),
@@ -200,7 +202,7 @@ impl Shared {
         let config = config.sanitized();
         self.crossfade.store(config.enabled, Ordering::Release);
         self.crossfade_millis.store(
-            (config.seconds * 1000.0).round().clamp(1.0, 12_000.0) as u32,
+            (config.seconds * 1000.0).round() as u32,
             Ordering::Release,
         );
         self.crossfade_equal_power

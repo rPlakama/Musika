@@ -101,7 +101,7 @@ impl Default for PlaybackSettings {
             repeat: 0,
             shuffle: false,
             crossfade: false,
-            crossfade_seconds: 5.0,
+            crossfade_seconds: crate::player::CrossfadeConfig::DEFAULT_SECONDS,
             crossfade_curve: "equal-power".to_string(),
             crossfade_album_only: false,
             normalization: 0,
@@ -135,7 +135,10 @@ pub enum CrossfadeChange {
 impl CrossfadeChange {
     pub fn apply(self, settings: &mut PlaybackSettings) {
         match self {
-            Self::Length(seconds) => settings.crossfade_seconds = seconds.clamp(1.0, 12.0),
+            Self::Length(seconds) => {
+                settings.crossfade_seconds =
+                    crate::player::CrossfadeConfig::with_seconds(seconds).seconds;
+            }
             Self::Curve(equal_power) => {
                 settings.crossfade_curve = if equal_power {
                     "equal-power".to_string()
@@ -166,19 +169,20 @@ pub enum StreamChange {
 impl StreamChange {
     pub fn apply(self, settings: &mut PlaybackSettings) {
         match self {
-            Self::Quality(bitrate) => settings.stream_max_bitrate = bitrate.min(512),
+            Self::Quality(bitrate) => {
+                settings.stream_max_bitrate = PlaybackSettings::clamp_stream_bitrate(bitrate);
+            }
             Self::Format(format) => {
-                settings.stream_format = format.and_then(|format| {
-                    let format = format.trim().to_ascii_lowercase();
-                    (!format.is_empty() && format != "original").then_some(format)
-                });
+                settings.stream_format = PlaybackSettings::normalize_stream_format(format);
             }
             Self::Cache(enabled) => settings.stream_cache = enabled,
-            Self::CacheSize(mib) => settings.stream_cache_mib = mib.clamp(64, 65_536),
+            Self::CacheSize(mib) => {
+                settings.stream_cache_mib = PlaybackSettings::clamp_cache_mib(mib);
+            }
             Self::FixedRate(rate) => {
                 settings.fixed_pipeline_rate = rate.is_some();
                 if let Some(rate) = rate {
-                    settings.fixed_pipeline_hz = rate.clamp(44_100, 192_000);
+                    settings.fixed_pipeline_hz = PlaybackSettings::clamp_fixed_rate(rate);
                 }
             }
         }
@@ -194,6 +198,25 @@ impl PlaybackSettings {
             album_only: self.crossfade_album_only,
         }
         .sanitized()
+    }
+
+    fn clamp_stream_bitrate(bitrate: u32) -> u32 {
+        bitrate.min(512)
+    }
+
+    fn normalize_stream_format(format: Option<String>) -> Option<String> {
+        format.and_then(|format| {
+            let format = format.trim().to_ascii_lowercase();
+            (!format.is_empty() && format != "original").then_some(format)
+        })
+    }
+
+    fn clamp_cache_mib(mib: u64) -> u64 {
+        mib.clamp(64, 65_536)
+    }
+
+    fn clamp_fixed_rate(rate: u32) -> u32 {
+        rate.clamp(44_100, 192_000)
     }
 
     /// True when no transcode/bitrate cap is requested.
@@ -223,20 +246,28 @@ impl PlaybackSettings {
     pub fn sanitized(mut self) -> Self {
         self.repeat = self.repeat.clamp(0, 2);
         self.normalization = self.normalization.min(2);
-        self.crossfade_seconds = self.crossfade_seconds.clamp(0.0, 12.0);
-        if self.crossfade_curve != "linear" {
-            self.crossfade_curve = "equal-power".to_string();
+        let crossfade = crate::player::CrossfadeConfig {
+            enabled: self.crossfade,
+            seconds: self.crossfade_seconds,
+            equal_power: self.crossfade_curve != "linear",
+            album_only: self.crossfade_album_only,
         }
+        .sanitized();
+        self.crossfade = crossfade.enabled;
+        self.crossfade_seconds = crossfade.seconds;
+        self.crossfade_curve = if crossfade.equal_power {
+            "equal-power".to_string()
+        } else {
+            "linear".to_string()
+        };
+        self.crossfade_album_only = crossfade.album_only;
         if self.alsa_device.trim().is_empty() {
             self.alsa_device = "default".to_string();
         }
-        self.fixed_pipeline_hz = self.fixed_pipeline_hz.clamp(44_100, 192_000);
-        self.stream_format = self.stream_format.and_then(|format| {
-            let format = format.trim().to_ascii_lowercase();
-            (!format.is_empty()).then_some(format)
-        });
-        self.stream_max_bitrate = self.stream_max_bitrate.min(512);
-        self.stream_cache_mib = self.stream_cache_mib.clamp(64, 65_536);
+        self.fixed_pipeline_hz = Self::clamp_fixed_rate(self.fixed_pipeline_hz);
+        self.stream_format = Self::normalize_stream_format(self.stream_format);
+        self.stream_max_bitrate = Self::clamp_stream_bitrate(self.stream_max_bitrate);
+        self.stream_cache_mib = Self::clamp_cache_mib(self.stream_cache_mib);
         self
     }
 }

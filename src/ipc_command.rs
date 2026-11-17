@@ -2512,6 +2512,14 @@ mod tests {
             parse("colors contrast 0.6"),
             Ok(IpcCommand::ColorContrast(0.6))
         );
+        assert_eq!(
+            parse("colors contrast -0.3"),
+            Ok(IpcCommand::ColorContrast(-0.3))
+        );
+        assert_eq!(
+            canonical_string(&IpcCommand::ColorContrast(-0.3)),
+            "colors contrast -0.3"
+        );
         assert!(parse("colors contrast 2").is_err());
         assert!(parse("colors").is_err());
     }

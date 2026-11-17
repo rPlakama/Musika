@@ -25,6 +25,20 @@ impl AppRoot {
             self.line_search_key(event, _window, cx);
             return;
         }
+        if self.settings_open {
+            let key = event.keystroke.key.as_str();
+            let direction = match key {
+                "h" | "left" => -1,
+                "l" | "right" => 1,
+                _ => 0,
+            };
+            if direction != 0 {
+                cx.stop_propagation();
+                self.adjust_settings_row(direction);
+                cx.notify();
+                return;
+            }
+        }
         if self.fullscreen
             && !self.lyrics_overlay
             && !self.alt_held

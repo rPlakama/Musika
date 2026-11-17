@@ -104,7 +104,7 @@ mpris_position:5000000
 | `sync` | `sync [all|repair]` | Incremental sync by default; `all` performs the deep pass; `repair` rebuilds the search/library indexes. The first successful server ping after the app opens (or after a login) starts one `sync all` automatically. |
 | `refresh` | `refresh` | Start an incremental sync. |
 | `output` | `output <list\|default\|node-name\|exclusive <on\|off>\|bitperfect <on\|off>\|backend <pipewire\|alsa>\|alsa <device>>` | List PipeWire sinks, follow the default, target a named `node.name`, request exclusive access, bypass DSP, or select the direct ALSA backend/device; choices are persisted (backend changes apply at the next engine start). |
-| `colors` | `colors contrast <value>` | Set the generated palette contrast offset (`-1.0` baseline to `1.0` maximum; default `0.4`). |
+| `colors` | `colors contrast <value>` | Set the generated palette contrast offset (`-1.0` baseline to `1.0` maximum; default `0.4`). In `Ctrl-,`, select **Palette contrast** and use `h`/`l` to decrease/increase it in 0.1 steps; Enter cycles the full signed range. |
 | `stream` | `stream <quality\|format\|cache\|size\|fixed> <value>` | Cap the stream bitrate, request a format, toggle the playback cache, set its size, or force one pipeline rate (`stream fixed 48000` / `off`) for gap-free rate changes. |
 | `sleep` | `sleep <minutes\|off>` | Fade out over five seconds and pause after N minutes; `sleep off` cancels. |
 | `eq` | `eq next` | Cycle the active Equalizer APO profile through OFF. |

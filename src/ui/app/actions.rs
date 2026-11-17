@@ -12,6 +12,18 @@ pub(in crate::ui) fn description_offset(current: f32, delta: f32, max: f32) -> f
     (current + delta).clamp(0.0, max.max(0.0))
 }
 
+fn contrast_after_step(current: f64, direction: i8) -> f64 {
+    (((current + f64::from(direction) * 0.1) * 10.0).round() / 10.0).clamp(-1.0, 1.0)
+}
+
+fn signed_percent(value: f64) -> String {
+    if value.abs() < 0.005 {
+        "0%".to_string()
+    } else {
+        format!("{}{:.0}%", if value > 0.0 { "+" } else { "" }, value * 100.0)
+    }
+}
+
 #[derive(Clone, Copy)]
 enum SettingsRowAction {
     Shuffle,
@@ -429,7 +441,11 @@ impl AppRoot {
             ("Album-only crossfade".into(), yes_no(s.crossfade_album_only), SettingsRowAction::AlbumOnly),
             ("Normalization".into(), format!("{:?}", self.player.normalization()), SettingsRowAction::Normalize),
             ("Equalizer".into(), self.eq_profile.clone().unwrap_or_else(|| "Off".into()), SettingsRowAction::Eq),
-            ("Palette contrast".into(), format!("{:.0}%", s.color_contrast * 100.0), SettingsRowAction::ColorContrast),
+            (
+                "Palette contrast".into(),
+                signed_percent(s.color_contrast),
+                SettingsRowAction::ColorContrast,
+            ),
             ("Scrobbling".into(), yes_no(s.scrobble), SettingsRowAction::Scrobble),
             ("Bit-perfect DSP".into(), yes_no(s.bit_perfect), SettingsRowAction::BitPerfect),
             ("Exclusive access".into(), yes_no(s.exclusive), SettingsRowAction::Exclusive),
@@ -448,6 +464,49 @@ impl AppRoot {
             .into_iter()
             .map(|(label, value, _)| (label, value))
             .collect()
+    }
+
+    /// `h`/`l` on the selected row. Numeric rows change in place rather than
+    /// cycling through a fixed ladder; contrast uses a 0.1 step over the full
+    /// -1..=1 range.
+    pub(in crate::ui) fn adjust_settings_row(&self, direction: i8) {
+        let Some((_, _, action)) = self
+            .settings_actions()
+            .into_iter()
+            .nth(self.settings_cursor)
+        else {
+            return;
+        };
+        match action {
+            SettingsRowAction::ColorContrast => {
+                let next = contrast_after_step(self.settings.color_contrast, direction);
+                self.bridge.set_color_contrast(next);
+            }
+            SettingsRowAction::Length => {
+                let next =
+                    (self.settings.crossfade_seconds + f64::from(direction)).clamp(1.0, 12.0);
+                self.bridge.set_crossfade_change(
+                    crate::playback_settings::CrossfadeChange::Length(next),
+                );
+            }
+            SettingsRowAction::Shuffle
+            | SettingsRowAction::Repeat
+            | SettingsRowAction::Crossfade
+            | SettingsRowAction::Curve
+            | SettingsRowAction::AlbumOnly
+            | SettingsRowAction::Normalize
+            | SettingsRowAction::Eq
+            | SettingsRowAction::Scrobble
+            | SettingsRowAction::BitPerfect
+            | SettingsRowAction::Exclusive
+            | SettingsRowAction::Cache
+            | SettingsRowAction::Quality
+            | SettingsRowAction::FixedRate
+            | SettingsRowAction::Format
+            | SettingsRowAction::Sleep30
+            | SettingsRowAction::SleepOff
+            | SettingsRowAction::Close => {}
+        }
     }
 
     fn apply_settings_row(&mut self) {
@@ -490,7 +549,8 @@ impl AppRoot {
                 self.bridge.cycle_eq();
             }
             SettingsRowAction::ColorContrast => {
-                const STEPS: [f64; 6] = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0];
+                const STEPS: [f64; 11] =
+                    [-1.0, -0.8, -0.6, -0.4, -0.2, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0];
                 let next = STEPS
                     .iter()
                     .copied()
@@ -1660,5 +1720,27 @@ mod clipboard_tests {
         assert_eq!(paste_at(3, false), 4);
         assert_eq!(paste_at(3, true), 3);
         assert_eq!(paste_at(usize::MAX, false), usize::MAX);
+    }
+}
+
+#[cfg(test)]
+mod contrast_step_tests {
+    use super::{contrast_after_step, signed_percent};
+
+    #[test]
+    fn contrast_steps_in_both_directions_and_clamps() {
+        assert!((contrast_after_step(0.0, 1) - 0.1).abs() < 1e-9);
+        assert!((contrast_after_step(0.0, -1) + 0.1).abs() < 1e-9);
+        assert!((contrast_after_step(0.4, 1) - 0.5).abs() < 1e-9);
+        assert!((contrast_after_step(0.4, -1) - 0.3).abs() < 1e-9);
+        assert!((contrast_after_step(0.95, 1) - 1.0).abs() < 1e-9);
+        assert!((contrast_after_step(-0.95, -1) + 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn contrast_labels_show_the_sign() {
+        assert_eq!(signed_percent(0.4), "+40%");
+        assert_eq!(signed_percent(-0.4), "-40%");
+        assert_eq!(signed_percent(0.0), "0%");
     }
 }

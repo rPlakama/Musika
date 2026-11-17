@@ -43,6 +43,15 @@ pub enum Event {
     Connection {
         online: bool,
     },
+    /// UI request: retarget the playback stream.
+    OutputDevice {
+        device: Option<String>,
+        follow_default: bool,
+    },
+    /// Core answer: the available PipeWire output sinks.
+    OutputDevices {
+        devices: Vec<crate::player::pipewire::OutputDevice>,
+    },
     LoggedIn {
         server_url: String,
         username: String,
@@ -379,6 +388,12 @@ mod serde_tests {
             },
             Event::IpcRan("playlist add selected; \"Mix\"".to_string()),
             Event::Connection { online: false },
+            Event::OutputDevices {
+                devices: vec![crate::player::pipewire::OutputDevice {
+                    id: "sink.one".to_string(),
+                    label: "Sink One".to_string(),
+                }],
+            },
         ] {
             let json = serde_json::to_string(&event).unwrap();
             let back: Event = serde_json::from_str(&json).unwrap();

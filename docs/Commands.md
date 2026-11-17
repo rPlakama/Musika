@@ -103,6 +103,7 @@ mpris_position:5000000
 | --- | --- | --- |
 | `sync` | `sync [all|repair]` | Incremental sync by default; `all` performs the deep pass; `repair` rebuilds the search/library indexes. The first successful server ping after the app opens (or after a login) starts one `sync all` automatically. |
 | `refresh` | `refresh` | Start an incremental sync. |
+| `output` | `output <list\|default\|node-name>` | List PipeWire sinks (JSON over the socket), follow the default sink, or target a named `node.name`; the choice is persisted. |
 | `wipe` | `wipe <album|lyrics|covers>` | Clear downloaded album files, cached lyrics, or cached covers. |
 | `wipe_databases` | `wipe_databases` | Open the destructive database wipe chooser; this is not an immediate wipe. |
 | `logout` | `logout` | End the live session and show the login screen. The account and its data stay stored. |

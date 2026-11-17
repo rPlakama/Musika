@@ -7,6 +7,18 @@ impl AppRoot {
         match event {
             Event::Command(_) => {}
             Event::IpcRan(command) => self.toast_ipc(&command),
+            Event::OutputDevice { .. } => {
+                // A UI request; the daemon consumes it and never echoes it.
+            }
+            Event::OutputDevices { devices } => {
+                let message = if devices.is_empty() {
+                    "No PipeWire output sinks.".to_string()
+                } else {
+                    let labels: Vec<&str> = devices.iter().map(|device| device.label.as_str()).collect();
+                    format!("Outputs: {}", labels.join(" · "))
+                };
+                self.push_toast(message, ToastKind::Notice, None);
+            }
             Event::Connection { online } => {
                 let changed = self.connection_offline == online;
                 self.connection_offline = !online;

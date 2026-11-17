@@ -63,6 +63,11 @@ enum SinkCommand {
         rate: u32,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    /// Retarget the stream to a named PipeWire sink (`None` = default).
+    SetTarget {
+        target: Option<String>,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     Shutdown,
 }
 
@@ -214,6 +219,20 @@ impl Sink {
         }
     }
 
+    /// Retargets the stream to `target` (`None` = PipeWire default) without
+    /// discarding the already-queued PCM. Blocks until the loop thread has
+    /// swapped the stream in.
+    pub(crate) fn set_target(&self, target: Option<String>) -> Result<(), String> {
+        let (ack, ack_rx) = mpsc::sync_channel(1);
+        self.commands
+            .send(SinkCommand::SetTarget { target, ack })
+            .map_err(|_| "PipeWire sink is not running".to_string())?;
+        match ack_rx.recv_timeout(FORMAT_ACK_TIMEOUT) {
+            Ok(result) => result,
+            Err(_) => Err("PipeWire sink did not acknowledge the device change".to_string()),
+        }
+    }
+
     pub(crate) fn write(&self, pcm: &[f32], epoch: u64) {
         self.ring.write(pcm, epoch);
     }
@@ -356,13 +375,19 @@ fn build_stream<'c>(
     ring: &Arc<Ring>,
     shared: &Arc<Shared>,
     rate: u32,
+    target: Option<&str>,
 ) -> Result<ActiveStream<'c>, String> {
-    let props = properties! {
+    let mut props = properties! {
         *pw::keys::MEDIA_TYPE => "Audio",
         *pw::keys::MEDIA_CATEGORY => "Playback",
         *pw::keys::MEDIA_ROLE => "Music",
         *pw::keys::APP_NAME => "Musika",
     };
+    if let Some(target) = target {
+        // Object name or object.serial; the engine stores the stable node
+        // name from the device picker.
+        props.insert(*pw::keys::TARGET_OBJECT, target);
+    }
     let stream = pw::stream::StreamBox::new(core, "Musika", props)
         .map_err(|error| format!("cannot create PipeWire stream: {error}"))?;
 
@@ -447,6 +472,7 @@ fn switch_format<'c>(
     ring: &Arc<Ring>,
     shared: &Arc<Shared>,
     rate: u32,
+    target: Option<&str>,
 ) -> Result<(), String> {
     let rate = rate.clamp(1, ring::MAX_RATE);
     if rate == ring.rate() {
@@ -457,7 +483,7 @@ fn switch_format<'c>(
     // produced at the new rate. The producer blocks on the flush until the
     // rebuilt stream's first process callback services it.
     ring.flush();
-    match build_stream(core, ring, shared, rate) {
+    match build_stream(core, ring, shared, rate, target) {
         Ok(next) => {
             ring.set_failed(false);
             shared.set_sink_state(SinkState::Connecting, None);
@@ -474,6 +500,26 @@ fn switch_format<'c>(
             Err(error)
         }
     }
+}
+
+/// Rebuilds the stream for a different target at the current rate. Unlike a
+/// format change this keeps the queued PCM: only the graph node changes.
+fn rebuild_stream<'c>(
+    active: &mut ActiveStream<'c>,
+    core: &'c pw::core::Core,
+    ring: &Arc<Ring>,
+    shared: &Arc<Shared>,
+    rate: u32,
+    target: Option<&str>,
+) -> Result<(), String> {
+    let next = build_stream(core, ring, shared, rate, target)?;
+    ring.set_failed(false);
+    shared.set_sink_state(SinkState::Connecting, None);
+    if let Err(error) = next.stream.set_active(!ring.paused()) {
+        crate::debug_log!("pipewire: cannot restore stream active state: {error}");
+    }
+    *active = next;
+    Ok(())
 }
 
 fn run_sink(
@@ -500,7 +546,8 @@ fn run_sink(
         move |command| pending.borrow_mut().push_back(command)
     });
 
-    let mut active = build_stream(&core, &ring, &shared, ring.rate())?;
+    let mut target: Option<String> = None;
+    let mut active = build_stream(&core, &ring, &shared, ring.rate(), target.as_deref())?;
     let mut volume = 1.0f32;
     let mut muted = false;
     // The freshly built node starts at unity; re-apply the mixer controls once
@@ -543,7 +590,14 @@ fn run_sink(
                     apply_mute(&active.stream, &ring, muted);
                 }
                 SinkCommand::SetFormat { rate, ack } => {
-                    let result = switch_format(&mut active, &core, &ring, &shared, rate);
+                    let result = switch_format(
+                        &mut active,
+                        &core,
+                        &ring,
+                        &shared,
+                        rate,
+                        target.as_deref(),
+                    );
                     if result.is_ok() {
                         // Replay the mixer state on the rebuilt node.
                         let volume_applied = apply_volume(&active.stream, &ring, volume);
@@ -552,6 +606,25 @@ fn run_sink(
                     }
                     if ack.send(result).is_err() {
                         crate::debug_log!("pipewire: format-change ack receiver was dropped");
+                    }
+                }
+                SinkCommand::SetTarget { target: next, ack } => {
+                    target = next;
+                    let result = rebuild_stream(
+                        &mut active,
+                        &core,
+                        &ring,
+                        &shared,
+                        ring.rate(),
+                        target.as_deref(),
+                    );
+                    if result.is_ok() {
+                        let volume_applied = apply_volume(&active.stream, &ring, volume);
+                        let mute_applied = apply_mute(&active.stream, &ring, muted);
+                        controls_dirty = !(volume_applied && mute_applied);
+                    }
+                    if ack.send(result).is_err() {
+                        crate::debug_log!("pipewire: target-change ack receiver was dropped");
                     }
                 }
                 SinkCommand::Shutdown => running = false,

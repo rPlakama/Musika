@@ -222,6 +222,18 @@ async fn run_async() {
                 match &event {
                     Event::Header { .. } => header = Some(event.clone()),
                     Event::Connection { .. } => connection = Some(event.clone()),
+                    Event::OutputDevice { .. } => {
+                        if let Event::OutputDevice {
+                            device,
+                            follow_default,
+                        } = &event
+                        {
+                            let _ = playback_control.send(PlaybackInput::SetOutputDevice {
+                                device: device.clone(),
+                                follow_default: *follow_default,
+                            });
+                        }
+                    }
                     Event::LoginRequired { .. } => {
                         auth = Some(event.clone());
                         connection = None;
@@ -354,6 +366,7 @@ async fn run_async() {
                     | Event::Command(_)
                     | Event::IpcRan(_)
                     | Event::Lyrics { .. }
+                    | Event::OutputDevices { .. }
                     | Event::Search { .. } => {}
                 }
                 // Queue content travels as queue deltas, never as whole-queue
@@ -364,6 +377,7 @@ async fn run_async() {
                         | Event::QueueAppend { .. }
                         | Event::QueuePaste { .. }
                         | Event::Restore { .. }
+                        | Event::OutputDevice { .. }
                 );
                 if forward {
                     let dead = broadcast_event(&ui_clients, &event);
@@ -659,6 +673,10 @@ fn query_json(snapshot: &Snapshot, command: &IpcCommand) -> String {
             })
             .to_string()
         }
+        IpcCommand::OutputList => match crate::player::pipewire::list_output_devices() {
+            Ok(devices) => serde_json::json!({ "devices": devices }).to_string(),
+            Err(error) => serde_json::json!({ "error": error }).to_string(),
+        },
         _ => "{}".to_string(),
     }
 }
@@ -678,6 +696,18 @@ fn dispatch_core_bridge(services: &Services, command: &IpcCommand) {
     match command {
         IpcCommand::Sync(mode) => bridge.sync(*mode),
         IpcCommand::Refresh => bridge.sync(SyncMode::Incremental),
+        IpcCommand::OutputSet(device) => {
+            let _ = services.playback.send(PlaybackInput::SetOutputDevice {
+                device: Some(device.clone()),
+                follow_default: false,
+            });
+        }
+        IpcCommand::OutputDefault => {
+            let _ = services.playback.send(PlaybackInput::SetOutputDevice {
+                device: None,
+                follow_default: true,
+            });
+        }
         IpcCommand::Wipe(scope) => {
             let scope = match scope {
                 ipc_command::WipeScope::Album => "album",

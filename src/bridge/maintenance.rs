@@ -181,6 +181,34 @@ impl Bridge {
         self.offline.store(offline, Ordering::Relaxed);
     }
 
+    /// UI request: retarget the output stream (or follow the default). The
+    /// daemon owns the playback control, so this travels as an event.
+    pub fn set_output_device(&self, device: Option<String>, follow_default: bool) {
+        _ = self.tx.send(Event::OutputDevice {
+            device,
+            follow_default,
+        });
+    }
+
+    /// UI request: enumerate the PipeWire sinks. Discovery blocks on a short
+    /// private PipeWire connection, so it runs on the blocking pool.
+    pub fn request_output_devices(&self) {
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let result = tokio::task::spawn_blocking(crate::player::pipewire::list_output_devices)
+                .await
+                .unwrap_or_else(|error| Err(format!("output discovery task: {error}")));
+            match result {
+                Ok(devices) => {
+                    _ = tx.send(Event::OutputDevices { devices });
+                }
+                Err(error) => {
+                    _ = tx.send(Event::Error(format!("Could not list outputs: {error}")));
+                }
+            }
+        });
+    }
+
     pub(crate) fn is_offline(&self) -> bool {
         self.offline.load(Ordering::Relaxed)
     }

@@ -85,6 +85,10 @@ impl Native {
         self.sink.set_muted(muted);
     }
 
+    pub(crate) fn set_output_target(&self, target: Option<String>) -> Result<(), String> {
+        self.sink.set_target(target)
+    }
+
     pub(crate) fn set_normalization(&self, mode: Normalization) {
         self.shared
             .normalization

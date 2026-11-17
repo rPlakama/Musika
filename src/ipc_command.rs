@@ -172,6 +172,12 @@ pub enum IpcCommand {
     Status,
     /// Read-only: one JSON line with the queue ids.
     QueueQuery,
+    /// Read-only: available PipeWire output sinks.
+    OutputList,
+    /// Target a named PipeWire sink (`output <node.name>`).
+    OutputSet(String),
+    /// Follow PipeWire's default sink.
+    OutputDefault,
 }
 
 /// Where a command must run in the core/UI split. The classification is
@@ -236,10 +242,12 @@ impl IpcCommand {
             | Self::RandomAlbum
             | Self::PlaySong(_)
             | Self::PlaySongInAlbum(_)
-            | Self::DownloadSong(_) => T::CoreBridge,
+            | Self::DownloadSong(_)
+            | Self::OutputSet(_)
+            | Self::OutputDefault => T::CoreBridge,
 
             // Read-only telemetry.
-            Self::Status | Self::QueueQuery => T::Query,
+            Self::Status | Self::QueueQuery | Self::OutputList => T::Query,
 
             // Lifecycle.
             Self::Quit | Self::Show => T::Lifecycle,
@@ -531,6 +539,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         usage: "wipe_databases",
         description: "Open the destructive wipe chooser",
         form: CommandForm::Bare(IpcCommand::WipeDatabases),
+    },
+    CommandSpec {
+        name: "output",
+        usage: "output <list|default|device-name>",
+        description: "List PipeWire outputs, follow the default, or target a named sink",
+        form: CommandForm::Advanced(ArgHints::Values(&["list", "default"])),
     },
     CommandSpec {
         name: "logout",
@@ -1163,6 +1177,16 @@ fn advanced_parse(name: &str, rest: &str, usage: &str) -> Result<IpcCommand, Com
             )),
         },
 
+        "output" => match split_quoted_args(rest)?.as_slice() {
+            [] => Ok(IpcCommand::OutputList),
+            [target] if target == "list" => Ok(IpcCommand::OutputList),
+            [target] if target == "default" => Ok(IpcCommand::OutputDefault),
+            [name] => Ok(IpcCommand::OutputSet(name.clone())),
+            _ => Err(CommandError(
+                "usage: output <list|default|device-name>".to_string(),
+            )),
+        },
+
         "download" => parse_download(rest),
 
         "search" => Ok(IpcCommand::Search {
@@ -1657,6 +1681,12 @@ fn advanced_canonical(command: &IpcCommand) -> String {
 
         Download { request } => canonical_download(request),
 
+        OutputList => "output list".to_string(),
+
+        OutputDefault => "output default".to_string(),
+
+        OutputSet(name) => format!("output {}", quote_arg(name)),
+
         Search { query } => format!("search {query}").trim_end().to_string(),
 
         InsertMode { query } => format!("insert_mode {query}").trim_end().to_string(),
@@ -2089,6 +2119,20 @@ fn current_download_path(current: &CurrentTrack) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_output_device_commands() {
+        assert_eq!(parse("output list"), Ok(IpcCommand::OutputList));
+        assert_eq!(parse("output"), Ok(IpcCommand::OutputList));
+        assert_eq!(parse("output default"), Ok(IpcCommand::OutputDefault));
+        assert_eq!(
+            parse("output alsa_output.pci-0000_00_1f.3"),
+            Ok(IpcCommand::OutputSet(
+                "alsa_output.pci-0000_00_1f.3".to_string()
+            ))
+        );
+        assert!(parse("output a b").is_err());
+    }
 
     #[test]
     fn parses_maintenance_commands() {
@@ -2797,6 +2841,18 @@ mod tests {
         assert_eq!(
             canonical_string(&IpcCommand::Sync(SyncMode::All)),
             "sync all"
+        );
+        assert_eq!(
+            canonical_string(&IpcCommand::OutputList),
+            "output list"
+        );
+        assert_eq!(
+            canonical_string(&IpcCommand::OutputDefault),
+            "output default"
+        );
+        assert_eq!(
+            canonical_string(&IpcCommand::OutputSet("sink one".to_string())),
+            "output \"sink one\""
         );
         assert_eq!(
             canonical_string(&IpcCommand::Wipe(WipeScope::Lyrics)),

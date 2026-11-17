@@ -37,6 +37,8 @@ macro_rules! for_each_bridge_rpc {
             restore(),
             play_random_album(),
             set_offline(offline: bool),
+            set_output_device(device: Option<String>, follow_default: bool),
+            request_output_devices(),
             logout(),
             // Library and search.
             load_library(scope: $crate::model::Scope, order: usize),

@@ -5,6 +5,11 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Output device control:** `output list` enumerates PipeWire sinks (also as
+  JSON over the IPC socket), `output default` follows the system default, and
+  `output <node.name>` retargets the live stream without dropping queued PCM.
+  The choice is persisted in `playback_settings` and re-applied on stream
+  rebuilds and engine recovery.
 - **Playback resilience:** retryable network/5xx stream failures now reopen
   the same row at the same position with 1/2/4 s backoff (three retries);
   only a genuinely unreachable server stops playback and flips the app

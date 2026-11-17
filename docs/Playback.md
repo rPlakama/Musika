@@ -265,10 +265,13 @@ underrun/dropout count or first-PCM/seek latency exposed. `Status` carries
 `level`/`peak` internally for metering, but they do not reach the snapshot, UI
 or IPC.
 
-**Output/format.** The pipeline now presents packed F32 stereo end-to-end
+**Output/format.** The pipeline presents packed F32 stereo end-to-end
 (decode → ring → PipeWire), which removes the S16-only quantization/headroom
 limit. S24, a configurable resampler and dither remain absent; the sink has no
-S16 fallback negotiation yet — the graph is assumed to accept F32LE.
+S16 fallback negotiation yet — the graph is assumed to accept F32LE. PipeWire
+sinks are enumerated for the `output` command and a named target is persisted;
+follow-default means the stream connects to PipeWire's default on creation and
+stream rebuilds (there is no live default-sink watcher yet).
 
 **OS/device integration.** Output is PipeWire-only. There is no output-device
 enumeration or selection (streams target the default node), no suspend/resume
@@ -319,6 +322,12 @@ reliability and CI items remain roadmap work.
   prefetch beyond the next track.
 
 ### Implemented after the audit (2026-11)
+
+- **Output selection:** `output list|default|<node.name>` enumerates the
+  PipeWire sinks, retargets the live stream without dropping queued PCM and
+  persists the choice; the stream format rebuild also carries the target.
+  Follow-default currently applies when a stream is created/rebuilt rather
+  than reacting to a live default-sink change.
 
 - **Structured errors, retries and persistence:** `EngineEvent::Failed`
   carries `PlaybackError { kind, stage, message }`; network and 5xx failures

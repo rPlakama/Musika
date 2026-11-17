@@ -78,6 +78,15 @@ impl AppRoot {
             IpcCommand::Crossfade(_) | IpcCommand::Normalize(_) => {
                 unreachable!("IPC playback mapping returned a playback op")
             }
+            IpcCommand::OutputSet(device) => {
+                self.bridge.set_output_device(Some(device), false);
+            }
+            IpcCommand::OutputDefault => {
+                self.bridge.set_output_device(None, true);
+            }
+            IpcCommand::OutputList => {
+                self.bridge.request_output_devices();
+            }
             IpcCommand::Sync(mode) => self.start_sync(mode),
             IpcCommand::Wipe(scope) => {
                 if self.syncing {

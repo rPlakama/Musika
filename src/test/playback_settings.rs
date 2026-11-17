@@ -21,6 +21,8 @@ async fn playback_settings_default_round_trip_and_sanitize() {
     changed.normalization = 9;
     changed.stream_max_bitrate = 99_999;
     changed.stream_cache_mib = 1;
+    changed.output_device = Some("sink.one".to_string());
+    changed.follow_default = false;
     crate::playback_settings::save(&pool, &changed)
         .await
         .unwrap();
@@ -35,6 +37,8 @@ async fn playback_settings_default_round_trip_and_sanitize() {
     assert_eq!(loaded.normalization, 2);
     assert_eq!(loaded.stream_max_bitrate, 512);
     assert_eq!(loaded.stream_cache_mib, 64);
+    assert_eq!(loaded.output_device.as_deref(), Some("sink.one"));
+    assert!(!loaded.follow_default);
 }
 
 #[tokio::test]

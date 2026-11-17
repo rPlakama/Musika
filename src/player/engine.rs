@@ -47,6 +47,8 @@ pub(crate) enum AudioCommand {
     SetNormalization(Normalization),
     /// Optional equal-length crossfade between tracks.
     SetCrossfade(bool),
+    /// Retarget the output stream to a PipeWire sink (`None` = default).
+    SetOutputTarget(Option<String>),
     Stop,
 }
 
@@ -316,6 +318,11 @@ fn apply_command(native: &Native, command: AudioCommand, paused: &mut bool) {
         AudioCommand::SetMuted(muted) => native.set_muted(muted),
         AudioCommand::SetNormalization(mode) => native.set_normalization(mode),
         AudioCommand::SetCrossfade(enabled) => native.set_crossfade(enabled),
+        AudioCommand::SetOutputTarget(target) => {
+            if let Err(error) = native.set_output_target(target) {
+                crate::debug_log!("pipewire: cannot change output device: {error}");
+            }
+        }
         AudioCommand::Stop => {
             native.stop();
             *paused = true;

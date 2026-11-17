@@ -15,7 +15,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::ipc_protocol::{ErrorCode, PlaybackState, PlayerOp, StateWire};
 use crate::player::core::{CoreCommand, Outcome, PlaybackCore};
-use crate::player::engine::{Engine, EngineEvent};
+use crate::player::engine::{AudioCommand, Engine, EngineEvent};
 
 /// How often the playback thread evaluates its clock while audible/loading.
 ///
@@ -110,6 +110,11 @@ pub(crate) enum PlaybackInput {
     SetOffline(bool),
     /// Persisted playback preferences loaded at startup.
     SetSettings(Box<crate::playback_settings::PlaybackSettings>),
+    /// Live output-device choice from the UI/command line.
+    SetOutputDevice {
+        device: Option<String>,
+        follow_default: bool,
+    },
     Shutdown,
 }
 
@@ -128,6 +133,13 @@ impl std::fmt::Debug for PlaybackInput {
             }
             Self::SetOffline(offline) => write!(formatter, "SetOffline({offline})"),
             Self::SetSettings(_) => write!(formatter, "SetSettings"),
+            Self::SetOutputDevice {
+                device,
+                follow_default,
+            } => write!(
+                formatter,
+                "SetOutputDevice {{ device: {device:?}, follow_default: {follow_default} }}"
+            ),
             Self::Shutdown => write!(formatter, "Shutdown"),
         }
     }
@@ -300,6 +312,23 @@ struct ServiceState {
 }
 
 impl ServiceState {
+    /// Device name the stream should target; `None` follows PipeWire's default.
+    fn output_target(&self) -> Option<String> {
+        if self.settings.follow_default {
+            None
+        } else {
+            self.settings.output_device.clone()
+        }
+    }
+
+    /// Applies the current output target to the live engine. A later engine
+    /// creation applies it in `ensure_engine`.
+    fn apply_output_target(&self) {
+        if let Some(engine) = self.engine.as_ref() {
+            engine.send(AudioCommand::SetOutputTarget(self.output_target()));
+        }
+    }
+
     /// Any explicit transport/queue action supersedes a pending retry or a
     /// post-recovery auto-resume.
     fn cancel_retry(&mut self) {
@@ -333,6 +362,7 @@ impl ServiceState {
         match Engine::new(events) {
             Ok(engine) => {
                 self.engine = Some(engine);
+                self.apply_output_target();
                 crate::startup::trace("engine.ready");
                 crate::debug_log!("playback: engine ready");
                 true
@@ -562,6 +592,17 @@ fn run(
                     outcome.queue_reset |= extra.queue_reset;
                 }
                 apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
+                service.apply_output_target();
+            }
+            Some(ServiceInput::Command(PlaybackInput::SetOutputDevice {
+                device,
+                follow_default,
+            })) => {
+                service.settings.output_device = device;
+                service.settings.follow_default = follow_default;
+                service.apply_output_target();
+                capture_settings(&mut service);
+                force = true;
             }
             Some(ServiceInput::Command(PlaybackInput::SetOffline(offline))) => {
                 let was_offline = service.offline;

@@ -10,13 +10,15 @@ open work; this file is the release history.
   `migrations_status`), command metadata now advertises `stream fixed` and the
   output mode/backend words, and UI settings requests go straight to the
   playback service instead of travelling as core→UI `Event`s. Protocol v4.
-- **High-resolution collage art:** playlist/radio header panes now resolve the
-  provider original (the same source as the page hero) instead of the 320 px
-  row thumbnail, so large collage cells are no longer visibly softened.
-- **Stable playlist artwork:** playlist pages prefer the provider's
-  `cover_art` (single, cached hero) and otherwise build a fixed-size ordered
+- **High-resolution collage art:** playlist/radio header panes resolve each
+  album original (the same source as the page hero) instead of either the
+  320 px row thumbnail or the provider's pre-rendered playlist mosaic.
+- **Stable playlist artwork:** playlist pages build a fixed-size ordered
   collage from unique album entries, including panes whose local file is still
-  cold. Playlist list rows now resolve server/first-entry covers.
+  cold. The provider playlist `cover_art` is only the fallback when no entry
+  cover exists; Navidrome's generated playlist cover is a small pre-rendered
+  mosaic and was visibly soft at hero size. Playlist list rows still use the
+  server/first-entry cover for their thumbnail.
 - Playlist-owned cover ids are included in the post-sync cover pass; page
   payloads reuse unchanged `CoverSource` Arcs, and `CoverImage` keeps the
   previous pixels while a replacement resource decodes (remote -> local) to

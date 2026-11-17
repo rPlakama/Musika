@@ -2215,7 +2215,7 @@ async fn server_move_with_a_duplicated_cache_writes_no_duplicates() {
 }
 
 #[tokio::test]
-async fn page_prefers_one_stable_provider_cover() {
+async fn page_prefers_entry_collage_over_a_low_res_provider_cover() {
     let library = playlist_pool().await;
     sqlx::migrate!("./migrations_library")
         .run(&library)
@@ -2251,9 +2251,9 @@ async fn page_prefers_one_stable_provider_cover() {
     .unwrap();
     let dbs = playlist_dbs(&library, &playlist);
     let (header, rows) = page(&dbs, "pl1", false).await.unwrap();
-    assert_eq!(header.collage.len(), 1);
-    assert_eq!(header.collage_art, vec!["pl-cover".to_string()]);
-    assert_eq!(header.cover_art, "pl-cover");
+    assert_eq!(header.collage.len(), 1, "one unique album entry");
+    assert_eq!(header.collage_art, vec!["dc-1".to_string()]);
+    assert_eq!(header.cover_art, "dc-1");
     assert_eq!(rows.len(), 2);
 }
 
@@ -2301,6 +2301,43 @@ async fn page_fallback_collage_does_not_depend_on_cover_cache_warming() {
     assert_eq!(first.collage_art, vec!["dc-1".to_string(), "dc-2".to_string()]);
     assert_eq!(first.collage, second.collage);
     assert_eq!(first.collage_remote, second.collage_remote);
+}
+
+#[tokio::test]
+async fn page_uses_provider_cover_only_when_no_entry_cover_exists() {
+    let library = playlist_pool().await;
+    sqlx::migrate!("./migrations_library")
+        .run(&library)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "CREATE TABLE covers (
+             id TEXT PRIMARY KEY, file TEXT NOT NULL, hash TEXT, content_type TEXT,
+             size INTEGER, etag TEXT, last_modified TEXT, fetched_at TEXT NOT NULL);",
+    )
+    .execute(&library)
+    .await
+    .unwrap();
+    let playlist = playlist_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO playlist (id, source, name, song_count, cover_art, fetched_at)
+             VALUES ('pl1', 'subsonic', 'Mix', 1, 'pl-cover', 0);
+         INSERT INTO playlist_song (playlist_id, position, song_id, title, cover_art)
+             VALUES ('pl1', 0, 'missing', 'One', NULL);",
+    )
+    .execute(&playlist)
+    .await
+    .unwrap();
+    let dbs = playlist_dbs(&library, &playlist);
+    let (header, rows) = page(&dbs, "pl1", false).await.unwrap();
+    assert_eq!(header.collage, vec![String::new()]);
+    assert_eq!(header.collage_art, vec!["pl-cover".to_string()]);
+    assert_eq!(header.cover_art, "pl-cover");
+    assert_eq!(rows.len(), 1);
 }
 
 #[tokio::test]

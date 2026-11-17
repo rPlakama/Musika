@@ -1266,11 +1266,22 @@ pub async fn page(
     } else {
         "Playlist".to_string()
     };
-    // A provider playlist cover is authoritative and stable. Most providers
-    // do not return one, so the fallback collage above is deterministic even
-    // while individual files are still missing from the local cover cache.
+    // Prefer the individual entry covers. A provider playlist cover is often
+    // a small pre-rendered 2x2 mosaic (Navidrome serves ~600 px); painting it
+    // at hero size is visibly softer than the full-resolution album art the
+    // collage uses. The provider cover is only the fallback when the playlist
+    // has no entry cover at all.
     let (cover_url, cover_remote, cover_art, collage, collage_remote, collage_art) =
-        if let Some(cover_id) = playlist_cover {
+        if !collage.is_empty() {
+            (
+                collage.first().cloned().unwrap_or_default(),
+                collage_remote.first().cloned().unwrap_or_default(),
+                collage_art.first().cloned().unwrap_or_default(),
+                collage,
+                collage_remote,
+                collage_art,
+            )
+        } else if let Some(cover_id) = playlist_cover {
             let local = covers.get(&cover_id).cloned().unwrap_or_default();
             let remote = remotes.get(&cover_id).cloned().unwrap_or_default();
             (
@@ -1282,14 +1293,7 @@ pub async fn page(
                 vec![cover_id],
             )
         } else {
-            (
-                collage.first().cloned().unwrap_or_default(),
-                collage_remote.first().cloned().unwrap_or_default(),
-                String::new(),
-                collage,
-                collage_remote,
-                collage_art,
-            )
+            (String::new(), String::new(), String::new(), collage, collage_remote, collage_art)
         };
     let header = crate::model::PageHeader {
         title: playlist.name.clone(),

@@ -329,6 +329,12 @@ reliability and CI items remain roadmap work.
 
 ### Implemented after the audit (2026-11)
 
+- **Exclusive/bit-perfect request:** `output exclusive on|off` rebuilds the
+  PipeWire stream with `node.exclusive`, and `output bitperfect on|off`
+  bypasses the DSP blocks (EQ, ReplayGain, crossfade) while keeping the
+  transport/volume path. Both persist; the remaining hard guarantee of a
+  direct ALSA `hw` backend is still a documented gap.
+
 - **MPRIS:** the player exposes playback/seek/volume/loop/shuffle/metadata as
   before, and now honours `Raise` (show the window) and `Quit` (shut down the
   daemon) from the root interface.
@@ -482,9 +488,11 @@ meant for `status` sampling and regression comparisons, not persistence.
   the sink rebuilds at the boundary and flushes queued PCM for the new rate.
   The resulting small gap is still present; crossfade/gapless covers
   same-rate transitions.
-- **Exclusive/bit-perfect output:** the backend is PipeWire; there is no
-  optional direct ALSA `hw` path, and PipeWire may still mix/resample. S16
-  fallback is deliberately not negotiated.
+- **Exclusive/bit-perfect output:** `output exclusive on` sets PipeWire's
+  `node.exclusive` request and `output bitperfect on` bypasses EQ, ReplayGain
+  and crossfade. The backend is still PipeWire: it may mix/resample, so this
+  is best-effort, not a guaranteed direct ALSA `hw` path. S16 fallback is
+  deliberately not negotiated.
 - **Multichannel/DSD:** the pipeline is packed F32 stereo end-to-end. DSD is a
   feasibility item, not a supported format; multichannel output is not wired
   through the ring or the sink.

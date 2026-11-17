@@ -238,6 +238,14 @@ impl Bridge {
         _ = self.tx.send(Event::CrossfadeChange(change));
     }
 
+    /// UI request: change exclusive/bit-perfect output mode.
+    pub fn set_output_mode(&self, exclusive: Option<bool>, bit_perfect: Option<bool>) {
+        _ = self.tx.send(Event::OutputMode {
+            exclusive,
+            bit_perfect,
+        });
+    }
+
     pub(crate) fn is_offline(&self) -> bool {
         self.offline.load(Ordering::Relaxed)
     }

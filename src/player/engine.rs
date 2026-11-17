@@ -53,6 +53,8 @@ pub(crate) enum AudioCommand {
     SetOutputTarget(Option<String>),
     /// Install/replace the EQ profile (`None` = bypass).
     SetEq(Option<std::sync::Arc<crate::eq::EqProfile>>),
+    SetExclusive(bool),
+    SetBitPerfect(bool),
     Stop,
 }
 
@@ -330,6 +332,12 @@ fn apply_command(native: &Native, command: AudioCommand, paused: &mut bool) {
             }
         }
         AudioCommand::SetEq(profile) => native.set_eq(profile),
+        AudioCommand::SetExclusive(exclusive) => {
+            if let Err(error) = native.set_exclusive(exclusive) {
+                crate::debug_log!("pipewire: cannot change exclusive mode: {error}");
+            }
+        }
+        AudioCommand::SetBitPerfect(enabled) => native.set_bit_perfect(enabled),
         AudioCommand::Stop => {
             native.stop();
             *paused = true;

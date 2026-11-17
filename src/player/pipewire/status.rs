@@ -90,6 +90,8 @@ pub(crate) struct Shared {
     pub(crate) crossfade_equal_power: AtomicBool,
     /// Core decision for the current pair (album-only etc.).
     pub(crate) crossfade_allowed: AtomicBool,
+    /// Best-effort bit-perfect: bypass EQ/ReplayGain/crossfade.
+    pub(crate) bit_perfect: AtomicBool,
     /// Active EQ profile; the worker recompiles when `eq_epoch` changes.
     pub(crate) eq: Mutex<Option<Arc<crate::eq::EqProfile>>>,
     pub(crate) eq_epoch: AtomicU64,
@@ -135,6 +137,7 @@ impl Shared {
             crossfade_millis: AtomicU32::new(5000),
             crossfade_equal_power: AtomicBool::new(true),
             crossfade_allowed: AtomicBool::new(true),
+            bit_perfect: AtomicBool::new(false),
             eq: Mutex::new(None),
             eq_epoch: AtomicU64::new(0),
             wake_fd: if wake_fd < 0 { -1 } else { wake_fd },
@@ -206,6 +209,11 @@ impl Shared {
 
     pub(crate) fn set_crossfade_allowed(&self, allowed: bool) {
         self.crossfade_allowed.store(allowed, Ordering::Release);
+    }
+
+    pub(crate) fn set_bit_perfect(&self, enabled: bool) {
+        self.bit_perfect.store(enabled, Ordering::Release);
+        self.signal();
     }
 
     /// Installs/replaces the EQ profile and wakes the worker so the new chain

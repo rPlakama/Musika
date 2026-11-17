@@ -5,6 +5,10 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Exclusive/bit-perfect request:** `output exclusive on|off` sets PipeWire's
+  `node.exclusive` and rebuilds the stream; `output bitperfect on|off` bypasses
+  EQ, ReplayGain and crossfade. Both persist. This is a best-effort PipeWire
+  request, not a guaranteed direct-ALSA bit-perfect path.
 - **Telemetry/docs:** document the `status` playback counters (`retries`,
   `reconnects`, `sink_rebuilds`, `buffered_frames`, `underruns`) and the
   remaining rate-change/exclusive/multichannel/DSD limits in `Playback.md`.

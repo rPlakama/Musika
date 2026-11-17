@@ -22,11 +22,6 @@
 //! the stream quality/cache policy. One JSON document under one key keeps the
 //! schema change-free when a later phase adds a field.
 
-#![expect(
-    dead_code,
-    reason = "the first phases persist the settings shell; later playback phases consume the fields as they land"
-)]
-
 use std::sync::{OnceLock, RwLock};
 
 use anyhow::{Context, Result};
@@ -79,6 +74,8 @@ pub struct PlaybackSettings {
     pub stream_cache_mib: u64,
     /// Submit now-playing/completed plays to the server.
     pub scrobble: bool,
+    /// Bypass EQ, ReplayGain and crossfade (a best-effort bit-perfect path).
+    pub bit_perfect: bool,
 }
 
 impl Default for PlaybackSettings {
@@ -100,6 +97,7 @@ impl Default for PlaybackSettings {
             stream_cache: true,
             stream_cache_mib: 2048,
             scrobble: true,
+            bit_perfect: false,
         }
     }
 }

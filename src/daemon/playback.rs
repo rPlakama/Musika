@@ -135,6 +135,11 @@ pub(crate) enum PlaybackInput {
     CycleEq,
     /// Change one crossfade field (length/curve/album-only).
     SetCrossfadeConfig(crate::playback_settings::CrossfadeChange),
+    /// Change exclusive / bit-perfect output.
+    SetOutputMode {
+        exclusive: Option<bool>,
+        bit_perfect: Option<bool>,
+    },
     Shutdown,
 }
 
@@ -169,6 +174,13 @@ impl std::fmt::Debug for PlaybackInput {
             Self::SetCrossfadeConfig(change) => {
                 write!(formatter, "SetCrossfadeConfig({change:?})")
             }
+            Self::SetOutputMode {
+                exclusive,
+                bit_perfect,
+            } => write!(
+                formatter,
+                "SetOutputMode {{ exclusive: {exclusive:?}, bit_perfect: {bit_perfect:?} }}"
+            ),
             Self::Shutdown => write!(formatter, "Shutdown"),
         }
     }
@@ -377,6 +389,8 @@ impl ServiceState {
     fn apply_output_target(&self) {
         if let Some(engine) = self.engine.as_ref() {
             engine.send(AudioCommand::SetOutputTarget(self.output_target()));
+            engine.send(AudioCommand::SetExclusive(self.settings.exclusive));
+            engine.send(AudioCommand::SetBitPerfect(self.settings.bit_perfect));
         }
     }
 
@@ -864,6 +878,20 @@ fn run(
                         }
                     }
                 }
+                force = true;
+            }
+            Some(ServiceInput::Command(PlaybackInput::SetOutputMode {
+                exclusive,
+                bit_perfect,
+            })) => {
+                if let Some(exclusive) = exclusive {
+                    service.settings.exclusive = exclusive;
+                }
+                if let Some(bit_perfect) = bit_perfect {
+                    service.settings.bit_perfect = bit_perfect;
+                }
+                service.apply_output_target();
+                capture_settings(&mut service);
                 force = true;
             }
             Some(ServiceInput::Command(PlaybackInput::SetCrossfadeConfig(change))) => {

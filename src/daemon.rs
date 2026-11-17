@@ -251,6 +251,15 @@ async fn run_async() {
                     Event::CycleEq => {
                         let _ = playback_control.send(PlaybackInput::CycleEq);
                     }
+                    Event::OutputMode {
+                        exclusive,
+                        bit_perfect,
+                    } => {
+                        let _ = playback_control.send(PlaybackInput::SetOutputMode {
+                            exclusive: *exclusive,
+                            bit_perfect: *bit_perfect,
+                        });
+                    }
                     Event::CrossfadeChange(change) => {
                         let _ = playback_control
                             .send(PlaybackInput::SetCrossfadeConfig(*change));
@@ -404,6 +413,7 @@ async fn run_async() {
                         | Event::Scrobble(_)
                         | Event::CycleEq
                         | Event::CrossfadeChange(_)
+                        | Event::OutputMode { .. }
                 );
                 if forward {
                     let dead = broadcast_event(&ui_clients, &event);
@@ -749,6 +759,15 @@ fn dispatch_core_bridge(services: &Services, command: &IpcCommand) {
             let _ = services.playback.send(PlaybackInput::ApplyStreamChange(
                 change.clone(),
             ));
+        }
+        IpcCommand::OutputMode {
+            exclusive,
+            bit_perfect,
+        } => {
+            let _ = services.playback.send(PlaybackInput::SetOutputMode {
+                exclusive: *exclusive,
+                bit_perfect: *bit_perfect,
+            });
         }
         IpcCommand::OutputSet(device) => {
             let _ = services.playback.send(PlaybackInput::SetOutputDevice {

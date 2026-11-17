@@ -179,6 +179,11 @@ pub enum IpcCommand {
     OutputSet(String),
     /// Follow PipeWire's default sink.
     OutputDefault,
+    /// Toggle exclusive device access and/or the bit-perfect DSP bypass.
+    OutputMode {
+        exclusive: Option<bool>,
+        bit_perfect: Option<bool>,
+    },
     /// Change the stream bitrate/format/cache policy.
     Stream(crate::playback_settings::StreamChange),
     /// Sleep timer: `Some(minutes)` arms it, `None` cancels it.
@@ -254,6 +259,7 @@ impl IpcCommand {
             | Self::DownloadSong(_)
             | Self::OutputSet(_)
             | Self::OutputDefault
+            | Self::OutputMode { .. }
             | Self::Stream(_)
             | Self::Sleep(_)
             | Self::Scrobble(_)
@@ -557,7 +563,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "output",
         usage: "output <list|default|device-name>",
         description: "List PipeWire outputs, follow the default, or target a named sink",
-        form: CommandForm::Advanced(ArgHints::Values(&["list", "default"])),
+        form: CommandForm::Advanced(ArgHints::Values(&[
+            "list",
+            "default",
+            "exclusive",
+            "bitperfect",
+        ])),
     },
     CommandSpec {
         name: "stream",
@@ -1086,6 +1097,14 @@ fn one_arg<'a>(rest: &'a str, _usage: &str) -> Result<&'a str, CommandError> {
     Ok(value)
 }
 
+fn parse_on_off(value: &str, label: &str) -> Result<bool, CommandError> {
+    match value {
+        "on" | "true" => Ok(true),
+        "off" | "false" => Ok(false),
+        _ => Err(CommandError(format!("{label} expects on|off, got '{value}'"))),
+    }
+}
+
 fn parse_number(value: &str, label: &str) -> Result<f64, CommandError> {
     value
         .parse::<f64>()
@@ -1251,6 +1270,20 @@ fn advanced_parse(name: &str, rest: &str, usage: &str) -> Result<IpcCommand, Com
             [] => Ok(IpcCommand::OutputList),
             [target] if target == "list" => Ok(IpcCommand::OutputList),
             [target] if target == "default" => Ok(IpcCommand::OutputDefault),
+            [what, value] if what == "exclusive" => {
+                let enabled = parse_on_off(value, "exclusive")?;
+                Ok(IpcCommand::OutputMode {
+                    exclusive: Some(enabled),
+                    bit_perfect: None,
+                })
+            }
+            [what, value] if what == "bitperfect" => {
+                let enabled = parse_on_off(value, "bitperfect")?;
+                Ok(IpcCommand::OutputMode {
+                    exclusive: None,
+                    bit_perfect: Some(enabled),
+                })
+            }
             [name] => Ok(IpcCommand::OutputSet(name.clone())),
             _ => Err(CommandError(
                 "usage: output <list|default|device-name>".to_string(),
@@ -1789,6 +1822,21 @@ fn advanced_canonical(command: &IpcCommand) -> String {
         OutputDefault => "output default".to_string(),
 
         OutputSet(name) => format!("output {}", quote_arg(name)),
+
+        OutputMode {
+            exclusive: Some(exclusive),
+            bit_perfect: None,
+        } => format!("output exclusive {}", if *exclusive { "on" } else { "off" }),
+
+        OutputMode {
+            exclusive: None,
+            bit_perfect: Some(bit_perfect),
+        } => format!(
+            "output bitperfect {}",
+            if *bit_perfect { "on" } else { "off" }
+        ),
+
+        OutputMode { .. } => "output".to_string(),
 
         Crossfade(CrossfadeCommand::Toggle) => "crossfade".to_string(),
         Crossfade(CrossfadeCommand::On) => "crossfade on".to_string(),
@@ -2345,6 +2393,32 @@ mod tests {
         assert!(parse("stream").is_err());
         assert!(parse("stream nonsense 1").is_err());
         assert!(parse("stream cache maybe").is_err());
+    }
+
+    #[test]
+    fn parses_output_mode_commands() {
+        assert_eq!(
+            parse("output exclusive on"),
+            Ok(IpcCommand::OutputMode {
+                exclusive: Some(true),
+                bit_perfect: None
+            })
+        );
+        assert_eq!(
+            parse("output bitperfect off"),
+            Ok(IpcCommand::OutputMode {
+                exclusive: None,
+                bit_perfect: Some(false)
+            })
+        );
+        assert!(parse("output exclusive maybe").is_err());
+        assert_eq!(
+            canonical_string(&IpcCommand::OutputMode {
+                exclusive: Some(false),
+                bit_perfect: None
+            }),
+            "output exclusive off"
+        );
     }
 
     #[test]

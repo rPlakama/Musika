@@ -64,6 +64,11 @@ pub enum Event {
     EqChanged(Option<String>),
     /// UI request: change one crossfade field.
     CrossfadeChange(crate::playback_settings::CrossfadeChange),
+    /// UI request: exclusive/bit-perfect output mode.
+    OutputMode {
+        exclusive: Option<bool>,
+        bit_perfect: Option<bool>,
+    },
     LoggedIn {
         server_url: String,
         username: String,

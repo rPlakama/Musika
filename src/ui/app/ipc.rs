@@ -78,6 +78,12 @@ impl AppRoot {
             IpcCommand::Crossfade(_) | IpcCommand::Normalize(_) => {
                 unreachable!("IPC playback mapping returned a playback op")
             }
+            IpcCommand::OutputMode {
+                exclusive,
+                bit_perfect,
+            } => {
+                self.bridge.set_output_mode(exclusive, bit_perfect);
+            }
             IpcCommand::CrossfadeConfig(change) => {
                 self.bridge.set_crossfade_change(change);
             }

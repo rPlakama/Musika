@@ -68,6 +68,11 @@ enum SinkCommand {
         target: Option<String>,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    /// Request/release exclusive device access and rebuild the stream.
+    SetExclusive {
+        exclusive: bool,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     Shutdown,
 }
 
@@ -233,6 +238,17 @@ impl Sink {
         }
     }
 
+    pub(crate) fn set_exclusive(&self, exclusive: bool) -> Result<(), String> {
+        let (ack, ack_rx) = mpsc::sync_channel(1);
+        self.commands
+            .send(SinkCommand::SetExclusive { exclusive, ack })
+            .map_err(|_| "PipeWire sink is not running".to_string())?;
+        match ack_rx.recv_timeout(FORMAT_ACK_TIMEOUT) {
+            Ok(result) => result,
+            Err(_) => Err("PipeWire sink did not acknowledge the exclusive change".to_string()),
+        }
+    }
+
     pub(crate) fn write(&self, pcm: &[f32], epoch: u64) {
         self.ring.write(pcm, epoch);
     }
@@ -376,6 +392,7 @@ fn build_stream<'c>(
     shared: &Arc<Shared>,
     rate: u32,
     target: Option<&str>,
+    exclusive: bool,
 ) -> Result<ActiveStream<'c>, String> {
     let mut props = properties! {
         *pw::keys::MEDIA_TYPE => "Audio",
@@ -387,6 +404,12 @@ fn build_stream<'c>(
         // Object name or object.serial; the engine stores the stable node
         // name from the device picker.
         props.insert(*pw::keys::TARGET_OBJECT, target);
+    }
+    if exclusive {
+        // A request, not a hard guarantee: PipeWire decides whether the
+        // device can be released to this node. The stream is rebuilt when
+        // the user toggles it.
+        props.insert(*pw::keys::NODE_EXCLUSIVE, "true");
     }
     let stream = pw::stream::StreamBox::new(core, "Musika", props)
         .map_err(|error| format!("cannot create PipeWire stream: {error}"))?;
@@ -473,6 +496,7 @@ fn switch_format<'c>(
     shared: &Arc<Shared>,
     rate: u32,
     target: Option<&str>,
+    exclusive: bool,
 ) -> Result<(), String> {
     let rate = rate.clamp(1, ring::MAX_RATE);
     if rate == ring.rate() {
@@ -483,7 +507,7 @@ fn switch_format<'c>(
     // produced at the new rate. The producer blocks on the flush until the
     // rebuilt stream's first process callback services it.
     ring.flush();
-    match build_stream(core, ring, shared, rate, target) {
+    match build_stream(core, ring, shared, rate, target, exclusive) {
         Ok(next) => {
             ring.set_failed(false);
             shared.set_sink_state(SinkState::Connecting, None);
@@ -511,8 +535,9 @@ fn rebuild_stream<'c>(
     shared: &Arc<Shared>,
     rate: u32,
     target: Option<&str>,
+    exclusive: bool,
 ) -> Result<(), String> {
-    let next = build_stream(core, ring, shared, rate, target)?;
+    let next = build_stream(core, ring, shared, rate, target, exclusive)?;
     ring.set_failed(false);
     shared.set_sink_state(SinkState::Connecting, None);
     if let Err(error) = next.stream.set_active(!ring.paused()) {
@@ -595,7 +620,15 @@ fn run_sink(
         .register();
 
     let mut target: Option<String> = None;
-    let mut active = build_stream(&core, &ring, &shared, ring.rate(), target.as_deref())?;
+    let mut exclusive = false;
+    let mut active = build_stream(
+        &core,
+        &ring,
+        &shared,
+        ring.rate(),
+        target.as_deref(),
+        exclusive,
+    )?;
     let mut volume = 1.0f32;
     let mut muted = false;
     // The freshly built node starts at unity; re-apply the mixer controls once
@@ -645,6 +678,7 @@ fn run_sink(
                         &shared,
                         rate,
                         target.as_deref(),
+                        exclusive,
                     );
                     if result.is_ok() {
                         // Replay the mixer state on the rebuilt node.
@@ -665,6 +699,7 @@ fn run_sink(
                         &shared,
                         ring.rate(),
                         target.as_deref(),
+                        exclusive,
                     );
                     if result.is_ok() {
                         let volume_applied = apply_volume(&active.stream, &ring, volume);
@@ -673,6 +708,29 @@ fn run_sink(
                     }
                     if ack.send(result).is_err() {
                         crate::debug_log!("pipewire: target-change ack receiver was dropped");
+                    }
+                }
+                SinkCommand::SetExclusive {
+                    exclusive: next,
+                    ack,
+                } => {
+                    exclusive = next;
+                    let result = rebuild_stream(
+                        &mut active,
+                        &core,
+                        &ring,
+                        &shared,
+                        ring.rate(),
+                        target.as_deref(),
+                        exclusive,
+                    );
+                    if result.is_ok() {
+                        let volume_applied = apply_volume(&active.stream, &ring, volume);
+                        let mute_applied = apply_mute(&active.stream, &ring, muted);
+                        controls_dirty = !(volume_applied && mute_applied);
+                    }
+                    if ack.send(result).is_err() {
+                        crate::debug_log!("pipewire: exclusive-change ack receiver was dropped");
                     }
                 }
                 SinkCommand::Shutdown => running = false,
@@ -686,6 +744,7 @@ fn run_sink(
                 &shared,
                 ring.rate(),
                 None,
+                exclusive,
             );
             if result.is_ok() {
                 let volume_applied = apply_volume(&active.stream, &ring, volume);

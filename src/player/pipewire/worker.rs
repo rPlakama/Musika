@@ -821,7 +821,8 @@ fn worker_thread(
         let mode = Normalization::from_code(
             shared.normalization.load(Ordering::Acquire) as u8,
         );
-        if mode.enabled()
+        if !shared.bit_perfect.load(Ordering::Acquire)
+            && mode.enabled()
             && let Some(decoder) = current.decoder.as_ref()
             && let Some(gain) = normalization_gain(
                 mode,
@@ -1030,7 +1031,8 @@ fn maybe_start_crossfade(current: &mut Current, shared: &Shared) {
     }
     let decoded = current.timeline_start + current.written_frames as f64 / f64::from(current.rate);
     let remaining = duration - decoded;
-    if remaining <= 0.0
+    if shared.bit_perfect.load(Ordering::Acquire)
+        || remaining <= 0.0
         || remaining > crossfade_secs(shared)
         || current.preload.is_none()
         || !shared.crossfade_allowed.load(Ordering::Acquire)
@@ -1074,6 +1076,12 @@ fn maybe_start_crossfade(current: &mut Current, shared: &Shared) {
 /// pipeline rate changes. The lock is only taken on a real change; the steady
 /// state costs one atomic load per chunk.
 fn refresh_eq(current: &mut Current, shared: &Shared) {
+    if shared.bit_perfect.load(Ordering::Acquire) {
+        current.eq = None;
+        current.eq_epoch = shared.eq_epoch.load(Ordering::Acquire);
+        current.eq_rate = current.rate;
+        return;
+    }
     let epoch = shared.eq_epoch.load(Ordering::Acquire);
     if current.eq_epoch == epoch && current.eq_rate == current.rate {
         return;
@@ -1192,7 +1200,8 @@ fn run_crossfade_chunk(
     };
 
     let mode = Normalization::from_code(shared.normalization.load(Ordering::Acquire) as u8);
-    if mode.enabled()
+    if !shared.bit_perfect.load(Ordering::Acquire)
+        && mode.enabled()
         && let Some(decoder) = current.decoder.as_ref()
         && let Some(gain) = normalization_gain(
             mode,
@@ -1202,7 +1211,7 @@ fn run_crossfade_chunk(
     {
         apply_normalization(&mut pcm[..cur_frames * ring::CHANNELS], gain);
     }
-    if mode.enabled() && next_frames > 0 {
+    if !shared.bit_perfect.load(Ordering::Acquire) && mode.enabled() && next_frames > 0 {
         let Some(crossfade) = current.crossfade.as_ref() else {
             return;
         };

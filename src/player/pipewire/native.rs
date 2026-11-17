@@ -89,6 +89,14 @@ impl Native {
         self.sink.set_target(target)
     }
 
+    pub(crate) fn set_exclusive(&self, exclusive: bool) -> Result<(), String> {
+        self.sink.set_exclusive(exclusive)
+    }
+
+    pub(crate) fn set_bit_perfect(&self, enabled: bool) {
+        self.shared.set_bit_perfect(enabled);
+    }
+
     pub(crate) fn set_eq(&self, profile: Option<std::sync::Arc<crate::eq::EqProfile>>) {
         self.shared.set_eq(profile);
     }

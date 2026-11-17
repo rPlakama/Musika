@@ -44,6 +44,7 @@ macro_rules! for_each_bridge_rpc {
             set_scrobble(enabled: bool),
             cycle_eq(),
             set_crossfade_change(change: $crate::playback_settings::CrossfadeChange),
+            set_output_mode(exclusive: Option<bool>, bit_perfect: Option<bool>),
             logout(),
             // Library and search.
             load_library(scope: $crate::model::Scope, order: usize),

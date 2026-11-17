@@ -200,35 +200,31 @@ pub async fn page(
     let covers = crate::covers::url_map_for(dbs, cover_ids.clone()).await?;
     let remotes = crate::covers::remote_map_for(dbs, cover_ids).await?;
 
+    // Same deterministic rule as playlist pages: a pane is defined by its
+    // cover id, not by whether the local file is already cached. Otherwise the
+    // collage changes shape while the cover pass warms up.
     let mut collage: Vec<String> = Vec::new();
     let mut collage_remote: Vec<String> = Vec::new();
     let mut collage_art: Vec<String> = Vec::new();
-    let seed_cover = crate::covers::url_for(seed.cover_art.as_deref(), &covers);
-    if !seed_cover.is_empty() {
-        let id = seed.cover_art.clone().unwrap_or_default();
-        collage.push(seed_cover);
-        collage_remote.push(
-            seed.cover_art
-                .as_deref()
-                .and_then(|id| remotes.get(id))
-                .cloned()
-                .unwrap_or_default(),
-        );
-        collage_art.push(id);
+    let seed_id = seed.cover_art.clone().filter(|id| !id.is_empty());
+    if let Some(id) = seed_id {
+        collage_art.push(id.clone());
+        collage.push(crate::covers::url_for(Some(&id), &covers));
+        collage_remote.push(remotes.get(&id).cloned().unwrap_or_default());
     }
     for row in &rows {
-        let cover = crate::covers::url_for_ref(row.cover_art.as_deref(), &covers);
-        if !cover.is_empty() && !collage.iter().any(|url| url == cover) {
-            collage.push(cover.to_string());
-            collage_remote.push(
-                row.cover_art
-                    .as_deref()
-                    .and_then(|id| remotes.get(id))
-                    .cloned()
-                    .unwrap_or_default(),
-            );
-            collage_art.push(row.cover_art.clone().unwrap_or_default());
+        if collage.len() >= 4 {
+            break;
         }
+        let Some(id) = row.cover_art.clone().filter(|id| !id.is_empty()) else {
+            continue;
+        };
+        if collage_art.contains(&id) {
+            continue;
+        }
+        collage_art.push(id.clone());
+        collage.push(crate::covers::url_for(Some(&id), &covers));
+        collage_remote.push(remotes.get(&id).cloned().unwrap_or_default());
     }
 
     let mut page_rows: Vec<Row> = Vec::with_capacity(rows.len());

@@ -52,6 +52,8 @@ pub enum Event {
     OutputDevices {
         devices: Vec<crate::player::pipewire::OutputDevice>,
     },
+    /// UI request: change the stream-quality/cache policy.
+    StreamChange(crate::playback_settings::StreamChange),
     LoggedIn {
         server_url: String,
         username: String,

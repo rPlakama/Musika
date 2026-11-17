@@ -388,3 +388,38 @@ async fn prune_uncovered_drops_scope_mismatches_only() {
     left.sort();
     assert_eq!(left, vec!["s1", "s3", "s4"]);
 }
+
+#[tokio::test]
+async fn playback_cache_cap_evicts_only_playback_rows() {
+    let pool = media_pool().await;
+    for (song, kind, size, used) in [
+        ("old", KIND_PLAYBACK, 10, 1),
+        ("new", KIND_PLAYBACK, 10, 3),
+        ("download", KIND_PERMANENT, 100, 2),
+    ] {
+        record(&pool, song, kind, &format!("{song}.mp3"), size, "original", "fp", None)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE media SET last_used = ?2 WHERE song_id = ?1")
+            .bind(song)
+            .bind(used)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    let removed = enforce_playback_cap(&pool, 15).await.unwrap();
+    assert_eq!(removed, 1);
+    let mut left: Vec<(String, String)> = sqlx::query_as("SELECT song_id, kind FROM media")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    left.sort();
+    assert_eq!(
+        left,
+        vec![
+            ("download".to_string(), KIND_PERMANENT.to_string()),
+            ("new".to_string(), KIND_PLAYBACK.to_string()),
+        ]
+    );
+}

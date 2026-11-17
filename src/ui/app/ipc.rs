@@ -78,6 +78,9 @@ impl AppRoot {
             IpcCommand::Crossfade(_) | IpcCommand::Normalize(_) => {
                 unreachable!("IPC playback mapping returned a playback op")
             }
+            IpcCommand::Stream(change) => {
+                self.bridge.set_stream_change(change);
+            }
             IpcCommand::OutputSet(device) => {
                 self.bridge.set_output_device(Some(device), false);
             }

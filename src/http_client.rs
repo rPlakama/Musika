@@ -169,9 +169,33 @@ impl SubsonicClient {
     /// into the resident set. The caller supplies a `.part` path and adopts it
     /// atomically once the body is complete.
     pub async fn download_media_to(&self, id: &str, dest: &std::path::Path) -> Result<u64> {
+        let url = self.endpoint_url("download", &[("id", id.to_string())])?;
+        self.download_url_to(url, dest).await
+    }
+
+    /// Streams `/rest/stream` with an optional bitrate cap/format into `dest`
+    /// (the playback-cache path; downloads still use the original `/download`).
+    pub async fn download_stream_to(
+        &self,
+        id: &str,
+        max_bitrate: u32,
+        format: Option<&str>,
+        dest: &std::path::Path,
+    ) -> Result<u64> {
+        let mut params: Vec<(&str, String)> = vec![("id", id.to_string())];
+        if max_bitrate > 0 {
+            params.push(("maxBitRate", max_bitrate.to_string()));
+        }
+        if let Some(format) = format.filter(|format| !format.is_empty() && *format != "original") {
+            params.push(("format", format.to_string()));
+        }
+        let url = self.endpoint_url("stream", &params)?;
+        self.download_url_to(url, dest).await
+    }
+
+    async fn download_url_to(&self, url: reqwest::Url, dest: &std::path::Path) -> Result<u64> {
         use tokio::io::AsyncWriteExt;
 
-        let url = self.endpoint_url("download", &[("id", id.to_string())])?;
         let mut response = self
             .send_checked(identity_encoding(self.http.get(url)))
             .await?;

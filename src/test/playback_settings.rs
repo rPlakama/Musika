@@ -53,3 +53,27 @@ async fn corrupt_playback_settings_fall_back_to_defaults() {
         crate::playback_settings::PlaybackSettings::default()
     );
 }
+
+#[test]
+fn stream_changes_apply_one_field_and_keys_match_the_request() {
+    use crate::playback_settings::{PlaybackSettings, StreamChange};
+
+    let mut settings = PlaybackSettings::default();
+    assert!(settings.stream_is_original());
+    assert_eq!(settings.stream_quality_key(), "original");
+
+    StreamChange::Quality(128).apply(&mut settings);
+    StreamChange::Format(Some("OPUS".to_string())).apply(&mut settings);
+    assert!(!settings.stream_is_original());
+    assert_eq!(settings.stream_format.as_deref(), Some("opus"));
+    assert_eq!(settings.stream_quality_key(), "stream:128:opus");
+
+    StreamChange::Format(None).apply(&mut settings);
+    StreamChange::Quality(0).apply(&mut settings);
+    assert!(settings.stream_is_original());
+
+    StreamChange::Cache(false).apply(&mut settings);
+    assert!(!settings.stream_cache);
+    StreamChange::CacheSize(1).apply(&mut settings);
+    assert_eq!(settings.stream_cache_mib, 64);
+}

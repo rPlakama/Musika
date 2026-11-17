@@ -115,6 +115,8 @@ pub(crate) enum PlaybackInput {
         device: Option<String>,
         follow_default: bool,
     },
+    /// One live stream-quality/cache change.
+    ApplyStreamChange(crate::playback_settings::StreamChange),
     Shutdown,
 }
 
@@ -140,6 +142,9 @@ impl std::fmt::Debug for PlaybackInput {
                 formatter,
                 "SetOutputDevice {{ device: {device:?}, follow_default: {follow_default} }}"
             ),
+            Self::ApplyStreamChange(change) => {
+                write!(formatter, "ApplyStreamChange({change:?})")
+            }
             Self::Shutdown => write!(formatter, "Shutdown"),
         }
     }
@@ -327,6 +332,33 @@ impl ServiceState {
         if let Some(engine) = self.engine.as_ref() {
             engine.send(AudioCommand::SetOutputTarget(self.output_target()));
         }
+    }
+
+    /// Warm the purgeable playback cache after the first PCM of a remote row.
+    /// The fetch runs off the playback thread and never blocks audio.
+    fn maybe_cache_current_stream(&self) {
+        if !self.settings.stream_cache {
+            return;
+        }
+        let queue = self.core.queue();
+        let Some(track) = queue.get(self.core.index()) else {
+            return;
+        };
+        if track.id.is_empty() || !crate::player::is_remote_url(&track.url) {
+            return;
+        }
+        let id = track.id.clone();
+        let settings = self.settings.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else {
+                return;
+            };
+            if let Err(error) =
+                crate::media_actions::cache_stream(&dbs, &id, &settings).await
+            {
+                crate::debug_log!("stream cache: {id} failed: {error:#}");
+            }
+        });
     }
 
     /// Any explicit transport/queue action supersedes a pending retry or a
@@ -573,6 +605,7 @@ fn run(
             }
             Some(ServiceInput::Command(PlaybackInput::SetSettings(settings))) => {
                 service.settings = *settings;
+                crate::playback_settings::install(&service.settings);
                 let repeat = match service.settings.repeat {
                     1 => crate::player::Repeat::One,
                     2 => crate::player::Repeat::All,
@@ -601,6 +634,12 @@ fn run(
                 service.settings.output_device = device;
                 service.settings.follow_default = follow_default;
                 service.apply_output_target();
+                capture_settings(&mut service);
+                force = true;
+            }
+            Some(ServiceInput::Command(PlaybackInput::ApplyStreamChange(change))) => {
+                change.apply(&mut service.settings);
+                crate::playback_settings::install(&service.settings);
                 capture_settings(&mut service);
                 force = true;
             }
@@ -662,6 +701,7 @@ fn run(
                         event,
                         EngineEvent::FirstPcm | EngineEvent::Loaded { .. }
                     );
+                    let first_pcm = matches!(event, EngineEvent::FirstPcm);
                     let failure = if let EngineEvent::Failed { error } = &event {
                         Some(error.clone())
                     } else {
@@ -745,6 +785,9 @@ fn run(
                             Some(crate::player::SERVER_UNAVAILABLE.to_string());
                     }
                     apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
+                    if first_pcm {
+                        service.maybe_cache_current_stream();
+                    }
                 }
             },
         }

@@ -133,6 +133,7 @@ async fn run_async() {
         Some(dbs) => crate::playback_settings::load(&dbs.status).await,
         None => crate::playback_settings::PlaybackSettings::default(),
     };
+    crate::playback_settings::install(&playback_settings);
     let mut settings_dirty = false;
 
     let (lifecycle_tx, mut lifecycle_rx) = mpsc::unbounded_channel::<Lifecycle>();
@@ -233,6 +234,11 @@ async fn run_async() {
                                 follow_default: *follow_default,
                             });
                         }
+                    }
+                    Event::StreamChange(change) => {
+                        let _ = playback_control.send(PlaybackInput::ApplyStreamChange(
+                            change.clone(),
+                        ));
                     }
                     Event::LoginRequired { .. } => {
                         auth = Some(event.clone());
@@ -378,6 +384,7 @@ async fn run_async() {
                         | Event::QueuePaste { .. }
                         | Event::Restore { .. }
                         | Event::OutputDevice { .. }
+                        | Event::StreamChange(_)
                 );
                 if forward {
                     let dead = broadcast_event(&ui_clients, &event);
@@ -696,6 +703,11 @@ fn dispatch_core_bridge(services: &Services, command: &IpcCommand) {
     match command {
         IpcCommand::Sync(mode) => bridge.sync(*mode),
         IpcCommand::Refresh => bridge.sync(SyncMode::Incremental),
+        IpcCommand::Stream(change) => {
+            let _ = services.playback.send(PlaybackInput::ApplyStreamChange(
+                change.clone(),
+            ));
+        }
         IpcCommand::OutputSet(device) => {
             let _ = services.playback.send(PlaybackInput::SetOutputDevice {
                 device: Some(device.clone()),

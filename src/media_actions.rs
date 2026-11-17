@@ -16,7 +16,29 @@
 
 //! Toolkit-free media download actions shared by the GPUI bridge.
 
+use std::collections::HashSet;
+use std::sync::{LazyLock, Mutex};
+
 use crate::session::client;
+
+/// One playback-cache fetch per song at a time: a play/retry burst must not
+/// launch overlapping downloads of the same blob.
+static STREAM_CACHE_INFLIGHT: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+fn claim_stream_cache(song_id: &str) -> bool {
+    STREAM_CACHE_INFLIGHT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(song_id.to_string())
+}
+
+fn release_stream_cache(song_id: &str) {
+    STREAM_CACHE_INFLIGHT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .remove(song_id);
+}
 
 pub(crate) async fn rule_off(dbs: &crate::db::Dbs, rule_id: &str) {
     let songs = crate::download::rule_song_ids(&dbs.download, rule_id)
@@ -74,9 +96,8 @@ pub(crate) async fn download_one(
     dbs: &crate::db::Dbs,
     song_id: &str,
 ) -> anyhow::Result<&'static str> {
-    if crate::media::cached_path(&dbs.media, song_id)
-        .await?
-        .is_some()
+    if crate::media::downloaded(&dbs.media, song_id).await?
+        && crate::media::cached_path(&dbs.media, song_id).await?.is_some()
     {
         eprintln!("download: {song_id} already cached");
         crate::download::set_state(&dbs.download, song_id, crate::download::DONE, None).await?;
@@ -163,4 +184,103 @@ pub(crate) async fn download_one(
             Err(err)
         }
     }
+}
+
+/// Caches the currently streamed bytes into the purgeable playback tier so the
+/// next play of the same song (and the same quality) is local.
+///
+/// This is deliberately not a download: it writes no download-ledger row, is
+/// never used by the offline catalog, and is evicted by the LRU cap. A song
+/// already downloaded in the config tier is left alone.
+pub(crate) async fn cache_stream(
+    dbs: &crate::db::Dbs,
+    song_id: &str,
+    settings: &crate::playback_settings::PlaybackSettings,
+) -> anyhow::Result<bool> {
+    if !settings.stream_cache || song_id.is_empty() {
+        return Ok(false);
+    }
+    if crate::media::downloaded(&dbs.media, song_id).await?
+        && crate::media::cached_path(&dbs.media, song_id).await?.is_some()
+    {
+        return Ok(false);
+    }
+    let quality = settings.stream_quality_key();
+    if crate::media::playback_path(&dbs.media, song_id, &quality)
+        .await?
+        .is_some()
+    {
+        _ = crate::media::touch_playback(&dbs.media, song_id).await;
+        return Ok(true);
+    }
+    if !claim_stream_cache(song_id) {
+        return Ok(false);
+    }
+    let result = cache_stream_inner(dbs, song_id, settings, &quality).await;
+    release_stream_cache(song_id);
+    result
+}
+
+async fn cache_stream_inner(
+    dbs: &crate::db::Dbs,
+    song_id: &str,
+    settings: &crate::playback_settings::PlaybackSettings,
+    quality: &str,
+) -> anyhow::Result<bool> {
+    let client = client(dbs).await?;
+    let (size, suffix, bit_rate) = crate::library::song_file_info(&dbs.library, song_id)
+        .await?
+        .unwrap_or((None, None, None));
+    let fingerprint = crate::media::fingerprint(
+        size,
+        suffix.as_deref(),
+        bit_rate,
+        client.base(),
+        quality,
+    );
+    let extension = settings
+        .stream_format
+        .as_deref()
+        .filter(|format| !format.is_empty() && *format != "original")
+        .or(suffix.as_deref())
+        .filter(|suffix| !suffix.is_empty())
+        .unwrap_or("bin");
+    let temp = crate::media::temp_path(crate::media::KIND_PLAYBACK)?;
+    let written = match client
+        .download_stream_to(
+            song_id,
+            settings.stream_max_bitrate,
+            settings.stream_format.as_deref(),
+            &temp,
+        )
+        .await
+    {
+        Ok(written) => written,
+        Err(error) => {
+            _ = std::fs::remove_file(&temp);
+            return Err(error);
+        }
+    };
+    if written == 0 {
+        _ = std::fs::remove_file(&temp);
+        anyhow::bail!("the server returned an empty stream");
+    }
+    crate::media::store_streamed(
+        &dbs.media,
+        song_id,
+        &temp,
+        i64::try_from(written).unwrap_or(i64::MAX),
+        crate::media::KIND_PLAYBACK,
+        quality,
+        &fingerprint,
+        extension,
+        None,
+    )
+    .await?;
+    let cap = settings.stream_cache_mib.saturating_mul(1024 * 1024);
+    if let Err(error) = crate::media::enforce_playback_cap(&dbs.media, cap).await {
+        crate::debug_log!("stream cache: eviction failed: {error:#}");
+    }
+    crate::debug_log!("stream cache: stored {song_id} ({quality}, {written} bytes)");
+    Ok(true)
 }

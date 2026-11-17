@@ -27,10 +27,29 @@
     reason = "the first phases persist the settings shell; later playback phases consume the fields as they land"
 )]
 
+use std::sync::{OnceLock, RwLock};
+
 use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
 
 const SETTINGS_KEY: &str = "playback";
+
+/// Process-wide copy used by queue construction (stream URLs and playback-cache
+/// eligibility). The daemon and the playback service install every loaded or
+/// changed document here.
+static CURRENT: OnceLock<RwLock<PlaybackSettings>> = OnceLock::new();
+
+pub fn install(settings: &PlaybackSettings) {
+    let slot = CURRENT.get_or_init(|| RwLock::new(PlaybackSettings::default()));
+    *slot.write().unwrap_or_else(std::sync::PoisonError::into_inner) = settings.clone().sanitized();
+}
+
+pub fn current() -> PlaybackSettings {
+    CURRENT
+        .get()
+        .and_then(|slot| slot.read().ok().map(|guard| guard.clone()))
+        .unwrap_or_default()
+}
 
 /// Every persisted playback preference. Missing fields fall back to
 /// [`Self::default`] through `#[serde(default)]`, so a settings row written by
@@ -82,7 +101,59 @@ impl Default for PlaybackSettings {
     }
 }
 
+/// One live change to the stream-quality policy. The UI/command line sends a
+/// single field, so changing quality does not reset format/cache/size.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum StreamChange {
+    /// kbps cap; 0 restores the original stream.
+    Quality(u32),
+    /// `None`/`original` restores the original container.
+    Format(Option<String>),
+    Cache(bool),
+    /// Playback-cache cap in MiB.
+    CacheSize(u64),
+}
+
+impl StreamChange {
+    pub fn apply(self, settings: &mut PlaybackSettings) {
+        match self {
+            Self::Quality(bitrate) => settings.stream_max_bitrate = bitrate.min(512),
+            Self::Format(format) => {
+                settings.stream_format = format.and_then(|format| {
+                    let format = format.trim().to_ascii_lowercase();
+                    (!format.is_empty() && format != "original").then_some(format)
+                });
+            }
+            Self::Cache(enabled) => settings.stream_cache = enabled,
+            Self::CacheSize(mib) => settings.stream_cache_mib = mib.clamp(64, 65_536),
+        }
+    }
+}
+
 impl PlaybackSettings {
+    /// True when no transcode/bitrate cap is requested.
+    pub fn stream_is_original(&self) -> bool {
+        self.stream_max_bitrate == 0
+            && self
+                .stream_format
+                .as_deref()
+                .is_none_or(|format| format.is_empty() || format == "original")
+    }
+
+    /// Identity of the requested stream bytes: the cache row and the media
+    /// fingerprint both key on this so a quality change cannot reuse a blob.
+    pub fn stream_quality_key(&self) -> String {
+        if self.stream_is_original() {
+            "original".to_string()
+        } else {
+            format!(
+                "stream:{}:{}",
+                self.stream_max_bitrate,
+                self.stream_format.as_deref().unwrap_or("original")
+            )
+        }
+    }
+
     /// Clamp values that come from a hand-edited settings row.
     pub fn sanitized(mut self) -> Self {
         self.repeat = self.repeat.clamp(0, 2);
@@ -91,6 +162,10 @@ impl PlaybackSettings {
         if self.crossfade_curve != "linear" {
             self.crossfade_curve = "equal-power".to_string();
         }
+        self.stream_format = self.stream_format.and_then(|format| {
+            let format = format.trim().to_ascii_lowercase();
+            (!format.is_empty()).then_some(format)
+        });
         self.stream_max_bitrate = self.stream_max_bitrate.min(512);
         self.stream_cache_mib = self.stream_cache_mib.clamp(64, 65_536);
         self

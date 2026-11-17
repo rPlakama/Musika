@@ -209,6 +209,11 @@ impl Bridge {
         });
     }
 
+    /// UI request: change one stream-quality/cache field.
+    pub fn set_stream_change(&self, change: crate::playback_settings::StreamChange) {
+        _ = self.tx.send(Event::StreamChange(change));
+    }
+
     pub(crate) fn is_offline(&self) -> bool {
         self.offline.load(Ordering::Relaxed)
     }

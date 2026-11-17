@@ -34,11 +34,13 @@ pub(crate) fn track_url(
     client: &SubsonicClient,
     song: &crate::library::SongRow,
     media: &HashMap<String, PathBuf>,
+    max_bitrate: u32,
+    format: Option<&str>,
 ) -> anyhow::Result<String> {
     let url = match media.get(&song.id) {
         Some(path) => reqwest::Url::from_file_path(path)
             .map_err(|_| anyhow::anyhow!("cached media path is not a valid file URL"))?,
-        None => client.stream_url(&song.id)?,
+        None => client.stream_url_with_quality(&song.id, max_bitrate, format)?,
     };
     Ok(url.to_string())
 }
@@ -53,6 +55,8 @@ pub(crate) fn build_tracks(
     songs: &[crate::library::SongRow],
     covers: &HashMap<String, String>,
     media: &HashMap<String, PathBuf>,
+    max_bitrate: u32,
+    format: Option<&str>,
 ) -> anyhow::Result<Vec<crate::player::Track>> {
     let mut tracks = Vec::with_capacity(songs.len());
     for song in songs {
@@ -69,7 +73,7 @@ pub(crate) fn build_tracks(
             album: song.album.clone().unwrap_or_default(),
             favorite: song.starred.is_some(),
             duration: song.duration.unwrap_or(0) as f64,
-            url: track_url(client, song, media)?,
+            url: track_url(client, song, media, max_bitrate, format)?,
             cover_art: song.cover_art.clone().unwrap_or_default(),
         });
     }
@@ -84,10 +88,19 @@ pub(crate) async fn tracks(
     let client = crate::session::client(dbs).await?;
     let covers = crate::covers::url_map_for(dbs, songs.iter().map(|song| &song.cover_art)).await?;
     let song_ids: Vec<String> = songs.iter().map(|song| song.id.clone()).collect();
-    let media = crate::media::path_map_of(&dbs.media, &song_ids)
+    let settings = crate::playback_settings::current();
+    let quality = settings.stream_quality_key();
+    let media = crate::media::path_map_of(&dbs.media, &song_ids, &quality)
         .await
         .unwrap_or_default();
-    build_tracks(&client, &songs, &covers, &media)
+    build_tracks(
+        &client,
+        &songs,
+        &covers,
+        &media,
+        settings.stream_max_bitrate,
+        settings.stream_format.as_deref(),
+    )
 }
 
 /// CACHE-9: while offline, only downloaded songs are playable — drop the

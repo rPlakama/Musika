@@ -5,6 +5,13 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Stream quality and playback cache:** `stream quality <kbps>` /
+  `stream format <fmt>` add `maxBitRate`/`format` to the provider stream URL;
+  `stream cache on|off` and `stream size <MiB>` control a purgeable
+  playback-tier cache. The first PCM of a remote row warms the cache in the
+  background, later plays of the same quality resolve locally as `file://`,
+  and an LRU cap (2 GiB default) evicts old blobs without touching downloads
+  or the offline catalog.
 - **Output device control:** `output list` enumerates PipeWire sinks (also as
   JSON over the IPC socket), `output default` follows the system default, and
   `output <node.name>` retargets the live stream without dropping queued PCM.

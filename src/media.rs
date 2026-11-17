@@ -527,7 +527,11 @@ fn remove_temp_files(dir: &std::path::Path) {
 
 /// The cached paths for only `ids`, in bounded batches: a play action never
 /// walks the whole media cache.
-pub async fn path_map_of(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<String, PathBuf>> {
+pub async fn path_map_of(
+    pool: &SqlitePool,
+    ids: &[String],
+    playback_quality: &str,
+) -> Result<HashMap<String, PathBuf>> {
     let mut unique: Vec<&str> = ids
         .iter()
         .map(String::as_str)
@@ -539,16 +543,93 @@ pub async fn path_map_of(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<St
         return Ok(HashMap::new());
     }
     let mut map = HashMap::with_capacity(unique.len());
+    let now = crate::consts::now_secs();
     for chunk in unique.chunks(crate::cache::IN_BATCH) {
-        let mut builder =
-            sqlx::QueryBuilder::new("SELECT song_id, kind, file FROM media WHERE song_id IN (");
+        let mut builder = sqlx::QueryBuilder::new(
+            "SELECT song_id, kind, file, quality FROM media WHERE song_id IN (",
+        );
         crate::cache::push_in_list(&mut builder, chunk);
-        let rows: Vec<Stored> = builder.build_query_as().fetch_all(pool).await?;
-        for row in rows {
-            if let Ok(dir) = tier_dir(&row.kind) {
-                map.insert(row.song_id, dir.join(&row.file));
+        let rows: Vec<(String, String, String, String)> =
+            builder.build_query_as().fetch_all(pool).await?;
+        for (song_id, kind, file, quality) in rows {
+            // Playback-cache rows only match the quality that produced them;
+            // a later quality change must not replay stale bytes. Download
+            // rows (permanent/rule/rolling) are always the user's copy.
+            if kind == KIND_PLAYBACK && quality != playback_quality {
+                continue;
+            }
+            if let Ok(dir) = tier_dir(&kind) {
+                let path = dir.join(&file);
+                if path.is_file() {
+                    if kind == KIND_PLAYBACK {
+                        _ = sqlx::query(
+                            "UPDATE media SET last_used = ?2 WHERE song_id = ?1",
+                        )
+                        .bind(&song_id)
+                        .bind(now)
+                        .execute(pool)
+                        .await;
+                    }
+                    map.insert(song_id, path);
+                }
             }
         }
     }
     Ok(map)
+}
+
+/// A playback-cache blob for `song_id` when its quality matches.
+pub async fn playback_path(
+    pool: &SqlitePool,
+    song_id: &str,
+    quality: &str,
+) -> Result<Option<PathBuf>> {
+    let Some(row) = get(pool, song_id).await? else {
+        return Ok(None);
+    };
+    let quality_matches: Option<String> =
+        sqlx::query_scalar("SELECT quality FROM media WHERE song_id = ?1 AND kind = 'playback'")
+            .bind(song_id)
+            .fetch_optional(pool)
+            .await?;
+    if row.kind != KIND_PLAYBACK || quality_matches.as_deref() != Some(quality) {
+        return Ok(None);
+    }
+    let path = tier_dir(&row.kind)?.join(&row.file);
+    Ok(path.is_file().then_some(path))
+}
+
+/// Marks a playback-cache row as recently used (the LRU clock).
+pub async fn touch_playback(pool: &SqlitePool, song_id: &str) -> Result<()> {
+    sqlx::query("UPDATE media SET last_used = ?2 WHERE song_id = ?1 AND kind = 'playback'")
+        .bind(song_id)
+        .bind(crate::consts::now_secs())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Evicts the least-recently-used playback blobs until their total size fits
+/// `max_bytes`. Download tiers are never touched.
+pub async fn enforce_playback_cap(pool: &SqlitePool, max_bytes: u64) -> Result<usize> {
+    let rows: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT song_id, file, size FROM media WHERE kind = 'playback'
+         ORDER BY last_used DESC, created_at DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    let dir = tier_dir(KIND_PLAYBACK)?;
+    let mut total = 0u64;
+    let mut removed = 0usize;
+    for (song_id, file, size) in rows {
+        let size = size.max(0) as u64;
+        if total.saturating_add(size) <= max_bytes {
+            total += size;
+            continue;
+        }
+        _ = std::fs::remove_file(dir.join(&file));
+        crate::cache::delete_by(pool, "DELETE FROM media WHERE song_id = ?1", &song_id).await?;
+        removed += 1;
+    }
+    Ok(removed)
 }

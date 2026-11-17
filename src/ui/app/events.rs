@@ -10,6 +10,9 @@ impl AppRoot {
             Event::OutputDevice { .. } => {
                 // A UI request; the daemon consumes it and never echoes it.
             }
+            Event::StreamChange(_) => {
+                // A UI request; the daemon consumes it.
+            }
             Event::OutputDevices { devices } => {
                 let message = if devices.is_empty() {
                     "No PipeWire output sinks.".to_string()

@@ -529,6 +529,24 @@ impl SubsonicClient {
         self.endpoint_url("stream", &[("id", id.to_string())])
     }
 
+    /// `stream` with an optional bitrate cap and format for the playback
+    /// quality setting. `0`/`None` asks for the original.
+    pub fn stream_url_with_quality(
+        &self,
+        id: &str,
+        max_bitrate: u32,
+        format: Option<&str>,
+    ) -> Result<reqwest::Url> {
+        let mut params: Vec<(&str, String)> = vec![("id", id.to_string())];
+        if max_bitrate > 0 {
+            params.push(("maxBitRate", max_bitrate.to_string()));
+        }
+        if let Some(format) = format.filter(|format| !format.is_empty() && *format != "original") {
+            params.push(("format", format.to_string()));
+        }
+        self.endpoint_url("stream", &params)
+    }
+
     /// `getLyrics` — lyrics for a song (empty if not found).
     pub async fn get_lyrics(&self, artist: Option<&str>, title: Option<&str>) -> Result<Lyrics> {
         let params = query(&[

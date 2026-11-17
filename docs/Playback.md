@@ -265,6 +265,12 @@ underrun/dropout count or first-PCM/seek latency exposed. `Status` carries
 `level`/`peak` internally for metering, but they do not reach the snapshot, UI
 or IPC.
 
+**Stream quality/cache.** `/rest/stream` was always the original; the
+`stream` command now adds `maxBitRate`/`format`, and the first PCM of a remote
+row warms a purgeable playback-tier cache for the next play. Streaming is
+still not adaptive (no HLS), and streamed bytes are fetched in full in the
+background rather than teed from the live FFmpeg read.
+
 **Output/format.** The pipeline presents packed F32 stereo end-to-end
 (decode → ring → PipeWire), which removes the S16-only quantization/headroom
 limit. S24, a configurable resampler and dither remain absent; the sink has no
@@ -322,6 +328,15 @@ reliability and CI items remain roadmap work.
   prefetch beyond the next track.
 
 ### Implemented after the audit (2026-11)
+
+- **Stream quality and playback cache:** `stream quality|format` adds
+  `maxBitRate`/`format` to `/rest/stream`; `stream cache on|off` and
+  `stream size <MiB>` control a purgeable `playback`-tier cache in
+  `~/.cache/musika/media`. First PCM schedules a background fetch of the
+  current remote row; a later play of the same quality resolves it as
+  `file://`. The cache is quality-keyed, LRU-capped (default 2 GiB), never
+  enters the download ledger or the offline catalog, and a config-tier
+  download is never overwritten by a playback copy.
 
 - **Output selection:** `output list|default|<node.name>` enumerates the
   PipeWire sinks, retargets the live stream without dropping queued PCM and

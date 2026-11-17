@@ -27,7 +27,15 @@ fn typed_tracks_carry_the_player_track_shape() {
     let covers = HashMap::from([("cov1".to_string(), "file:///covers/cov1.jpg".to_string())]);
     let media = HashMap::from([("s1".to_string(), PathBuf::from("/media/s1.flac"))]);
 
-    let tracks = build_tracks(&client, std::slice::from_ref(&song), &covers, &media).unwrap();
+    let tracks = build_tracks(
+        &client,
+        std::slice::from_ref(&song),
+        &covers,
+        &media,
+        0,
+        None,
+    )
+    .unwrap();
     assert_eq!(tracks.len(), 1);
     let track = &tracks[0];
     assert_eq!(track.id, "s1");
@@ -54,6 +62,8 @@ fn typed_tracks_carry_the_player_track_shape() {
         std::slice::from_ref(&plain),
         &HashMap::new(),
         &HashMap::new(),
+        0,
+        None,
     )
     .unwrap();
     assert!(tracks[0].url.contains("stream"));
@@ -305,4 +315,24 @@ fn shuffle_handles_empty_and_singleton() {
     let mut one = vec!["only".to_string()];
     shuffle_units(&mut one, 7);
     assert_eq!(one, ["only"]);
+}
+
+#[test]
+fn stream_quality_parameters_reach_the_provider_url() {
+    let client =
+        crate::http_client::SubsonicClient::new("https://music.example", "alice", "secret");
+    let url = client
+        .stream_url_with_quality("s1", 128, Some("opus"))
+        .unwrap()
+        .to_string();
+    assert!(url.contains("id=s1"), "{url}");
+    assert!(url.contains("maxBitRate=128"), "{url}");
+    assert!(url.contains("format=opus"), "{url}");
+
+    let original = client
+        .stream_url_with_quality("s1", 0, None)
+        .unwrap()
+        .to_string();
+    assert!(!original.contains("maxBitRate"), "{original}");
+    assert!(!original.contains("format="), "{original}");
 }

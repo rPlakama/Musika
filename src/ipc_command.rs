@@ -7,6 +7,7 @@
 use std::fmt;
 
 use crate::bridge::SyncMode;
+use crate::playback_settings::StreamChange;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum WipeScope {
@@ -178,6 +179,8 @@ pub enum IpcCommand {
     OutputSet(String),
     /// Follow PipeWire's default sink.
     OutputDefault,
+    /// Change the stream bitrate/format/cache policy.
+    Stream(crate::playback_settings::StreamChange),
 }
 
 /// Where a command must run in the core/UI split. The classification is
@@ -244,7 +247,8 @@ impl IpcCommand {
             | Self::PlaySongInAlbum(_)
             | Self::DownloadSong(_)
             | Self::OutputSet(_)
-            | Self::OutputDefault => T::CoreBridge,
+            | Self::OutputDefault
+            | Self::Stream(_) => T::CoreBridge,
 
             // Read-only telemetry.
             Self::Status | Self::QueueQuery | Self::OutputList => T::Query,
@@ -545,6 +549,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         usage: "output <list|default|device-name>",
         description: "List PipeWire outputs, follow the default, or target a named sink",
         form: CommandForm::Advanced(ArgHints::Values(&["list", "default"])),
+    },
+    CommandSpec {
+        name: "stream",
+        usage: "stream <quality|format|cache|size> <value>",
+        description: "Set the stream bitrate (0 original), format, cache on/off or cache size in MiB",
+        form: CommandForm::Advanced(ArgHints::Values(&["quality", "format", "cache", "size"])),
     },
     CommandSpec {
         name: "logout",
@@ -1187,6 +1197,29 @@ fn advanced_parse(name: &str, rest: &str, usage: &str) -> Result<IpcCommand, Com
             )),
         },
 
+        "stream" => match split_quoted_args(rest)?.as_slice() {
+            [what, value] if what == "quality" => {
+                Ok(IpcCommand::Stream(StreamChange::Quality(
+                    parse_number(value, "kbps")?.max(0.0) as u32,
+                )))
+            }
+            [what, value] if what == "format" => {
+                let format = (!value.eq_ignore_ascii_case("original")).then(|| value.clone());
+                Ok(IpcCommand::Stream(StreamChange::Format(format)))
+            }
+            [what, value] if what == "cache" => match value.as_str() {
+                "on" | "true" => Ok(IpcCommand::Stream(StreamChange::Cache(true))),
+                "off" | "false" => Ok(IpcCommand::Stream(StreamChange::Cache(false))),
+                _ => Err(CommandError("usage: stream cache <on|off>".to_string())),
+            },
+            [what, value] if what == "size" => Ok(IpcCommand::Stream(StreamChange::CacheSize(
+                parse_number(value, "MiB")?.max(64.0) as u64,
+            ))),
+            _ => Err(CommandError(
+                "usage: stream <quality|format|cache|size> <value>".to_string(),
+            )),
+        },
+
         "download" => parse_download(rest),
 
         "search" => Ok(IpcCommand::Search {
@@ -1687,6 +1720,20 @@ fn advanced_canonical(command: &IpcCommand) -> String {
 
         OutputSet(name) => format!("output {}", quote_arg(name)),
 
+        Stream(StreamChange::Quality(bitrate)) => format!("stream quality {bitrate}"),
+
+        Stream(StreamChange::Format(Some(format))) => {
+            format!("stream format {}", quote_arg(format))
+        }
+
+        Stream(StreamChange::Format(None)) => "stream format original".to_string(),
+
+        Stream(StreamChange::Cache(enabled)) => {
+            format!("stream cache {}", if *enabled { "on" } else { "off" })
+        }
+
+        Stream(StreamChange::CacheSize(mib)) => format!("stream size {mib}"),
+
         Search { query } => format!("search {query}").trim_end().to_string(),
 
         InsertMode { query } => format!("insert_mode {query}").trim_end().to_string(),
@@ -2119,6 +2166,39 @@ fn current_download_path(current: &CurrentTrack) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_stream_quality_commands() {
+        assert_eq!(
+            parse("stream quality 128"),
+            Ok(IpcCommand::Stream(StreamChange::Quality(128)))
+        );
+        assert_eq!(
+            parse("stream format opus"),
+            Ok(IpcCommand::Stream(StreamChange::Format(Some(
+                "opus".to_string()
+            ))))
+        );
+        assert_eq!(
+            parse("stream format original"),
+            Ok(IpcCommand::Stream(StreamChange::Format(None)))
+        );
+        assert_eq!(
+            parse("stream cache off"),
+            Ok(IpcCommand::Stream(StreamChange::Cache(false)))
+        );
+        assert_eq!(
+            parse("stream cache on"),
+            Ok(IpcCommand::Stream(StreamChange::Cache(true)))
+        );
+        assert_eq!(
+            parse("stream size 512"),
+            Ok(IpcCommand::Stream(StreamChange::CacheSize(512)))
+        );
+        assert!(parse("stream").is_err());
+        assert!(parse("stream nonsense 1").is_err());
+        assert!(parse("stream cache maybe").is_err());
+    }
 
     #[test]
     fn parses_output_device_commands() {
@@ -2853,6 +2933,14 @@ mod tests {
         assert_eq!(
             canonical_string(&IpcCommand::OutputSet("sink one".to_string())),
             "output \"sink one\""
+        );
+        assert_eq!(
+            canonical_string(&IpcCommand::Stream(StreamChange::Quality(128))),
+            "stream quality 128"
+        );
+        assert_eq!(
+            canonical_string(&IpcCommand::Stream(StreamChange::Cache(true))),
+            "stream cache on"
         );
         assert_eq!(
             canonical_string(&IpcCommand::Wipe(WipeScope::Lyrics)),

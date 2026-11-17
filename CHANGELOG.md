@@ -3,252 +3,76 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
-## Unreleased
+## 0.7.4 - _Deeper mechanism, various additions_
 
-- **Migration checksums:** restored the two shipped status migrations after an
-  edit changed SQLx's checksum and blocked startup on existing databases; a
-  regression test pins their SHA-384 so this cannot recur.
-
-- **Inheritance cleanup (R1):** one status-schema owner (the production
-  library migration tree; tests use the same tree instead of a parallel
-  `migrations_status`), command metadata now advertises `stream fixed` and the
-  output mode/backend words, and UI settings requests go straight to the
-  playback service instead of travelling as core→UI `Event`s. Protocol v4.
-- **High-resolution collage art:** playlist/radio header panes resolve each
-  album original (the same source as the page hero) instead of either the
-  320 px row thumbnail or the provider's pre-rendered playlist mosaic.
-- **Stable playlist artwork:** playlist pages build a fixed-size ordered
-  collage from unique album entries, including panes whose local file is still
-  cold. The provider playlist `cover_art` is only the fallback when no entry
-  cover exists; Navidrome's generated playlist cover is a small pre-rendered
-  mosaic and was visibly soft at hero size. Playlist list rows still use the
-  server/first-entry cover for their thumbnail.
-- Playlist-owned cover ids are included in the post-sync cover pass; page
-  payloads reuse unchanged `CoverSource` Arcs, and `CoverImage` keeps the
-  previous pixels while a replacement resource decodes (remote -> local) to
-  remove thumbnail flashes.
-- **Artist image cache:** artist portraits from the provider's signed
-  `/share/img/...` URLs are now downloaded into the covers store as a detached
-  post-sync background pass (and on demand for visible artists). Artist rows
-  and the artist page use the cached file with the provider URL as fallback;
-  `artist-image:` entries are excluded from the cover purge.
-- **Runtime test fixes:** apply the playback-settings/pending-scrobble
-  migrations to the production library file (status is an alias of library,
-  not only the test status pool); bump the core/UI protocol to v3 so a stale
-  UI fails with an explicit version mismatch instead of `BadPayload`; bound
-  consecutive sink rebuilds so a missing PipeWire/ALSA target stops instead of
-  reconnecting forever; reset underruns when the transport parks.
-- **EQ command:** `eq next` exposes the `Ctrl-E` profile cycle to the IPC
-  socket (used by the runtime smoke test).
-- **Roadmap conclusion:** document the completed playback roadmap and the two
-  explicit gates (multichannel output; native DSD/DoP), plus the fixed-rate
-  alternative to the non-crossfade boundary gap.
-- **Multichannel source coverage:** add a six-channel WAV fixture proving
-  multichannel inputs are accepted and safely downmixed to the stereo pipeline.
-  Multichannel *output* (a channel count through ring/EQ/crossfade/sink) remains
-  a documented gate.
-- **Fixed-rate gapless option:** `stream fixed <Hz>` / `stream fixed off`
-  forces every decoder to one pipeline rate, removing the non-crossfade
-  rate-change boundary gap at the cost of native-rate playback. Defaults off.
-- **Settings overlay:** `Ctrl-,` opens a keyboard-driven panel with shuffle,
-  repeat, crossfade, EQ, and sleep-timer controls. `j/k` moves, Enter applies,
-  Esc closes; it reuses the same core/UI commands as the `:` surface.
-- **DSD gate:** the decoder now rejects DSD codec IDs explicitly as
-  `Unsupported` (not retried) instead of attempting playback. Crossfade-enabled
-  transitions already preload at the current pipeline rate, so they cover a
-  rate change without the sink rebuild; plain gapless still has the small
-  boundary gap.
-- **Direct ALSA backend:** an optional `alsa-backend` (default on) adds a
-  blocking F32-stereo ALSA `PcmSink` alongside PipeWire. `output backend alsa`
-  or `output alsa hw:0,0` selects it; it requires the track's exact rate and
-  falls back to PipeWire if the device cannot be configured. The backend is
-  chosen at engine construction (restart/next start); the decoder/worker now
-  target a shared `PcmSink` trait. `alsa-lib` is in the flake and
-  `node.exclusive`/bit-perfect stay available without it.
-- **Phase 8 diagnostics:** document the exclusive/bit-perfect best-effort
-  boundary, the `PcmSink` design needed for a true ALSA `hw` backend, the
-  stereo-only ring/sink coupling, and DSD as an unvalidated feasibility gate.
-- **Exclusive/bit-perfect request:** `output exclusive on|off` sets PipeWire's
-  `node.exclusive` and rebuilds the stream; `output bitperfect on|off` bypasses
-  EQ, ReplayGain and crossfade. Both persist. This is a best-effort PipeWire
-  request, not a guaranteed direct-ALSA bit-perfect path.
-- **Telemetry/docs:** document the `status` playback counters (`retries`,
-  `reconnects`, `sink_rebuilds`, `buffered_frames`, `underruns`) and the
-  remaining rate-change/exclusive/multichannel/DSD limits in `Playback.md`.
-- **MPRIS:** `CanRaise`/`Raise` and `CanQuit`/`Quit` now drive `show` and
-  `quit`; the existing playback, seek, volume, loop, shuffle and metadata
-  properties remain.
-- **Idle inhibition:** playing audio holds a systemd-logind `Inhibit("idle")`
-  lock in a background task and releases it on pause/stop, so the desktop's
-  idle timeout does not suspend under playback.
-- **Live default output:** follow-default now subscribes to PipeWire's
-  `default.audio.sink` metadata and rebuilds the stream on a default-sink
-  change, so a headset/HDMI switch moves playback without reopening the app.
-- **Configurable crossfade:** `crossfade length 1..12`, `crossfade curve
-  equal|linear` and `crossfade album on|off` persist alongside the existing
-  toggle. The sink reads the length/curve per transition, and the core gates
-  album-only crossfades on the current/next album and republishes the flag on
-  every load and gapless boundary.
-- **Equalizer:** `Ctrl-E` cycles Equalizer APO–style profiles from
-  `~/.config/musika/eqs/*.{txt,eq}` through OFF. The parser supports
-  `Preamp:`, parametric `Filter:` lines (PK/PEQ, LS, HS, LP, HP, BP, NO) and
-  `GraphicEQ:` bands; a per-channel biquad chain runs after ReplayGain,
-  recompiles on rate/profile changes, and the selection persists. The active
-  EQ is marked in the bottom bar and announced by toast.
-- **Scrobbling:** playback reports a now-playing notification on first PCM and
-  submits one completed play after `min(4 minutes, half the track)`, with the
-  provider timestamp. Offline/failed submissions queue in `pending_scrobble`
-  and flush oldest-first on the next successful health probe. `scrobble
-  on|off` persists with the playback settings; the server's play count updates
-  on the next library sync.
-- **Queue modes and sleep:** `shuffle queue` is now a persistent mode instead
-  of reordering the queue: the visible rows stay put, next/gapless follow a
-  shuffled plan, MPRIS reports the mode, and toggling it off keeps the current
-  row. Shuffle Previous follows actual play history; linear Previous keeps
-  index-1. `sleep <minutes|off>` fades the volume over five seconds, pauses,
-  and restores the user volume.
-- **Stream quality and playback cache:** `stream quality <kbps>` /
-  `stream format <fmt>` add `maxBitRate`/`format` to the provider stream URL;
-  `stream cache on|off` and `stream size <MiB>` control a purgeable
-  playback-tier cache. The first PCM of a remote row warms the cache in the
-  background, later plays of the same quality resolve locally as `file://`,
-  and an LRU cap (2 GiB default) evicts old blobs without touching downloads
-  or the offline catalog.
-- **Output device control:** `output list` enumerates PipeWire sinks (also as
-  JSON over the IPC socket), `output default` follows the system default, and
-  `output <node.name>` retargets the live stream without dropping queued PCM.
-  The choice is persisted in `playback_settings` and re-applied on stream
-  rebuilds and engine recovery.
-- **Playback resilience:** retryable network/5xx stream failures now reopen
-  the same row at the same position with 1/2/4 s backoff (three retries);
-  only a genuinely unreachable server stops playback and flips the app
-  offline, and the next successful health probe resumes that row once. 404,
-  auth and decoder failures stay online and keep their precise error instead
-  of masquerading as "server unavailable". The transport shows the loading
-  spinner while reconnecting.
-
-- **Playback observability and persistence:** failures carry a structured
-  kind/stage through the engine, `status` now reports `retrying`,
-  `retry_attempt` and metrics (retries, reconnects, sink rebuilds, buffered
-  frames, underruns), and repeat/normalization/crossfade persist in the new
-  `playback_settings` table instead of resetting on every launch. The
-  settings document is ready for the device/EQ/stream preferences in the
-  following phases.
-
-- **Downloaded ordering in every scope:** `Shift-H`/`Shift-L` now cycles a
-  `Downloaded` entry after the alphabetical orders in Albums, Songs and
-  Artists, and after `Name` in Playlists. Unlike the other labels it filters
-  as well as sorts: the scope lists only rows backed by the download ledger
-  (playlists need at least one downloaded song). The filter is applied before
-  the virtual list slices its window, so paging never leaves holes, and the
-  same catalog backs offline mode.
-
-- **Automatic offline fallback:** the core probes the active server with a
-  `ping` every five seconds. A failed probe flips the whole app to the
-  downloaded catalog (lists, pages, search and queues) and the top bar reads
-  **Offline**; failures are not toasted, and the first successful probe
-  restores the full library and refreshes the header. `play_song`, restored
-  sessions, artist/album pages and playlist pages now honour the same offline
-  filter instead of mixing server-only rows into local playback.
-
-- **Startup sync:** the first successful health probe at app opening now
-  starts one `SyncMode::All` pass. A successful online login triggers it
-  immediately (the login already answered a ping); an offline login waits for
-  the probe that reaches the server. Plain reconnects after that do not re-run
-  the deep sync.
-
-- **Graceful server-unavailable playback:** a remote row that never opened
-  (not downloaded, server unreachable) now stops the transport with the
-  canonical **“Unable to play track, server unavailable”** toast and flips the
-  app offline, instead of skipping through the queue and toasting each row.
-  Remote failures after the stream opened keep the ordinary codec-error path;
-  local file failures are unchanged.
-
-- **Lyrics overlay focus chrome:** the lyrics overlay blocks the fullscreen
-  Tab walk, but the cover/title focus borders stayed painted underneath it.
-  They are now transparent for as long as the overlay owns the keyboard (the
-  1 px border box stays, so nothing shifts); closing the overlay restores the
-  regular focused-pane highlight.
-
-- **Local radio:** `radio song|album` now expands entirely from `library.db`
-  instead of calling the server's `getSimilarSongs`. Similar artists come from
-  the `getArtistInfo2` graph cached with the artist biography when available,
-  otherwise from local metadata (IDF-weighted genre tokens, era, playlist
-  co-occurrence, catalog support); top songs use Navidrome's fallback weights,
-  with genre/era/random top-ups. Radio works offline and lists only downloaded
-  songs in that mode; page and queue share one cached order, and the cache is
-  dropped after a library sync. The `getSimilarSongs` client wrapper remains
-  but has no radio call site.
-
-- **Fast cover loading:** the UI decodes covers for the pixels they are painted
-  at instead of full-decoding the provider original. JPEGs use DCT-scaled
-  decoding (1/2-1/8) plus SIMD resizing before the BGRA/RenderImage handoff;
-  small JPEGs decode straight to BGRA with zune-jpeg; PNG/WebP still decode
-  through `image` and resize with `fast_image_resize`. Decode edges are
-  bucketed so the page hero/fullscreen/window resize share one texture, the
-  first large decode writes a small display derivative (later opens ~1.5 ms),
-  and hero surfaces paint the 320 px thumbnail while the sharp source decodes
-  (no blank hero). In-flight decodes are owned by the bounded cache entry and
-  cancelled on page navigation or eviction; evicted textures still go through
-  `App::drop_image`.
-
-- **Warm covers across page changes:** the last three large decoded covers
-  (page hero, fullscreen art, playing cover) stay resident while everything
-  else is still released two frames after it stops being painted, so
-  album -> artist -> album (and reopening fullscreen) reuses the image instead
-  of decoding it again. `MUSIKA_IMAGE_CACHE_WARM` overrides the slot count
-  (0 disables). Measured: reopening the same album immediately is 21-25 ms with
-  warm slots vs 36-45 ms with them disabled.
-- **Measured:** corpus-weighted cold hero decode 8.8-9.0 ms (was 12.3-18.9 ms
-  full decode), second open 1.5 ms, 4000-7200 px cold 145-165 ms (was
-  178-265 ms); end-to-end album-page first pixels p50 47 / p95 51 ms on a
-  cold cache and p50 40 / p95 46 ms with display derivatives (was 66 / 95 ms).
-  Rows and collage panes keep using the 320 px thumbnail, so they do not pay
-  for a multi-megapixel decode.
-
-- **Cover-decode memory high-water:** entering a page decodes its full
-  hero/row art, but the bounded image cache was not the cost: after 20 album
-  entries the cache held only 4.9 MiB while UI RSS grew 148 -> 322 MiB. The
-  transient source-decode buffers were being retained by glibc's per-thread
-  arenas (made worse by `jpeg-decoder`'s default rayon pool, 16 extra threads).
-  The UI now applies the daemon's allocator policy, trims after a page change's
-  cover release, and `jpeg-decoder` runs without the rayon pool. The same
-  harness now grows 141 -> 156 MiB (+15 MB) over 20 entries with the cover
-  cache full, 73 threads instead of 89, and unchanged 60 fps / p95 18 ms frame
-  pacing. `MUSIKA_UI_NO_COVERS=1` (or `MUSIKA_MEM_NO_COVERS=1` on the harness)
-  paints placeholders only and makes the isolation reproducible.
-
-- **Top-bar horizontal scroll:** the page-context identity row now accepts a
-  direct horizontal wheel/trackpad gesture (the x-only viewport also maps a
-  plain vertical wheel to horizontal) and pauses the idle marquee for two
-  seconds, so overflowing album/playlist metadata can be read without waiting
-  for the auto-scroll.
-- **Lyrics keybind insight:** the `Lyrics · <source> · j/k scroll · ? closes`
-  line is now fixed chrome outside the gliding lyric column; it no longer
-  travels with the lyrics when they scroll or follow the playhead.
-
-- **Lean core daemon:** the core binary no longer links the GPUI front end
-  (`musika --ui` execs the sibling `musika-ui`), and the packaged FFmpeg closure
-  is the headless variant (audio decoders kept, GUI/capture dependencies
-  dropped). The PipeWire node starts suspended and is
-  activated by load/resume instead of running at graph rate while idle; engine
-  events go directly to the playback service (the forwarding thread is gone);
-  the playback, engine and decode loops block on their channels when there is
-  nothing time-based to do; the MPRIS position tick only runs while playing.
-  The FTS search pool opens lazily and SQLite pools reap burst connections
-  after 60 s idle; large buffers are returned to the kernel after sync/cover/
-  search bursts, and database warm-up uses kernel readahead instead of a 1 MiB
-  userspace copy. Measured on the development host (sandboxed config, private
-  session bus, packaged release build, same restored real-snapshot harness
-  before/after): core binary 53.5 -> 22.9 MB, `ldd` libraries 83 -> 74, idle
-  threads 20 -> 16, idle wakeups ~65/s -> ~4.3/s, idle CPU ~0, RSS with the
-  restored real queue 95.3 -> 89.2 MB (fresh config with no restored session:
-  44.1 -> 36.9 MB), mappings 598 -> 545, SQLite workers settle from 4 to 3.
-  The shippable package now uses the repo's fat-LTO/one-CGU profile instead of
-  thin/4. The text control socket now runs on Tokio tasks instead of two
-  persistent reader/dispatcher threads, the async runtime caps its worker and
-  blocking pools, and spawned child processes get close-on-exec descriptors.
-  No IPC, database, audio or MPRIS behavior changes.
+- **A real playback core:** stream failures now carry a structured kind/stage
+  and retry the same row at the same position with 1/2/4 s backoff; only a
+  genuinely unreachable server stops the transport and flips the app offline.
+  `status` exposes retrying/retry state plus retry, reconnect, sink-rebuild,
+  buffered-frame and underrun counters, and the transport shows a loading
+  spinner while reconnecting. Repeat, normalization, crossfade, shuffle, EQ,
+  output, stream and scrobble preferences persist in `playback_settings`
+  instead of resetting on every launch.
+- **Output and stream control:** `output list` enumerates the PipeWire sinks,
+  `output default` follows the system default (live, via default-sink
+  metadata), and `output <node.name>` retargets without dropping queued PCM.
+  `output exclusive on|off` requests PipeWire exclusive access and
+  `output bitperfect on|off` bypasses EQ, ReplayGain and crossfade. An optional
+  direct F32-stereo ALSA `PcmSink` is selectable with `output backend alsa` /
+  `output alsa hw:0,0`, and falls back to PipeWire when the device cannot be
+  configured. Stream controls add `stream quality`, `format`, `cache on|off`,
+  `size <MiB>` and `fixed <Hz|off>`; the first remote PCM warms a purgeable
+  playback cache so later plays resolve locally.
+- **Listening mechanism:** shuffle is now a persistent plan rather than a
+  queue reorder, Previous follows real play history, and `sleep <minutes|off>`
+  fades out, pauses and restores the user volume. Scrobbling submits a
+  now-playing notification and one completed play, queues offline failures in
+  `pending_scrobble`, and flushes them oldest-first after the health probe.
+  `Ctrl-E` cycles Equalizer APO profiles (`PK/PEQ`, shelf, LP/HP/BP/NO,
+  `GraphicEQ`, preamp) through OFF; crossfade length (1–12 s), equal-power or
+  linear curve and the album-only gate are configurable and persisted.
+  Native DSD is rejected explicitly instead of being retried as a decoder
+  error.
+- **Offline-first library:** `Shift-H`/`Shift-L` cycle a `Downloaded` filter
+  after the normal orders in Albums, Songs and Artists (and after `Name` in
+  Playlists); the same filter backs offline mode. A 5 s server probe flips the
+  whole app to downloaded rows, pages, search and queues without toast spam,
+  and the first success restores the library and header. Startup performs one
+  `SyncMode::All` after the first reachable probe (or immediately after an
+  online login), reconnects do not repeat it, and a remote row that never
+  opened stops with the canonical “Unable to play track, server unavailable”
+  message instead of skipping through the queue. Local radio now expands
+  similar artists and songs entirely from `library.db`, so it works offline.
+- **Cover pipeline:** display-sized decoding uses JPEG DCT scaling and SIMD
+  resizing, writes small derivatives for later opens, and keeps hero/window/
+  fullscreen sizes on shared decode buckets; the bounded cache retains the
+  last three large covers while everything else is released after it stops
+  painting. The transient decode high-water is bounded by allocator trimming
+  and a non-rayon JPEG path. Artist portraits are downloaded into the covers
+  store as a detached post-sync background pass, and playlist/radio headers
+  build a deterministic full-resolution album collage (including cold panes);
+  the provider's pre-rendered ~600 px playlist mosaic is only a fallback.
+- **Settings surface and platform:** `Ctrl-,` opens a keyboard-driven settings
+  panel generated from the core's persisted snapshot: crossfade policy,
+  normalization, EQ, scrobble, bit-perfect/exclusive, cache/quality/format/
+  fixed-rate and sleep controls, with `j/k`, Enter and Esc. MPRIS gains
+  Raise/Quit, and playback holds a logind idle inhibitor until pause/stop.
+- **Leaner core:** the daemon no longer links GPUI (`musika --ui` execs the
+  sibling `musika-ui`), the packaged FFmpeg is headless, the PipeWire node
+  starts suspended, engine events reach the service directly, playback/decode
+  loops block when idle, the FTS pool opens lazily, and SQLite pools reap
+  burst connections. The core/UI protocol is v5: settings requests go direct
+  to the playback service instead of through core→UI `Event`s. Status schema
+  has one owner (the library migration tree), and shipped migrations carry a
+  SHA-384 immutability test after a comment edit changed SQLx's checksum.
+- **Known limits:** multichannel output and native DSD/DoP remain gated;
+  exclusive/bit-perfect is a best-effort PipeWire request, not a guaranteed
+  direct-ALSA path. Non-crossfade rate changes can still have the small
+  boundary gap (use `stream fixed` to trade native rate for gapless); the
+  crossfade path preloads at the current pipeline rate.
+- **Verification:** 622 tests pass (19 ignored), `cargo clippy --all-targets`
+  is clean, the real-database migration path starts, and the release Nix build
+  succeeds.
 
 ## 0.7.3 - _F32 pipeline and float headroom_
 

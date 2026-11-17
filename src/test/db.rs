@@ -55,3 +55,36 @@ async fn wipe_pool_drops_every_table_and_migrations_rebuild_them() {
         .unwrap();
     assert_eq!(artists, 0);
 }
+
+/// Applied migrations are immutable: SQLx stores a SHA-384 of the file, and
+/// editing one — even a comment — makes every existing database fail with
+/// "previously applied but has been modified". This test encodes the hashes of
+/// migrations that have already shipped so a future edit is caught here, not
+/// on a user's real database.
+#[test]
+fn shipped_migrations_are_immutable() {
+    use openssl::hash::MessageDigest;
+
+    const SHIPPED: &[(&str, &str)] = &[
+        (
+            "20261117000001_playback_settings.sql",
+            "4fcfbb24984ebab9a7f133e2e1ec041acd34863430b39de753c0a39feb5076ddffd4b8fa66e9a9e4102adc49c2762ecc",
+        ),
+        (
+            "20261117000002_pending_scrobble.sql",
+            "c666dcd5b3ab97f481a7ce50bfdf57523f6af5eda07038296349d0ff755de021e4e5e1f781dd0467cfdbe84d80801561",
+        ),
+    ];
+    for (file, expected) in SHIPPED {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("migrations_library")
+            .join(file);
+        let bytes = std::fs::read(&path).unwrap();
+        let digest = openssl::hash::hash(MessageDigest::sha384(), &bytes).unwrap();
+        assert_eq!(
+            crate::hex::encode(digest),
+            *expected,
+            "shipped migration {file} was edited; add a new migration instead"
+        );
+    }
+}

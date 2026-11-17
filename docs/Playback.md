@@ -496,3 +496,20 @@ meant for `status` sampling and regression comparisons, not persistence.
 - **Multichannel/DSD:** the pipeline is packed F32 stereo end-to-end. DSD is a
   feasibility item, not a supported format; multichannel output is not wired
   through the ring or the sink.
+
+### Phase 8 feasibility notes
+
+- **Exclusive/bit-perfect:** the shipped mode is a PipeWire
+  `node.exclusive` request plus a DSP bypass. A truly exclusive ALSA `hw`
+  sink remains a feasibility item: the current flake does not expose
+  `alsa-lib` headers to the build shell, and the transport/worker are typed
+  around the PipeWire `Sink`. The intended design is a `PcmSink` trait
+  implemented by both backends, selected at engine construction (a backend
+  change requires an engine rebuild).
+- **Multichannel:** the decoder resamples to packed F32 stereo, the ring has
+  `CHANNELS = 2`, and the sink negotiates a stereo stream. Multichannel would
+  require a channel count through decode, ring, EQ, crossfade, sink format
+  and the PipeWire position/channel map; it is not wired.
+- **DSD:** FFmpeg can demux/decode DSF/DFF and convert DSD to PCM, but Musika
+  has no native DoP path and has not validated DSD content end-to-end. It is a
+  feasibility gate, not a supported format.

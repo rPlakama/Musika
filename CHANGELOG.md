@@ -5,6 +5,9 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Phase 8 diagnostics:** document the exclusive/bit-perfect best-effort
+  boundary, the `PcmSink` design needed for a true ALSA `hw` backend, the
+  stereo-only ring/sink coupling, and DSD as an unvalidated feasibility gate.
 - **Exclusive/bit-perfect request:** `output exclusive on|off` sets PipeWire's
   `node.exclusive` and rebuilds the stream; `output bitperfect on|off` bypasses
   EQ, ReplayGain and crossfade. Both persist. This is a best-effort PipeWire

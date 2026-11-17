@@ -527,58 +527,6 @@ pub(crate) fn emit_append(
     }
 }
 
-pub(crate) fn collage_urls(value: &serde_json::Value) -> Vec<String> {
-    value["collage"]
-        .as_array()
-        .map(|collage| {
-            collage
-                .iter()
-                .filter_map(|cover| cover.as_str())
-                .map(str::trim)
-                .filter(|cover| !cover.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-pub(crate) fn collage_header(value: &serde_json::Value, title_key: &str) -> PageHeader {
-    let collage = collage_urls(value);
-    PageHeader {
-        title: value[title_key].as_str().unwrap_or_default().to_string(),
-        subtitle: value["subtitle"].as_str().unwrap_or_default().to_string(),
-        meta: value["meta"].as_str().unwrap_or_default().to_string(),
-        cover_url: collage.first().cloned().unwrap_or_default(),
-        cover_remote: value["collage_remote"]
-            .as_array()
-            .and_then(|remotes| remotes.first())
-            .and_then(|remote| remote.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        collage_art: value["collage_art"]
-            .as_array()
-            .map(|ids| {
-                ids.iter()
-                    .map(|id| id.as_str().unwrap_or_default().to_string())
-                    .collect()
-            })
-            .unwrap_or_default(),
-        collage,
-        collage_remote: value["collage_remote"]
-            .as_array()
-            .map(|remotes| {
-                remotes
-                    .iter()
-                    .map(|remote| remote.as_str().unwrap_or_default().to_string())
-                    .collect()
-            })
-            .unwrap_or_default(),
-        cover_art: String::new(),
-        rating: 0,
-        starred: false,
-    }
-}
-
 pub(crate) fn thumbify(url: String) -> String {
     if url.is_empty()
         || url.contains(".thumb.")

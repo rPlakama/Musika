@@ -1274,6 +1274,10 @@ pub(crate) fn artist_image_key(artist_id: &str) -> String {
     format!("{ARTIST_IMAGE_PREFIX}{artist_id}")
 }
 
+fn artist_id_from_key(key: &str) -> Option<&str> {
+    key.strip_prefix(ARTIST_IMAGE_PREFIX)
+}
+
 /// Maps artist ids to locally cached image URLs, fetching any missing image
 /// in the background. The returned map contains only cached entries; callers
 /// use the artist's `image_url` as the remote fallback.
@@ -1295,7 +1299,7 @@ pub async fn artist_image_urls(
     let mut missing = Vec::new();
     for (key, url) in entries {
         if let Some(local) = cached.get(&key) {
-            if let Some(artist_id) = key.strip_prefix("artist-image:") {
+            if let Some(artist_id) = artist_id_from_key(&key) {
                 map.insert(artist_id.to_string(), local.clone());
             }
         } else if claim_fetch(&key) {

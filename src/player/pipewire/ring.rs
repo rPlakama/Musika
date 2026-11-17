@@ -177,6 +177,12 @@ impl Ring {
         self.underruns.load(Ordering::Relaxed)
     }
 
+    /// Clears the dropout counter when the transport parks; without this a
+    /// stopped/paused sink keeps accumulating requested frames.
+    pub(crate) fn reset_underruns(&self) {
+        self.underruns.store(0, Ordering::Relaxed);
+    }
+
     pub(crate) fn set_failed(&self, failed: bool) {
         self.failed.store(failed, Ordering::Relaxed);
         self.wake();

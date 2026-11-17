@@ -759,6 +759,9 @@ fn dispatch_core_bridge(services: &Services, command: &IpcCommand) {
                 .playback
                 .send(PlaybackInput::SetCrossfadeConfig(*change));
         }
+        IpcCommand::EqNext => {
+            let _ = services.playback.send(PlaybackInput::CycleEq);
+        }
         IpcCommand::Scrobble(enabled) => {
             let _ = services
                 .playback

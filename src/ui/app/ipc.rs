@@ -90,6 +90,9 @@ impl AppRoot {
             IpcCommand::CrossfadeConfig(change) => {
                 self.bridge.set_crossfade_change(change);
             }
+            IpcCommand::EqNext => {
+                // Core bridge command, handled by the daemon.
+            }
             IpcCommand::Scrobble(enabled) => {
                 self.bridge.set_scrobble(enabled);
             }

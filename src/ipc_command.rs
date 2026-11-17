@@ -195,6 +195,8 @@ pub enum IpcCommand {
     Sleep(Option<u64>),
     /// Enable/disable scrobbling.
     Scrobble(bool),
+    /// Cycle the EQ profile through OFF.
+    EqNext,
     /// Change the crossfade length/curve/album-only gate.
     CrossfadeConfig(CrossfadeChange),
 }
@@ -269,6 +271,7 @@ impl IpcCommand {
             | Self::Stream(_)
             | Self::Sleep(_)
             | Self::Scrobble(_)
+            | Self::EqNext
             | Self::CrossfadeConfig(_) => T::CoreBridge,
 
             // Read-only telemetry.
@@ -581,6 +584,15 @@ pub const COMMANDS: &[CommandSpec] = &[
         usage: "stream <quality|format|cache|size> <value>",
         description: "Set the stream bitrate (0 original), format, cache on/off or cache size in MiB",
         form: CommandForm::Advanced(ArgHints::Values(&["quality", "format", "cache", "size"])),
+    },
+    CommandSpec {
+        name: "eq",
+        usage: "eq next",
+        description: "Cycle the active Equalizer APO profile through OFF",
+        form: CommandForm::Word {
+            values: &[("next", IpcCommand::EqNext)],
+            unknown: "eq action",
+        },
     },
     CommandSpec {
         name: "scrobble",
@@ -1931,6 +1943,8 @@ fn advanced_canonical(command: &IpcCommand) -> String {
 
         Sleep(None) => "sleep off".to_string(),
 
+        EqNext => "eq next".to_string(),
+
         Scrobble(true) => "scrobble on".to_string(),
 
         Scrobble(false) => "scrobble off".to_string(),
@@ -2395,6 +2409,14 @@ mod tests {
             ))),
             "crossfade length 7"
         );
+    }
+
+    #[test]
+    fn parses_eq_cycle_command() {
+        assert_eq!(parse("eq next"), Ok(IpcCommand::EqNext));
+        assert!(parse("eq").is_err());
+        assert!(parse("eq off").is_err());
+        assert_eq!(canonical_string(&IpcCommand::EqNext), "eq next");
     }
 
     #[test]
@@ -3115,6 +3137,7 @@ mod tests {
             "crossfade",
             "crossfade on",
             "crossfade off",
+            "eq next",
             "normalize",
             "normalize off",
             "normalize track",

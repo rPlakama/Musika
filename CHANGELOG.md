@@ -5,6 +5,14 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Runtime test fixes:** apply the playback-settings/pending-scrobble
+  migrations to the production library file (status is an alias of library,
+  not only the test status pool); bump the core/UI protocol to v3 so a stale
+  UI fails with an explicit version mismatch instead of `BadPayload`; bound
+  consecutive sink rebuilds so a missing PipeWire/ALSA target stops instead of
+  reconnecting forever; reset underruns when the transport parks.
+- **EQ command:** `eq next` exposes the `Ctrl-E` profile cycle to the IPC
+  socket (used by the runtime smoke test).
 - **Roadmap conclusion:** document the completed playback roadmap and the two
   explicit gates (multichannel output; native DSD/DoP), plus the fixed-rate
   alternative to the non-crossfade boundary gap.

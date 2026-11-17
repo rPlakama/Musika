@@ -69,6 +69,7 @@ impl Native {
         generation: u64,
     ) {
         crate::startup::trace("play.requested");
+        self.sink.ring().reset_underruns();
         self.worker
             .load(url.to_string(), next_url, paused, generation);
     }
@@ -76,6 +77,7 @@ impl Native {
     pub(crate) fn stop(&self) {
         self.worker.stop();
         self.sink.set_paused(true);
+        self.sink.ring().reset_underruns();
     }
 
     pub(crate) fn seek_to(&self, seconds: f64) {

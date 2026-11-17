@@ -379,6 +379,9 @@ struct ServiceState {
     sleep_deadline: Option<Instant>,
     sleep_fade: Option<SleepFade>,
     scrobble: Option<ScrobbleState>,
+    /// Consecutive sink rebuilds since the last healthy stream. Bounded so a
+    /// missing PipeWire/ALSA target cannot spin forever.
+    sink_failures: u32,
     metrics: crate::player::PlaybackMetrics,
 }
 
@@ -524,6 +527,14 @@ impl ServiceState {
 
     fn cycle_eq(&mut self) {
         let profiles = crate::eq::list_profiles();
+        crate::debug_log!(
+            "eq: cycle from {:?}, {} profile(s) in {}",
+            self.settings.eq_profile,
+            profiles.len(),
+            crate::eq::profiles_dir()
+                .map(|dir| dir.display().to_string())
+                .unwrap_or_else(|error| format!("<{error}>"))
+        );
         let current = self.settings.eq_profile.clone();
         let position = current
             .as_ref()
@@ -631,6 +642,7 @@ fn run(
         sleep_deadline: None,
         sleep_fade: None,
         scrobble: None,
+        sink_failures: 0,
         metrics: crate::player::PlaybackMetrics::default(),
     };
     let mut published = PlaybackState {
@@ -970,18 +982,30 @@ fn run(
                 EngineEvent::SinkFailed { message } => {
                     service.cancel_retry();
                     service.metrics.sink_rebuilds += 1;
+                    service.sink_failures += 1;
                     service.last_error = Some(message.clone());
                     _ = service.outputs.send(PlaybackOutput::Error(message));
-                    let position = service.core.position_at(crate::linux::monotonic_ns());
                     service.drop_engine();
-                    service.last_engine_attempt = None;
-                    if service.ensure_engine() {
-                        let outcome = service.core.apply(CoreCommand::Recover { position });
+                    if service.sink_failures > 3 {
+                        service.sink_failures = 0;
+                        service.last_engine_attempt = None;
+                        let outcome = service.core.apply(CoreCommand::Stop);
                         apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
-                        service.sync_audio();
                         _ = service.outputs.send(PlaybackOutput::Error(
-                            "PipeWire restarted; playback resumed".to_string(),
+                            "Audio output unavailable; playback paused".to_string(),
                         ));
+                    } else {
+                        service.last_engine_attempt = None;
+                        if service.ensure_engine() {
+                            let position =
+                                service.core.position_at(crate::linux::monotonic_ns());
+                            let outcome = service.core.apply(CoreCommand::Recover { position });
+                            apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
+                            service.sync_audio();
+                            _ = service.outputs.send(PlaybackOutput::Error(
+                                "PipeWire restarted; playback resumed".to_string(),
+                            ));
+                        }
                     }
                     force = true;
                 }
@@ -997,6 +1021,9 @@ fn run(
                         EngineEvent::FirstPcm | EngineEvent::Loaded { .. }
                     );
                     let first_pcm = matches!(event, EngineEvent::FirstPcm);
+                    if healthy || matches!(event, EngineEvent::SinkRecovered) {
+                        service.sink_failures = 0;
+                    }
                     let failure = if let EngineEvent::Failed { error } = &event {
                         Some(error.clone())
                     } else {

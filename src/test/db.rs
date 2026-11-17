@@ -12,6 +12,21 @@ fn library_migrations_include_the_combined_schema() {
 }
 
 #[tokio::test]
+async fn production_library_migrations_include_playback_status_tables() {
+    let pool = crate::test::memory_pool(sqlx::migrate!("./migrations_library")).await;
+    for table in ["playback_settings", "pending_scrobble"] {
+        let found: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        )
+        .bind(table)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(found, 1, "production library schema is missing {table}");
+    }
+}
+
+#[tokio::test]
 async fn wipe_pool_drops_every_table_and_migrations_rebuild_them() {
     let pool = crate::test::memory_pool(sqlx::migrate!("./migrations_library")).await;
     sqlx::query("INSERT INTO artists (id, name) VALUES ('a', 'A')")

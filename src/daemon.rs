@@ -243,6 +243,9 @@ async fn run_async() {
                     Event::SleepTimer(minutes) => {
                         let _ = playback_control.send(PlaybackInput::SetSleepTimer(*minutes));
                     }
+                    Event::Scrobble(enabled) => {
+                        let _ = playback_control.send(PlaybackInput::SetScrobble(*enabled));
+                    }
                     Event::LoginRequired { .. } => {
                         auth = Some(event.clone());
                         connection = None;
@@ -389,6 +392,7 @@ async fn run_async() {
                         | Event::OutputDevice { .. }
                         | Event::StreamChange(_)
                         | Event::SleepTimer(_)
+                        | Event::Scrobble(_)
                 );
                 if forward {
                     let dead = broadcast_event(&ui_clients, &event);
@@ -506,6 +510,12 @@ async fn run_async() {
                         let online = server_reachable().await;
                         inflight.store(false, Ordering::Release);
                         bridge.note_connection(online);
+                        if online
+                            && let Some(dbs) = crate::app::dbs()
+                            && let Err(error) = crate::scrobble::flush(&dbs).await
+                        {
+                            crate::debug_log!("scrobble: flush failed: {error:#}");
+                        }
                         let _ = playback.send(PlaybackInput::SetOffline(!online));
                         if online && sync_owed.swap(false, Ordering::AcqRel) {
                             // First reachable probe since the app opened (or
@@ -712,6 +722,11 @@ fn dispatch_core_bridge(services: &Services, command: &IpcCommand) {
             let _ = services
                 .playback
                 .send(PlaybackInput::SetSleepTimer(*minutes));
+        }
+        IpcCommand::Scrobble(enabled) => {
+            let _ = services
+                .playback
+                .send(PlaybackInput::SetScrobble(*enabled));
         }
         IpcCommand::Stream(change) => {
             let _ = services.playback.send(PlaybackInput::ApplyStreamChange(

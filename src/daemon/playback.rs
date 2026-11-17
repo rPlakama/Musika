@@ -129,6 +129,8 @@ pub(crate) enum PlaybackInput {
     ApplyStreamChange(crate::playback_settings::StreamChange),
     /// Start (`Some(minutes)`) or cancel (`None`) the sleep timer.
     SetSleepTimer(Option<u64>),
+    /// Enable/disable scrobbling.
+    SetScrobble(bool),
     Shutdown,
 }
 
@@ -158,6 +160,7 @@ impl std::fmt::Debug for PlaybackInput {
                 write!(formatter, "ApplyStreamChange({change:?})")
             }
             Self::SetSleepTimer(minutes) => write!(formatter, "SetSleepTimer({minutes:?})"),
+            Self::SetScrobble(enabled) => write!(formatter, "SetScrobble({enabled})"),
             Self::Shutdown => write!(formatter, "Shutdown"),
         }
     }
@@ -323,6 +326,15 @@ struct SleepFade {
     original_volume: f64,
 }
 
+/// Playback-time accounting for one scrobble.
+struct ScrobbleState {
+    song_id: String,
+    accumulated: Duration,
+    threshold: Duration,
+    last_tick: Instant,
+    submitted: bool,
+}
+
 struct ServiceState {
     core: PlaybackCore,
     engine: Option<Engine>,
@@ -336,6 +348,7 @@ struct ServiceState {
     settings: crate::playback_settings::PlaybackSettings,
     sleep_deadline: Option<Instant>,
     sleep_fade: Option<SleepFade>,
+    scrobble: Option<ScrobbleState>,
     metrics: crate::player::PlaybackMetrics,
 }
 
@@ -380,6 +393,75 @@ impl ServiceState {
                 crate::media_actions::cache_stream(&dbs, &id, &settings).await
             {
                 crate::debug_log!("stream cache: {id} failed: {error:#}");
+            }
+        });
+    }
+
+    /// Starts the scrobble clock for the row that just produced PCM and sends
+    /// the now-playing notification.
+    fn start_scrobble(&mut self) {
+        let queue = self.core.queue();
+        let Some(track) = queue.get(self.core.index()) else {
+            self.scrobble = None;
+            return;
+        };
+        let song_id = track.id.clone();
+        if song_id.is_empty() || !self.settings.scrobble {
+            self.scrobble = None;
+            return;
+        }
+        let threshold =
+            Duration::from_secs_f64(crate::scrobble::threshold_secs(self.core.duration()));
+        self.scrobble = Some(ScrobbleState {
+            song_id: song_id.clone(),
+            accumulated: Duration::ZERO,
+            threshold,
+            last_tick: Instant::now(),
+            submitted: false,
+        });
+        crate::app::runtime().spawn(async move {
+            if let Some(dbs) = crate::app::dbs() {
+                crate::scrobble::now_playing(&dbs, &song_id).await;
+            }
+        });
+    }
+
+    /// Accumulates actual playing time (paused time is excluded) and submits
+    /// one completed play at the threshold.
+    fn tick_scrobble(&mut self) {
+        let Some(current) = self
+            .core
+            .queue()
+            .get(self.core.index())
+            .map(|track| track.id.clone())
+        else {
+            self.scrobble = None;
+            return;
+        };
+        let Some(state) = self.scrobble.as_mut() else {
+            return;
+        };
+        if state.song_id != current
+            || !self.settings.scrobble
+            || self.core.state() == crate::player::State::Stopped
+        {
+            self.scrobble = None;
+            return;
+        }
+        let now = Instant::now();
+        if self.core.state() == crate::player::State::Playing {
+            state.accumulated += now.saturating_duration_since(state.last_tick);
+        }
+        state.last_tick = now;
+        if state.submitted || state.accumulated < state.threshold {
+            return;
+        }
+        state.submitted = true;
+        let song_id = state.song_id.clone();
+        let played_at = crate::consts::now_secs();
+        crate::app::runtime().spawn(async move {
+            if let Some(dbs) = crate::app::dbs() {
+                crate::scrobble::submit(&dbs, &song_id, played_at).await;
             }
         });
     }
@@ -476,6 +558,7 @@ fn run(
         settings: crate::playback_settings::PlaybackSettings::default(),
         sleep_deadline: None,
         sleep_fade: None,
+        scrobble: None,
         metrics: crate::player::PlaybackMetrics::default(),
     };
     let mut published = PlaybackState {
@@ -574,6 +657,8 @@ fn run(
                 apply_outcome(&service, &step, &mut force, &mut queue_reset);
             }
         }
+
+        service.tick_scrobble();
 
         match input {
             None => {}
@@ -728,6 +813,14 @@ fn run(
                 }
                 force = true;
             }
+            Some(ServiceInput::Command(PlaybackInput::SetScrobble(enabled))) => {
+                service.settings.scrobble = enabled;
+                if !enabled {
+                    service.scrobble = None;
+                }
+                capture_settings(&mut service);
+                force = true;
+            }
             Some(ServiceInput::Command(PlaybackInput::SetOffline(offline))) => {
                 let was_offline = service.offline;
                 let outcome = service.core.set_offline(offline);
@@ -872,6 +965,7 @@ fn run(
                     apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
                     if first_pcm {
                         service.maybe_cache_current_stream();
+                        service.start_scrobble();
                     }
                 }
             },

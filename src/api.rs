@@ -547,6 +547,25 @@ impl SubsonicClient {
         self.endpoint_url("stream", &params)
     }
 
+    /// `scrobble` — report a play. `submission=false` is the now-playing
+    /// notification; `true` is the completed play, optionally with its
+    /// provider timestamp in milliseconds.
+    pub async fn scrobble(
+        &self,
+        id: &str,
+        submission: bool,
+        time_ms: Option<i64>,
+    ) -> Result<()> {
+        let mut params: Vec<(&str, String)> = vec![
+            ("id", id.to_string()),
+            ("submission", submission.to_string()),
+        ];
+        if let Some(time) = time_ms {
+            params.push(("time", time.to_string()));
+        }
+        self.call_ok("scrobble", &params).await
+    }
+
     /// `getLyrics` — lyrics for a song (empty if not found).
     pub async fn get_lyrics(&self, artist: Option<&str>, title: Option<&str>) -> Result<Lyrics> {
         let params = query(&[

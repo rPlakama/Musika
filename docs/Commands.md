@@ -106,6 +106,7 @@ mpris_position:5000000
 | `output` | `output <list\|default\|node-name>` | List PipeWire sinks (JSON over the socket), follow the default sink, or target a named `node.name`; the choice is persisted. |
 | `stream` | `stream <quality\|format\|cache\|size> <value>` | Cap the stream bitrate (`quality 128`, `quality 0` = original), request a format, toggle the playback cache, or set its size in MiB. |
 | `sleep` | `sleep <minutes\|off>` | Fade out over five seconds and pause after N minutes; `sleep off` cancels. |
+| `scrobble` | `scrobble <on\|off>` | Enable or disable now-playing/completed-play submissions; queued offline plays flush on the next successful ping. |
 | `wipe` | `wipe <album|lyrics|covers>` | Clear downloaded album files, cached lyrics, or cached covers. |
 | `wipe_databases` | `wipe_databases` | Open the destructive database wipe chooser; this is not an immediate wipe. |
 | `logout` | `logout` | End the live session and show the login screen. The account and its data stay stored. |

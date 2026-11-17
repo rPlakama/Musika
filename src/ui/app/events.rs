@@ -16,6 +16,9 @@ impl AppRoot {
             Event::SleepTimer(_) => {
                 // A UI request; the daemon consumes it.
             }
+            Event::Scrobble(_) => {
+                // A UI request; the daemon consumes it.
+            }
             Event::OutputDevices { devices } => {
                 let message = if devices.is_empty() {
                     "No PipeWire output sinks.".to_string()

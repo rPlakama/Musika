@@ -118,6 +118,8 @@ mod benchmark;
 
 mod scroll_memory;
 
+mod scrobble;
+
 mod rows;
 
 /// Sync reconciliation (ARC: library changes vs removals/additions).

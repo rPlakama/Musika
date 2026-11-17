@@ -183,6 +183,8 @@ pub enum IpcCommand {
     Stream(crate::playback_settings::StreamChange),
     /// Sleep timer: `Some(minutes)` arms it, `None` cancels it.
     Sleep(Option<u64>),
+    /// Enable/disable scrobbling.
+    Scrobble(bool),
 }
 
 /// Where a command must run in the core/UI split. The classification is
@@ -251,7 +253,8 @@ impl IpcCommand {
             | Self::OutputSet(_)
             | Self::OutputDefault
             | Self::Stream(_)
-            | Self::Sleep(_) => T::CoreBridge,
+            | Self::Sleep(_)
+            | Self::Scrobble(_) => T::CoreBridge,
 
             // Read-only telemetry.
             Self::Status | Self::QueueQuery | Self::OutputList => T::Query,
@@ -558,6 +561,15 @@ pub const COMMANDS: &[CommandSpec] = &[
         usage: "stream <quality|format|cache|size> <value>",
         description: "Set the stream bitrate (0 original), format, cache on/off or cache size in MiB",
         form: CommandForm::Advanced(ArgHints::Values(&["quality", "format", "cache", "size"])),
+    },
+    CommandSpec {
+        name: "scrobble",
+        usage: "scrobble <on|off>",
+        description: "Enable or disable server scrobbling",
+        form: CommandForm::Word {
+            values: &[("on", IpcCommand::Scrobble(true)), ("off", IpcCommand::Scrobble(false))],
+            unknown: "scrobble state",
+        },
     },
     CommandSpec {
         name: "sleep",
@@ -1757,6 +1769,10 @@ fn advanced_canonical(command: &IpcCommand) -> String {
 
         Sleep(None) => "sleep off".to_string(),
 
+        Scrobble(true) => "scrobble on".to_string(),
+
+        Scrobble(false) => "scrobble off".to_string(),
+
         Search { query } => format!("search {query}").trim_end().to_string(),
 
         InsertMode { query } => format!("insert_mode {query}").trim_end().to_string(),
@@ -2189,6 +2205,18 @@ fn current_download_path(current: &CurrentTrack) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_scrobble_commands() {
+        assert_eq!(parse("scrobble on"), Ok(IpcCommand::Scrobble(true)));
+        assert_eq!(parse("scrobble off"), Ok(IpcCommand::Scrobble(false)));
+        assert!(parse("scrobble").is_err());
+        assert!(parse("scrobble maybe").is_err());
+        assert_eq!(
+            canonical_string(&IpcCommand::Scrobble(true)),
+            "scrobble on"
+        );
+    }
 
     #[test]
     fn parses_sleep_commands() {

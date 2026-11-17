@@ -11,6 +11,7 @@ async fn playback_settings_default_round_trip_and_sanitize() {
     assert_eq!(defaults.stream_cache_mib, 2048);
     assert!(defaults.stream_cache);
     assert!(defaults.follow_default);
+    assert!(defaults.scrobble);
 
     let mut changed = defaults.clone();
     changed.repeat = 2;

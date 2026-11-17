@@ -5,6 +5,12 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Scrobbling:** playback reports a now-playing notification on first PCM and
+  submits one completed play after `min(4 minutes, half the track)`, with the
+  provider timestamp. Offline/failed submissions queue in `pending_scrobble`
+  and flush oldest-first on the next successful health probe. `scrobble
+  on|off` persists with the playback settings; the server's play count updates
+  on the next library sync.
 - **Queue modes and sleep:** `shuffle queue` is now a persistent mode instead
   of reordering the queue: the visible rows stay put, next/gapless follow a
   shuffled plan, MPRIS reports the mode, and toggling it off keeps the current

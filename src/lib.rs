@@ -79,6 +79,7 @@ mod radio;
 mod recommend;
 mod rows;
 mod scroll_memory;
+mod scrobble;
 mod search;
 mod session;
 mod sqlite;

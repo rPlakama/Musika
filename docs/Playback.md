@@ -329,6 +329,12 @@ reliability and CI items remain roadmap work.
 
 ### Implemented after the audit (2026-11)
 
+- **Scrobbling:** playback sends a now-playing notification on the first PCM
+  and one completed `scrobble` after `min(4 min, half the track)`, with the
+  provider timestamp. A failed/offline submission is queued in
+  `pending_scrobble` and flushed oldest-first by the health probe; the server
+  remains the source of truth for play counts. `scrobble on|off` persists.
+
 - **Queue modes and sleep:** `shuffle queue` is a persistent mode (the
   visible queue order is untouched; next/gapless walk a shuffled plan and
   MPRIS reports `Shuffle`). Previous in shuffle walks actual play history,

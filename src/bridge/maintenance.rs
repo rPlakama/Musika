@@ -219,6 +219,11 @@ impl Bridge {
         _ = self.tx.send(Event::SleepTimer(minutes));
     }
 
+    /// UI request: enable/disable scrobbling.
+    pub fn set_scrobble(&self, enabled: bool) {
+        _ = self.tx.send(Event::Scrobble(enabled));
+    }
+
     pub(crate) fn is_offline(&self) -> bool {
         self.offline.load(Ordering::Relaxed)
     }

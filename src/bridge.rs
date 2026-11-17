@@ -56,6 +56,8 @@ pub enum Event {
     StreamChange(crate::playback_settings::StreamChange),
     /// UI request: arm/cancel the sleep timer (minutes, `None` = off).
     SleepTimer(Option<u64>),
+    /// UI request: enable/disable scrobbling.
+    Scrobble(bool),
     LoggedIn {
         server_url: String,
         username: String,

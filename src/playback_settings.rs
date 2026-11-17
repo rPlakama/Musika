@@ -77,6 +77,8 @@ pub struct PlaybackSettings {
     pub stream_format: Option<String>,
     pub stream_cache: bool,
     pub stream_cache_mib: u64,
+    /// Submit now-playing/completed plays to the server.
+    pub scrobble: bool,
 }
 
 impl Default for PlaybackSettings {
@@ -97,6 +99,7 @@ impl Default for PlaybackSettings {
             stream_format: None,
             stream_cache: true,
             stream_cache_mib: 2048,
+            scrobble: true,
         }
     }
 }

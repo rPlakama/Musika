@@ -78,6 +78,9 @@ impl AppRoot {
             IpcCommand::Crossfade(_) | IpcCommand::Normalize(_) => {
                 unreachable!("IPC playback mapping returned a playback op")
             }
+            IpcCommand::Scrobble(enabled) => {
+                self.bridge.set_scrobble(enabled);
+            }
             IpcCommand::Sleep(minutes) => {
                 self.bridge.set_sleep_timer(minutes);
             }

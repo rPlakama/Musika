@@ -87,7 +87,7 @@ struct RtContext {
 /// One linear output-gain ramp. The RT callback owns the state; requests are
 /// handed over through an atomic on the ring, so no locks or allocations run
 /// on the audio thread.
-struct FadeState {
+pub(crate) struct FadeState {
     from: f32,
     to: f32,
     remaining: u32,
@@ -95,7 +95,7 @@ struct FadeState {
 }
 
 impl FadeState {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             from: 1.0,
             to: 1.0,
@@ -104,11 +104,11 @@ impl FadeState {
         }
     }
 
-    fn active(&self) -> bool {
+    pub(crate) fn active(&self) -> bool {
         self.remaining > 0
     }
 
-    fn current(&self) -> f32 {
+    pub(crate) fn current(&self) -> f32 {
         if self.remaining == 0 {
             self.to
         } else {
@@ -117,7 +117,7 @@ impl FadeState {
         }
     }
 
-    fn start(&mut self, target: f32, rate: u32) {
+    pub(crate) fn start(&mut self, target: f32, rate: u32) {
         self.from = self.current();
         self.to = target.clamp(0.0, 1.0);
         let frames = (rate.max(1) as f32 * FADE_MS / 1000.0).round() as u32;
@@ -128,7 +128,7 @@ impl FadeState {
     /// Multiplies `frames` stereo frames by the ramp, advancing one step per
     /// frame. A zero-frame callback (paused/empty ring) leaves the ramp where
     /// it is unless the caller forces completion.
-    fn apply(&mut self, out: &mut [f32], frames: usize) {
+    pub(crate) fn apply(&mut self, out: &mut [f32], frames: usize) {
         if !self.active() || frames == 0 {
             return;
         }
@@ -141,6 +141,30 @@ impl FadeState {
             self.remaining = self.remaining.saturating_sub(1);
         }
     }
+}
+
+/// The decoder-facing surface shared by the PipeWire and ALSA sinks. Both
+/// own the same `Ring`, so worker code is backend-agnostic.
+pub(crate) trait PcmSink: Send + Sync {
+    fn ring(&self) -> &Arc<ring::Ring>;
+    fn epoch(&self) -> u64;
+    fn rate(&self) -> u32;
+    fn set_format(&self, rate: u32) -> Result<(), String>;
+    fn set_target(&self, target: Option<String>) -> Result<(), String>;
+    fn set_exclusive(&self, exclusive: bool) -> Result<(), String>;
+    fn write(&self, pcm: &[f32], epoch: u64);
+    fn set_paused(&self, paused: bool);
+    fn request_fade_in(&self);
+    fn request_fade_out(&self);
+    fn set_muted(&self, muted: bool);
+    fn set_volume(&self, volume: f64);
+    fn flush(&self);
+    fn reset(&self);
+    fn close_writes(&self);
+    fn played_frames(&self) -> u64;
+    fn buffered_frames(&self) -> u64;
+    fn underruns(&self) -> u64;
+    fn failed(&self) -> bool;
 }
 
 /// One connected PipeWire stream and its local listener.
@@ -836,6 +860,66 @@ fn process(stream: &pw::stream::Stream, ctx: &mut RtContext) {
     *chunk.offset_mut() = 0;
     *chunk.stride_mut() = (ring::CHANNELS * std::mem::size_of::<f32>()) as i32;
     *chunk.size_mut() = (frames * ring::CHANNELS * std::mem::size_of::<f32>()) as u32;
+}
+
+impl PcmSink for Sink {
+    fn ring(&self) -> &Arc<ring::Ring> {
+        self.ring()
+    }
+    fn epoch(&self) -> u64 {
+        self.epoch()
+    }
+    fn rate(&self) -> u32 {
+        self.rate()
+    }
+    fn set_format(&self, rate: u32) -> Result<(), String> {
+        self.set_format(rate)
+    }
+    fn set_target(&self, target: Option<String>) -> Result<(), String> {
+        self.set_target(target)
+    }
+    fn set_exclusive(&self, exclusive: bool) -> Result<(), String> {
+        self.set_exclusive(exclusive)
+    }
+    fn write(&self, pcm: &[f32], epoch: u64) {
+        self.write(pcm, epoch);
+    }
+    fn set_paused(&self, paused: bool) {
+        self.set_paused(paused);
+    }
+    fn request_fade_in(&self) {
+        self.request_fade_in();
+    }
+    fn request_fade_out(&self) {
+        self.request_fade_out();
+    }
+    fn set_muted(&self, muted: bool) {
+        self.set_muted(muted);
+    }
+    fn set_volume(&self, volume: f64) {
+        self.set_volume(volume);
+    }
+    fn flush(&self) {
+        self.flush();
+    }
+    fn reset(&self) {
+        self.reset();
+    }
+    fn close_writes(&self) {
+        self.close_writes();
+    }
+    fn played_frames(&self) -> u64 {
+        self.played_frames()
+    }
+    fn buffered_frames(&self) -> u64 {
+        self.buffered_frames()
+    }
+    fn underruns(&self) -> u64 {
+        self.underruns()
+    }
+    fn failed(&self) -> bool {
+        self.failed()
+    }
 }
 
 #[cfg(test)]

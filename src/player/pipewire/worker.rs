@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use super::decode::{Decoder, MAX_PIPELINE_RATE};
 use super::ring;
-use super::sink::Sink;
+use super::sink::PcmSink;
 use super::status::{Shared, Status};
 use crate::player::Normalization;
 
@@ -89,13 +89,13 @@ pub(crate) struct Worker {
     preload_tx: Option<Sender<PreloadRequest>>,
     preload_join: Option<JoinHandle<()>>,
     shared: Arc<Shared>,
-    sink: Arc<Sink>,
+    sink: Arc<dyn PcmSink>,
     paused_position: std::sync::Mutex<f64>,
     paused: AtomicBool,
 }
 
 impl Worker {
-    pub(crate) fn new(shared: Arc<Shared>, sink: Arc<Sink>) -> Result<Self, String> {
+    pub(crate) fn new(shared: Arc<Shared>, sink: Arc<dyn PcmSink>) -> Result<Self, String> {
         let (tx, rx) = mpsc::channel();
         let (preload_tx, preload_rx) = mpsc::channel::<PreloadRequest>();
         let (preload_result_tx, preload_result_rx) = mpsc::channel::<PreloadResult>();
@@ -426,7 +426,7 @@ fn worker_thread(
     preload_rx: Receiver<PreloadResult>,
     preload_tx: Sender<PreloadRequest>,
     shared: Arc<Shared>,
-    sink: Arc<Sink>,
+    sink: Arc<dyn PcmSink>,
 ) {
     let mut current = Current {
         // Nothing is loaded yet: a stale seek/resume before the first load must
@@ -540,7 +540,7 @@ fn worker_thread(
                                 resume_at,
                                 false,
                                 &shared,
-                                &sink,
+                                sink.as_ref(),
                             );
                         } else {
                             // Live decoder: keep it, do not re-seek.
@@ -572,7 +572,7 @@ fn worker_thread(
                         resume_at,
                         false,
                         &shared,
-                        &sink,
+                        sink.as_ref(),
                     );
                     continue;
                 }
@@ -633,7 +633,7 @@ fn worker_thread(
                             seconds,
                             false,
                             &shared,
-                            &sink,
+                            sink.as_ref(),
                         );
                         if current.paused {
                             shared.lock().loading = false;
@@ -668,7 +668,7 @@ fn worker_thread(
                         0.0,
                         false,
                         &shared,
-                        &sink,
+                        sink.as_ref(),
                     );
                     continue;
                 }
@@ -714,7 +714,7 @@ fn worker_thread(
             maybe_start_crossfade(&mut current, &shared);
         }
         if current.crossfade.is_some() {
-            run_crossfade_chunk(&mut current, &shared, &sink, &mut pcm, &mut next_pcm);
+            run_crossfade_chunk(&mut current, &shared, sink.as_ref(), &mut pcm, &mut next_pcm);
             continue;
         }
 
@@ -740,7 +740,7 @@ fn worker_thread(
                     }
                 }
                 let next_stop = current.preload_stop.take();
-                handoff_to_decoder(&mut current, next, next_stop, 0.0, &shared, &sink);
+                handoff_to_decoder(&mut current, next, next_stop, 0.0, &shared, sink.as_ref());
                 continue;
             }
             if let Some(url) = current.parked_url.clone()
@@ -759,7 +759,7 @@ fn worker_thread(
                     target,
                     true,
                     &shared,
-                    &sink,
+                    sink.as_ref(),
                 );
             }
             continue;
@@ -807,7 +807,7 @@ fn worker_thread(
                     continue;
                 }
                 let next_stop = current.preload_stop.take();
-                handoff_to_decoder(&mut current, next, next_stop, 0.0, &shared, &sink);
+                handoff_to_decoder(&mut current, next, next_stop, 0.0, &shared, sink.as_ref());
                 continue;
             }
             crate::startup::trace("fetch.done");
@@ -847,7 +847,7 @@ fn worker_thread(
         }
         let epoch = current.epoch;
         sink.write(&pcm[..frames * 2], epoch);
-        if sink_ring_closed(&sink) {
+        if sink_ring_closed(sink.as_ref()) {
             // Load/stop replaced the epoch while the writer was blocked.
             current.decoder = None;
             shared.lock().decoder_live = false;
@@ -898,7 +898,7 @@ fn start_decoder(
     position: f64,
     preserve_preload: bool,
     shared: &Shared,
-    sink: &Sink,
+    sink: &dyn PcmSink,
 ) {
     if !preserve_preload {
         cancel_preload(current);
@@ -1131,7 +1131,7 @@ fn mix_crossfade(
 fn run_crossfade_chunk(
     current: &mut Current,
     shared: &Shared,
-    sink: &Sink,
+    sink: &dyn PcmSink,
     pcm: &mut [f32],
     next_pcm: &mut [f32],
 ) {
@@ -1305,7 +1305,7 @@ fn handoff_to_decoder(
     next_stop: Option<Arc<AtomicBool>>,
     start_position: f64,
     shared: &Shared,
-    sink: &Sink,
+    sink: &dyn PcmSink,
 ) {
     let duration = next.duration();
     let stream_size = next.stream_size().max(0) as u64;
@@ -1418,11 +1418,11 @@ fn apply_preload(current: &mut Current, result: PreloadResult) {
     }
 }
 
-fn sink_ring_written(sink: &Sink) -> u64 {
+fn sink_ring_written(sink: &dyn PcmSink) -> u64 {
     sink.ring().written_frames()
 }
 
-fn sink_ring_closed(sink: &Sink) -> bool {
+fn sink_ring_closed(sink: &dyn PcmSink) -> bool {
     sink.ring().closed()
 }
 
@@ -1509,6 +1509,7 @@ fn apply_normalization(pcm: &mut [f32], gain: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::player::pipewire::sink::Sink;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::AtomicU64;
@@ -1643,7 +1644,8 @@ mod tests {
         let second = wav_fixture(48_000, 0.4);
         let shared = Arc::new(Shared::new());
         let sink = Arc::new(Sink::new(Arc::clone(&shared)).expect("PipeWire sink"));
-        let worker = Worker::new(Arc::clone(&shared), Arc::clone(&sink)).expect("decode worker");
+        let worker = Worker::new(Arc::clone(&shared), sink.clone() as Arc<dyn PcmSink>)
+            .expect("decode worker");
         assert_eq!(sink.rate(), ring::DEFAULT_RATE);
         worker.load(first.url(), Some(second.url()), false, 1);
 
@@ -1693,7 +1695,8 @@ mod tests {
         let second = wav_fixture(44_100, 0.4);
         let shared = Arc::new(Shared::new());
         let sink = Arc::new(Sink::new(Arc::clone(&shared)).expect("PipeWire sink"));
-        let worker = Worker::new(Arc::clone(&shared), Arc::clone(&sink)).expect("decode worker");
+        let worker = Worker::new(Arc::clone(&shared), sink.clone() as Arc<dyn PcmSink>)
+            .expect("decode worker");
         worker.load(first.url(), Some(second.url()), false, 1);
 
         assert!(

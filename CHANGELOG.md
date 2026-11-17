@@ -5,6 +5,13 @@ open work; this file is the release history.
 
 ## Unreleased
 
+- **Direct ALSA backend:** an optional `alsa-backend` (default on) adds a
+  blocking F32-stereo ALSA `PcmSink` alongside PipeWire. `output backend alsa`
+  or `output alsa hw:0,0` selects it; it requires the track's exact rate and
+  falls back to PipeWire if the device cannot be configured. The backend is
+  chosen at engine construction (restart/next start); the decoder/worker now
+  target a shared `PcmSink` trait. `alsa-lib` is in the flake and
+  `node.exclusive`/bit-perfect stay available without it.
 - **Phase 8 diagnostics:** document the exclusive/bit-perfect best-effort
   boundary, the `PcmSink` design needed for a true ALSA `hw` backend, the
   stereo-only ring/sink coupling, and DSD as an unvalidated feasibility gate.

@@ -46,6 +46,14 @@ pub fn current() -> PlaybackSettings {
         .unwrap_or_default()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputBackend {
+    #[default]
+    Pipewire,
+    Alsa,
+}
+
 /// Every persisted playback preference. Missing fields fall back to
 /// [`Self::default`] through `#[serde(default)]`, so a settings row written by
 /// an older release never fails to load.
@@ -66,6 +74,10 @@ pub struct PlaybackSettings {
     pub output_device: Option<String>,
     pub follow_default: bool,
     pub exclusive: bool,
+    /// `pipewire` (default) or the optional direct ALSA backend.
+    pub output_backend: OutputBackend,
+    /// ALSA PCM device (`default`, `hw:0,0`, ...); ignored by PipeWire.
+    pub alsa_device: String,
     /// 0 = original stream; otherwise the requested kbps.
     pub stream_max_bitrate: u32,
     /// `None`/`original` or a Subsonic format (`mp3`, `opus`, …).
@@ -92,6 +104,8 @@ impl Default for PlaybackSettings {
             output_device: None,
             follow_default: true,
             exclusive: false,
+            output_backend: OutputBackend::Pipewire,
+            alsa_device: "default".to_string(),
             stream_max_bitrate: 0,
             stream_format: None,
             stream_cache: true,
@@ -197,6 +211,9 @@ impl PlaybackSettings {
         self.crossfade_seconds = self.crossfade_seconds.clamp(0.0, 12.0);
         if self.crossfade_curve != "linear" {
             self.crossfade_curve = "equal-power".to_string();
+        }
+        if self.alsa_device.trim().is_empty() {
+            self.alsa_device = "default".to_string();
         }
         self.stream_format = self.stream_format.and_then(|format| {
             let format = format.trim().to_ascii_lowercase();

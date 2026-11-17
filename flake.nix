@@ -78,6 +78,7 @@
           pkgs.pipewire
           ffmpegAudio
           pkgs.sqlite
+          pkgs.alsa-lib
           pkgs.libglvnd
           # GPUI display/font/Vulkan dependencies.
           pkgs.wayland
@@ -183,6 +184,7 @@
           cargo
           rust-analyzer
           sqlite
+          alsa-lib
           sqlite-analyzer
           sqls
           rustfmt

@@ -246,6 +246,15 @@ impl Bridge {
         });
     }
 
+    /// UI request: select the backend/ALSA device.
+    pub fn set_output_backend(
+        &self,
+        backend: Option<crate::playback_settings::OutputBackend>,
+        device: Option<String>,
+    ) {
+        _ = self.tx.send(Event::OutputBackend { backend, device });
+    }
+
     pub(crate) fn is_offline(&self) -> bool {
         self.offline.load(Ordering::Relaxed)
     }

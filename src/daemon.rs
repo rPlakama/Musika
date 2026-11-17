@@ -126,14 +126,16 @@ async fn run_async() {
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<Event>();
     let bridge = Arc::new(Bridge::new(event_tx.clone()));
 
-    let (playback_out_tx, mut playback_rx) = mpsc::unbounded_channel::<PlaybackOutput>();
-    let playback = PlaybackService::spawn(playback_out_tx);
-    let playback_control = playback.control();
+    // Load the playback document before the engine thread starts: the sink
+    // backend (PipeWire vs. direct ALSA) is chosen at engine construction.
     let mut playback_settings = match crate::app::dbs() {
         Some(dbs) => crate::playback_settings::load(&dbs.status).await,
         None => crate::playback_settings::PlaybackSettings::default(),
     };
     crate::playback_settings::install(&playback_settings);
+    let (playback_out_tx, mut playback_rx) = mpsc::unbounded_channel::<PlaybackOutput>();
+    let playback = PlaybackService::spawn(playback_out_tx);
+    let playback_control = playback.control();
     let mut settings_dirty = false;
 
     let (lifecycle_tx, mut lifecycle_rx) = mpsc::unbounded_channel::<Lifecycle>();
@@ -250,6 +252,12 @@ async fn run_async() {
                     }
                     Event::CycleEq => {
                         let _ = playback_control.send(PlaybackInput::CycleEq);
+                    }
+                    Event::OutputBackend { backend, device } => {
+                        let _ = playback_control.send(PlaybackInput::SetOutputBackend {
+                            backend: *backend,
+                            device: device.clone(),
+                        });
                     }
                     Event::OutputMode {
                         exclusive,
@@ -414,6 +422,7 @@ async fn run_async() {
                         | Event::CycleEq
                         | Event::CrossfadeChange(_)
                         | Event::OutputMode { .. }
+                        | Event::OutputBackend { .. }
                 );
                 if forward {
                     let dead = broadcast_event(&ui_clients, &event);
@@ -759,6 +768,12 @@ fn dispatch_core_bridge(services: &Services, command: &IpcCommand) {
             let _ = services.playback.send(PlaybackInput::ApplyStreamChange(
                 change.clone(),
             ));
+        }
+        IpcCommand::OutputBackend { backend, device } => {
+            let _ = services.playback.send(PlaybackInput::SetOutputBackend {
+                backend: *backend,
+                device: device.clone(),
+            });
         }
         IpcCommand::OutputMode {
             exclusive,

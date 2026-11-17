@@ -45,6 +45,7 @@ macro_rules! for_each_bridge_rpc {
             cycle_eq(),
             set_crossfade_change(change: $crate::playback_settings::CrossfadeChange),
             set_output_mode(exclusive: Option<bool>, bit_perfect: Option<bool>),
+            set_output_backend(backend: Option<$crate::playback_settings::OutputBackend>, device: Option<String>),
             logout(),
             // Library and search.
             load_library(scope: $crate::model::Scope, order: usize),

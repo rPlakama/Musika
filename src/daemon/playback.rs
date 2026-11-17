@@ -140,6 +140,11 @@ pub(crate) enum PlaybackInput {
         exclusive: Option<bool>,
         bit_perfect: Option<bool>,
     },
+    /// Select the backend/ALSA device for the next engine start.
+    SetOutputBackend {
+        backend: Option<crate::playback_settings::OutputBackend>,
+        device: Option<String>,
+    },
     Shutdown,
 }
 
@@ -181,6 +186,9 @@ impl std::fmt::Debug for PlaybackInput {
                 formatter,
                 "SetOutputMode {{ exclusive: {exclusive:?}, bit_perfect: {bit_perfect:?} }}"
             ),
+            Self::SetOutputBackend { backend, device } => {
+                write!(formatter, "SetOutputBackend {{ backend: {backend:?}, device: {device:?} }}")
+            }
             Self::Shutdown => write!(formatter, "Shutdown"),
         }
     }
@@ -878,6 +886,19 @@ fn run(
                         }
                     }
                 }
+                force = true;
+            }
+            Some(ServiceInput::Command(PlaybackInput::SetOutputBackend {
+                backend,
+                device,
+            })) => {
+                if let Some(backend) = backend {
+                    service.settings.output_backend = backend;
+                }
+                if let Some(device) = device {
+                    service.settings.alsa_device = device;
+                }
+                capture_settings(&mut service);
                 force = true;
             }
             Some(ServiceInput::Command(PlaybackInput::SetOutputMode {

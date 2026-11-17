@@ -7,7 +7,7 @@
 use std::fmt;
 
 use crate::bridge::SyncMode;
-use crate::playback_settings::{CrossfadeChange, StreamChange};
+use crate::playback_settings::{CrossfadeChange, OutputBackend, StreamChange};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum WipeScope {
@@ -184,6 +184,11 @@ pub enum IpcCommand {
         exclusive: Option<bool>,
         bit_perfect: Option<bool>,
     },
+    /// Select the output backend/ALSA device (next engine start).
+    OutputBackend {
+        backend: Option<OutputBackend>,
+        device: Option<String>,
+    },
     /// Change the stream bitrate/format/cache policy.
     Stream(crate::playback_settings::StreamChange),
     /// Sleep timer: `Some(minutes)` arms it, `None` cancels it.
@@ -260,6 +265,7 @@ impl IpcCommand {
             | Self::OutputSet(_)
             | Self::OutputDefault
             | Self::OutputMode { .. }
+            | Self::OutputBackend { .. }
             | Self::Stream(_)
             | Self::Sleep(_)
             | Self::Scrobble(_)
@@ -1277,6 +1283,25 @@ fn advanced_parse(name: &str, rest: &str, usage: &str) -> Result<IpcCommand, Com
                     bit_perfect: None,
                 })
             }
+            [what, value] if what == "backend" => {
+                let backend = match value.as_str() {
+                    "pipewire" => OutputBackend::Pipewire,
+                    "alsa" => OutputBackend::Alsa,
+                    _ => {
+                        return Err(CommandError(
+                            "usage: output backend <pipewire|alsa>".to_string(),
+                        ));
+                    }
+                };
+                Ok(IpcCommand::OutputBackend {
+                    backend: Some(backend),
+                    device: None,
+                })
+            }
+            [what, device] if what == "alsa" => Ok(IpcCommand::OutputBackend {
+                backend: Some(crate::playback_settings::OutputBackend::Alsa),
+                device: Some(device.clone()),
+            }),
             [what, value] if what == "bitperfect" => {
                 let enabled = parse_on_off(value, "bitperfect")?;
                 Ok(IpcCommand::OutputMode {
@@ -1838,6 +1863,23 @@ fn advanced_canonical(command: &IpcCommand) -> String {
 
         OutputMode { .. } => "output".to_string(),
 
+        OutputBackend {
+            backend: Some(crate::playback_settings::OutputBackend::Alsa),
+            device: Some(device),
+        } => format!("output alsa {}", quote_arg(device)),
+
+        OutputBackend {
+            backend: Some(crate::playback_settings::OutputBackend::Alsa),
+            device: None,
+        } => "output backend alsa".to_string(),
+
+        OutputBackend {
+            backend: Some(crate::playback_settings::OutputBackend::Pipewire),
+            device: None,
+        } => "output backend pipewire".to_string(),
+
+        OutputBackend { .. } => "output".to_string(),
+
         Crossfade(CrossfadeCommand::Toggle) => "crossfade".to_string(),
         Crossfade(CrossfadeCommand::On) => "crossfade on".to_string(),
         Crossfade(CrossfadeCommand::Off) => "crossfade off".to_string(),
@@ -2393,6 +2435,34 @@ mod tests {
         assert!(parse("stream").is_err());
         assert!(parse("stream nonsense 1").is_err());
         assert!(parse("stream cache maybe").is_err());
+    }
+
+    #[test]
+    fn parses_output_backend_commands() {
+        use crate::playback_settings::OutputBackend;
+
+        assert_eq!(
+            parse("output backend alsa"),
+            Ok(IpcCommand::OutputBackend {
+                backend: Some(OutputBackend::Alsa),
+                device: None
+            })
+        );
+        assert_eq!(
+            parse("output alsa hw:0,0"),
+            Ok(IpcCommand::OutputBackend {
+                backend: Some(OutputBackend::Alsa),
+                device: Some("hw:0,0".to_string())
+            })
+        );
+        assert_eq!(
+            canonical_string(&IpcCommand::OutputBackend {
+                backend: Some(OutputBackend::Alsa),
+                device: Some("hw:0,0".to_string())
+            }),
+            "output alsa hw:0,0"
+        );
+        assert!(parse("output backend coreaudio").is_err());
     }
 
     #[test]

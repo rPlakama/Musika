@@ -488,28 +488,30 @@ meant for `status` sampling and regression comparisons, not persistence.
   the sink rebuilds at the boundary and flushes queued PCM for the new rate.
   The resulting small gap is still present; crossfade/gapless covers
   same-rate transitions.
-- **Exclusive/bit-perfect output:** `output exclusive on` sets PipeWire's
-  `node.exclusive` request and `output bitperfect on` bypasses EQ, ReplayGain
-  and crossfade. The backend is still PipeWire: it may mix/resample, so this
-  is best-effort, not a guaranteed direct ALSA `hw` path. S16 fallback is
-  deliberately not negotiated.
+- **Exclusive/bit-perfect output:** the default backend is PipeWire;
+  `output exclusive on` sets its `node.exclusive` request and
+  `output bitperfect on` bypasses EQ, ReplayGain and crossfade. For a true
+  direct path, `output backend alsa` (or `output alsa hw:0,0`) selects the
+  optional ALSA sink, which requires packed F32 at the track's exact rate and
+  falls back to PipeWire if the device cannot be configured. No S16 fallback
+  is negotiated.
 - **Multichannel/DSD:** the pipeline is packed F32 stereo end-to-end. DSD is a
   feasibility item, not a supported format; multichannel output is not wired
   through the ring or the sink.
 
 ### Phase 8 feasibility notes
 
-- **Exclusive/bit-perfect:** the shipped mode is a PipeWire
-  `node.exclusive` request plus a DSP bypass. A truly exclusive ALSA `hw`
-  sink remains a feasibility item: the current flake does not expose
-  `alsa-lib` headers to the build shell, and the transport/worker are typed
-  around the PipeWire `Sink`. The intended design is a `PcmSink` trait
-  implemented by both backends, selected at engine construction (a backend
-  change requires an engine rebuild).
+- **Exclusive/bit-perfect:** the default mode is a PipeWire `node.exclusive`
+  request plus a DSP bypass. The optional `alsa-backend` feature now provides a
+  direct `PcmSink` implementation (`output backend alsa`, `output alsa
+  hw:0,0`): it opens a blocking ALSA PCM with `FloatLE`, two channels and the
+  track's exact rate, and falls back to PipeWire on any configuration error.
+  The backend is chosen at engine construction, so `output backend` takes
+  effect on the next engine start/restart.
 - **Multichannel:** the decoder resamples to packed F32 stereo, the ring has
-  `CHANNELS = 2`, and the sink negotiates a stereo stream. Multichannel would
+  `CHANNELS = 2`, and both sinks negotiate a stereo stream. Multichannel would
   require a channel count through decode, ring, EQ, crossfade, sink format
-  and the PipeWire position/channel map; it is not wired.
+  and the position/channel map; it is not wired.
 - **DSD:** FFmpeg can demux/decode DSF/DFF and convert DSD to PCM, but Musika
   has no native DoP path and has not validated DSD content end-to-end. It is a
   feasibility gate, not a supported format.

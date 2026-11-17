@@ -69,6 +69,11 @@ pub enum Event {
         exclusive: Option<bool>,
         bit_perfect: Option<bool>,
     },
+    /// UI request: select the output backend/ALSA device.
+    OutputBackend {
+        backend: Option<crate::playback_settings::OutputBackend>,
+        device: Option<String>,
+    },
     LoggedIn {
         server_url: String,
         username: String,

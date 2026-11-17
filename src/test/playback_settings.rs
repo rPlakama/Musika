@@ -26,6 +26,8 @@ async fn playback_settings_default_round_trip_and_sanitize() {
     changed.eq_profile = Some("Rock".to_string());
     changed.exclusive = true;
     changed.bit_perfect = true;
+    changed.output_backend = crate::playback_settings::OutputBackend::Alsa;
+    changed.alsa_device = "hw:0,0".to_string();
     changed.follow_default = false;
     crate::playback_settings::save(&pool, &changed)
         .await
@@ -45,6 +47,11 @@ async fn playback_settings_default_round_trip_and_sanitize() {
     assert_eq!(loaded.eq_profile.as_deref(), Some("Rock"));
     assert!(loaded.exclusive);
     assert!(loaded.bit_perfect);
+    assert_eq!(
+        loaded.output_backend,
+        crate::playback_settings::OutputBackend::Alsa
+    );
+    assert_eq!(loaded.alsa_device, "hw:0,0");
     assert!(!loaded.follow_default);
 }
 

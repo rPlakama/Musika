@@ -78,6 +78,9 @@ impl AppRoot {
             IpcCommand::Crossfade(_) | IpcCommand::Normalize(_) => {
                 unreachable!("IPC playback mapping returned a playback op")
             }
+            IpcCommand::OutputBackend { backend, device } => {
+                self.bridge.set_output_backend(backend, device);
+            }
             IpcCommand::OutputMode {
                 exclusive,
                 bit_perfect,

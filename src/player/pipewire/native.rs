@@ -8,7 +8,8 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use super::sink::Sink;
+use super::alsa::AlsaSink;
+use super::sink::{PcmSink, Sink};
 use super::status::{Shared, SinkStatus};
 use crate::player::Normalization;
 use super::worker::Worker;
@@ -20,7 +21,7 @@ const MAX_LOADING_REFERENCE: u64 = 2 * 1024 * 1024;
 const FALLBACK_LOADING_REFERENCE: u64 = 1024 * 1024;
 
 pub(crate) struct Native {
-    sink: Arc<Sink>,
+    sink: Arc<dyn PcmSink>,
     worker: Worker,
     shared: Arc<Shared>,
 }
@@ -28,11 +29,29 @@ pub(crate) struct Native {
 impl Native {
     pub(crate) fn new() -> Result<Self, String> {
         let shared = Arc::new(Shared::new());
-        let sink = Arc::new(Sink::new(Arc::clone(&shared))?);
+        let settings = crate::playback_settings::current();
+        let env_backend = std::env::var("MUSIKA_OUTPUT_BACKEND").ok();
+        let want_alsa = env_backend
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("alsa"))
+            || (env_backend.is_none()
+                && settings.output_backend == crate::playback_settings::OutputBackend::Alsa);
+        let sink: Arc<dyn PcmSink> = if want_alsa {
+            match AlsaSink::new(Arc::clone(&shared)) {
+                Ok(sink) => Arc::new(sink),
+                Err(error) => {
+                    crate::debug_log!("alsa: unavailable, falling back to PipeWire: {error}");
+                    Arc::new(Sink::new(Arc::clone(&shared))?)
+                }
+            }
+        } else {
+            Arc::new(Sink::new(Arc::clone(&shared))?)
+        };
         let worker = Worker::new(Arc::clone(&shared), Arc::clone(&sink))?;
         shared
             .clock_start
             .store(sink.played_frames(), Ordering::Release);
+        crate::startup::trace(if want_alsa { "engine.alsa" } else { "engine.pipewire" });
         Ok(Self {
             sink,
             worker,

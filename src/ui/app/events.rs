@@ -7,6 +7,9 @@ impl AppRoot {
         match event {
             Event::Command(_) => {}
             Event::IpcRan(command) => self.toast_ipc(&command),
+            Event::Settings(settings) => {
+                self.settings = *settings;
+            }
             Event::EqChanged(name) => {
                 let changed = self.eq_profile != name;
                 self.eq_profile = name;

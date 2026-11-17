@@ -12,6 +12,29 @@ pub(in crate::ui) fn description_offset(current: f32, delta: f32, max: f32) -> f
     (current + delta).clamp(0.0, max.max(0.0))
 }
 
+#[derive(Clone, Copy)]
+enum SettingsRowAction {
+    Shuffle,
+    Repeat,
+    Crossfade,
+    Length,
+    Curve,
+    AlbumOnly,
+    Normalize,
+    Eq,
+    Scrobble,
+    BitPerfect,
+    Exclusive,
+    Cache,
+    Quality,
+    FixedRate,
+    Format,
+    Sleep30,
+    SleepOff,
+    Close,
+}
+
+
 impl AppRoot {
     pub(in crate::ui) fn on_quit(
         &mut self,
@@ -29,7 +52,8 @@ impl AppRoot {
         cx: &mut Context<Self>,
     ) {
         if self.settings_open {
-            self.settings_cursor = (self.settings_cursor + 1).min(6);
+            let rows = self.settings_rows().len();
+            self.settings_cursor = (self.settings_cursor + 1).min(rows.saturating_sub(1));
             cx.notify();
             return;
         }
@@ -373,59 +397,153 @@ impl AppRoot {
         cx.notify();
     }
 
-    pub(in crate::ui) fn settings_rows(&self) -> [(&'static str, String); 7] {
-        [
-            (
-                "Shuffle",
-                if self.player.shuffle() { "On" } else { "Off" }.to_string(),
-            ),
-            (
-                "Repeat",
-                match self.player.repeat() {
-                    crate::player::Repeat::Off => "Off",
-                    crate::player::Repeat::One => "One",
-                    crate::player::Repeat::All => "All",
-                }
-                .to_string(),
-            ),
-            (
-                "Crossfade",
-                if self.player.crossfade() { "On" } else { "Off" }.to_string(),
-            ),
-            (
-                "Equalizer",
-                self.eq_profile
-                    .clone()
-                    .unwrap_or_else(|| "Off".to_string()),
-            ),
-            ("Sleep timer", "30 minutes".to_string()),
-            ("Sleep timer", "Off".to_string()),
-            ("", "Close".to_string()),
+    fn settings_actions(&self) -> Vec<(String, String, SettingsRowAction)> {
+        let s = &self.settings;
+        let yes_no = |value: bool| if value { "On" } else { "Off" }.to_string();
+        let repeat = match self.player.repeat() {
+            crate::player::Repeat::Off => "Off",
+            crate::player::Repeat::One => "One",
+            crate::player::Repeat::All => "All",
+        };
+        let quality = if s.stream_max_bitrate == 0 {
+            "Original".to_string()
+        } else {
+            format!("{} kbps", s.stream_max_bitrate)
+        };
+        let fixed = if s.fixed_pipeline_rate {
+            format!("{} Hz", s.fixed_pipeline_hz)
+        } else {
+            "Off".to_string()
+        };
+        let format = s
+            .stream_format
+            .clone()
+            .unwrap_or_else(|| "Original".to_string());
+        vec![
+            ("Shuffle".into(), yes_no(self.player.shuffle()), SettingsRowAction::Shuffle),
+            ("Repeat".into(), repeat.into(), SettingsRowAction::Repeat),
+            ("Crossfade".into(), yes_no(self.player.crossfade()), SettingsRowAction::Crossfade),
+            ("Crossfade length".into(), format!("{:.0}s", s.crossfade_seconds), SettingsRowAction::Length),
+            ("Crossfade curve".into(), s.crossfade_curve.clone(), SettingsRowAction::Curve),
+            ("Album-only crossfade".into(), yes_no(s.crossfade_album_only), SettingsRowAction::AlbumOnly),
+            ("Normalization".into(), format!("{:?}", self.player.normalization()), SettingsRowAction::Normalize),
+            ("Equalizer".into(), self.eq_profile.clone().unwrap_or_else(|| "Off".into()), SettingsRowAction::Eq),
+            ("Scrobbling".into(), yes_no(s.scrobble), SettingsRowAction::Scrobble),
+            ("Bit-perfect DSP".into(), yes_no(s.bit_perfect), SettingsRowAction::BitPerfect),
+            ("Exclusive access".into(), yes_no(s.exclusive), SettingsRowAction::Exclusive),
+            ("Playback cache".into(), yes_no(s.stream_cache), SettingsRowAction::Cache),
+            ("Stream quality".into(), quality, SettingsRowAction::Quality),
+            ("Stream format".into(), format, SettingsRowAction::Format),
+            ("Fixed pipeline rate".into(), fixed, SettingsRowAction::FixedRate),
+            ("Sleep timer".into(), "30 minutes".into(), SettingsRowAction::Sleep30),
+            ("Sleep timer".into(), "Off".into(), SettingsRowAction::SleepOff),
+            ("".into(), "Close".into(), SettingsRowAction::Close),
         ]
     }
 
+    pub(in crate::ui) fn settings_rows(&self) -> Vec<(String, String)> {
+        self.settings_actions()
+            .into_iter()
+            .map(|(label, value, _)| (label, value))
+            .collect()
+    }
+
     fn apply_settings_row(&mut self) {
-        match self.settings_cursor {
-            0 => self.player.shuffle_queue(),
-            1 => self.player.cycle_repeat(),
-            2 => self.player.toggle_crossfade(),
-            3 => {
+        let Some((_, _, action)) = self
+            .settings_actions()
+            .into_iter()
+            .nth(self.settings_cursor)
+        else {
+            return;
+        };
+        match action {
+            SettingsRowAction::Shuffle => self.player.shuffle_queue(),
+            SettingsRowAction::Repeat => self.player.cycle_repeat(),
+            SettingsRowAction::Crossfade => self.player.toggle_crossfade(),
+            SettingsRowAction::Length => {
+                let next = match self.settings.crossfade_seconds.round() as u32 {
+                    0..=3 => 5.0,
+                    4..=5 => 8.0,
+                    6..=8 => 12.0,
+                    _ => 3.0,
+                };
+                self.bridge.set_crossfade_change(
+                    crate::playback_settings::CrossfadeChange::Length(next),
+                );
+            }
+            SettingsRowAction::Curve => {
+                let equal = self.settings.crossfade_curve != "linear";
+                self.bridge.set_crossfade_change(
+                    crate::playback_settings::CrossfadeChange::Curve(!equal),
+                );
+            }
+            SettingsRowAction::AlbumOnly => {
+                let enabled = !self.settings.crossfade_album_only;
+                self.bridge.set_crossfade_change(
+                    crate::playback_settings::CrossfadeChange::AlbumOnly(enabled),
+                );
+            }
+            SettingsRowAction::Normalize => self.player.cycle_normalization(),
+            SettingsRowAction::Eq => {
                 self.bridge.cycle_eq();
             }
-            4 => {
+            SettingsRowAction::Scrobble => {
+                self.bridge.set_scrobble(!self.settings.scrobble);
+            }
+            SettingsRowAction::BitPerfect => {
+                self.bridge
+                    .set_output_mode(None, Some(!self.settings.bit_perfect));
+            }
+            SettingsRowAction::Exclusive => {
+                self.bridge
+                    .set_output_mode(Some(!self.settings.exclusive), None);
+            }
+            SettingsRowAction::Cache => {
+                self.bridge.set_stream_change(
+                    crate::playback_settings::StreamChange::Cache(!self.settings.stream_cache),
+                );
+            }
+            SettingsRowAction::Quality => {
+                let next = match self.settings.stream_max_bitrate {
+                    0 => 128,
+                    128 => 320,
+                    _ => 0,
+                };
+                self.bridge.set_stream_change(
+                    crate::playback_settings::StreamChange::Quality(next),
+                );
+            }
+            SettingsRowAction::Format => {
+                let next = match self.settings.stream_format.as_deref() {
+                    None => Some("mp3".to_string()),
+                    Some("mp3") => Some("opus".to_string()),
+                    _ => None,
+                };
+                self.bridge.set_stream_change(
+                    crate::playback_settings::StreamChange::Format(next),
+                );
+            }
+            SettingsRowAction::FixedRate => {
+                let next = match self.settings.fixed_pipeline_hz {
+                    _ if !self.settings.fixed_pipeline_rate => Some(48_000),
+                    44_100..=48_000 => Some(96_000),
+                    48_001..=96_000 => None,
+                    _ => Some(48_000),
+                };
+                self.bridge.set_stream_change(
+                    crate::playback_settings::StreamChange::FixedRate(next),
+                );
+            }
+            SettingsRowAction::Sleep30 => {
                 self.bridge.set_sleep_timer(Some(30));
             }
-            5 => {
+            SettingsRowAction::SleepOff => {
                 self.bridge.set_sleep_timer(None);
             }
-            _ => self.settings_open = false,
+            SettingsRowAction::Close => self.settings_open = false,
         }
     }
 
-    #[expect(
-        clippy::needless_pass_by_ref_mut,
-        reason = "action handlers share the mutable receiver signature"
-    )]
     pub(in crate::ui) fn on_eq_cycle(
         &mut self,
         _: &EqCycle,

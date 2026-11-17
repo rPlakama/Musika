@@ -861,6 +861,9 @@ fn run(
                 apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
                 service.apply_output_target();
                 service.apply_eq_from_settings();
+                _ = service.outputs.send(PlaybackOutput::SettingsChanged(Box::new(
+                    service.settings.clone(),
+                )));
             }
             Some(ServiceInput::Command(PlaybackInput::SetOutputDevice {
                 device,

@@ -50,7 +50,12 @@ impl AppRoot {
                 .as_ref()
                 .is_some_and(|search| search.typing);
         if !search_typing
-            && let Some(key) = batched_playback_key(event.keystroke.key.as_str())
+            && let Some(key) = batchable_playback_key(
+                event.keystroke.key.as_str(),
+                event.keystroke.modifiers.control,
+                event.keystroke.modifiers.alt,
+                event.keystroke.modifiers.platform,
+            )
         {
             // Repeats fold into one hold: the bubble counts them and the single
             // absolute op is sent on release. `event.is_held` is not usable here
@@ -501,6 +506,20 @@ impl AppRoot {
     }
 }
 
+/// Playback key families must not steal modified shortcuts: `Ctrl-,` opens
+/// settings and `Ctrl-.` is a future surface, while bare `,`/`.` seek.
+fn batchable_playback_key(
+    key: &str,
+    control: bool,
+    alt: bool,
+    platform: bool,
+) -> Option<char> {
+    if control || alt || platform {
+        return None;
+    }
+    batched_playback_key(key)
+}
+
 fn batched_playback_key(key: &str) -> Option<char> {
     match key {
         "," | "comma" => Some(','),
@@ -519,7 +538,15 @@ fn search_scope_backward(key: &str, shift: bool) -> bool {
 
 #[cfg(test)]
 mod search_scope_tests {
-    use super::search_scope_backward;
+    use super::{batchable_playback_key, search_scope_backward};
+
+    #[test]
+    fn modified_playback_punctuation_is_not_swallowed() {
+        assert_eq!(batchable_playback_key(",", true, false, false), None);
+        assert_eq!(batchable_playback_key(".", false, true, false), None);
+        assert_eq!(batchable_playback_key("-", false, false, true), None);
+        assert_eq!(batchable_playback_key(",", false, false, false), Some(','));
+    }
 
     #[test]
     fn tab_forward_and_shift_tab_reverse() {

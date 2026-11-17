@@ -192,6 +192,7 @@ async fn run_async() {
     let mut auth: Option<Event> = None;
     let mut connection: Option<Event> = None;
     let mut eq_state: Option<Event> = None;
+    let mut settings_state: Option<Event> = None;
     let mut ui_clients: HashMap<u64, UiClient> = HashMap::new();
     let mut ui_child: Option<std::process::Child> = None;
     let mut status_dirty = true;
@@ -228,6 +229,7 @@ async fn run_async() {
                     Event::Header { .. } => header = Some(event.clone()),
                     Event::Connection { .. } => connection = Some(event.clone()),
                     Event::EqChanged(_) => eq_state = Some(event.clone()),
+                    Event::Settings(_) => settings_state = Some(event.clone()),
                     Event::LoginRequired { .. } => {
                         auth = Some(event.clone());
                         connection = None;
@@ -420,6 +422,7 @@ async fn run_async() {
                         auth.as_ref(),
                         connection.as_ref(),
                         eq_state.as_ref(),
+                        settings_state.as_ref(),
                         &page,
                     );
                     ui_clients.insert(conn, UiClient { role, features, outbox });
@@ -995,6 +998,7 @@ fn handle_playback_output(
         PlaybackOutput::SettingsChanged(next) => {
             *settings = *next;
             *settings_dirty = true;
+            bridge.settings_changed(settings.clone());
         }
         PlaybackOutput::ServerUnavailable => {
             // The core already stopped the transport. Flip the whole app to
@@ -1035,6 +1039,10 @@ fn drop_clients(ui_clients: &mut HashMap<u64, UiClient>, dead: Vec<u64>) {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the bootstrap frames are independent pieces of the session; a wrapper would restate them"
+)]
 fn bootstrap_client(
     outbox: &Outbox,
     snapshot: &Snapshot,
@@ -1042,6 +1050,7 @@ fn bootstrap_client(
     auth: Option<&Event>,
     connection: Option<&Event>,
     eq: Option<&Event>,
+    settings: Option<&Event>,
     page: &LastPage,
 ) {
     let mut state = snapshot.state;
@@ -1050,7 +1059,10 @@ fn bootstrap_client(
     for frame in playback::reset_frames(snapshot.queue_rev, &snapshot.queue) {
         let _ = outbox.send_bytes(frame);
     }
-    for event in [header, auth, connection, eq].into_iter().flatten() {
+    for event in [header, auth, connection, eq, settings]
+        .into_iter()
+        .flatten()
+    {
         if let Ok(frame) = proto::event_frame(event) {
             let _ = outbox.send(&frame);
         }

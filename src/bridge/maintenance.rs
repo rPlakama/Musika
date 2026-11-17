@@ -236,6 +236,10 @@ impl Bridge {
         _ = self.tx.send(Event::EqChanged(name));
     }
 
+    pub fn settings_changed(&self, settings: crate::playback_settings::PlaybackSettings) {
+        _ = self.tx.send(Event::Settings(Box::new(settings)));
+    }
+
     /// UI request: change one crossfade field.
     pub fn set_crossfade_change(&self, change: crate::playback_settings::CrossfadeChange) {
         self.send_playback(crate::daemon::playback::PlaybackInput::SetCrossfadeConfig(change));

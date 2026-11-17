@@ -129,7 +129,7 @@ impl AppRoot {
                             } else {
                                 palette::on_surface()
                             }))
-                            .child(*label),
+                            .child(label.clone()),
                     )
                     .child(
                         div()

@@ -854,6 +854,8 @@ struct AppRoot {
     connection_offline: bool,
     /// Active EQ profile name (`None` = bypass), mirrored from the core.
     eq_profile: Option<String>,
+    /// Last playback settings snapshot published by the core.
+    settings: crate::playback_settings::PlaybackSettings,
     settings_open: bool,
     settings_cursor: usize,
     error: Option<String>,
@@ -1190,6 +1192,7 @@ impl AppRoot {
             header: None,
             connection_offline: false,
             eq_profile: None,
+            settings: crate::playback_settings::PlaybackSettings::default(),
             settings_open: false,
             settings_cursor: 0,
             error: None,

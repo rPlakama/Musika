@@ -436,6 +436,8 @@ impl Render for AppRoot {
             .on_action(cx.listener(Self::on_repeat_cycle))
             .on_action(cx.listener(Self::on_crossfade_toggle))
             .on_action(cx.listener(Self::on_normalization_cycle))
+            .on_action(cx.listener(Self::on_eq_cycle))
+            .on_action(cx.listener(Self::on_settings_overlay))
             .on_action(cx.listener(Self::on_toggle_fullscreen))
             .on_action(cx.listener(Self::on_queue_remove))
             .on_action(cx.listener(Self::on_delete_row))

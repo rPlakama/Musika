@@ -48,6 +48,8 @@ pub enum Event {
     },
     /// Core answer: the active EQ profile (`None` = off).
     EqChanged(Option<String>),
+    /// Core answer: the persisted playback preference snapshot.
+    Settings(Box<crate::playback_settings::PlaybackSettings>),
     LoggedIn {
         server_url: String,
         username: String,

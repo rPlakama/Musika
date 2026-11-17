@@ -82,6 +82,7 @@ const SAMPLES: &[(&str, &str)] = &[
     ("crossfade", "crossfade"),
     ("crossfade on", "crossfade on"),
     ("crossfade off", "crossfade off"),
+    ("colors contrast 0.6", "colors contrast 0.6"),
     ("normalize", "normalize"),
     ("normalize off", "normalize off"),
     ("normalize track", "normalize track"),

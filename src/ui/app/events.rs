@@ -8,7 +8,19 @@ impl AppRoot {
             Event::Command(_) => {}
             Event::IpcRan(command) => self.toast_ipc(&command),
             Event::Settings(settings) => {
+                let contrast_changed =
+                    (self.settings.color_contrast - settings.color_contrast).abs() > 0.001;
                 self.settings = *settings;
+                if contrast_changed {
+                    let cover = self
+                        .player
+                        .current()
+                        .map(|track| track.cover_art.clone())
+                        .unwrap_or_default();
+                    if !cover.is_empty() {
+                        self.bridge.request_colors(cover);
+                    }
+                }
             }
             Event::EqChanged(name) => {
                 let changed = self.eq_profile != name;

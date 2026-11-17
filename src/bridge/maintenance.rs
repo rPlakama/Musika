@@ -217,6 +217,10 @@ impl Bridge {
         self.send_playback(crate::daemon::playback::PlaybackInput::ApplyStreamChange(change));
     }
 
+    pub fn set_color_contrast(&self, contrast: f64) {
+        self.send_playback(crate::daemon::playback::PlaybackInput::SetColorContrast(contrast));
+    }
+
     /// UI request: arm/cancel the sleep timer.
     pub fn set_sleep_timer(&self, minutes: Option<u64>) {
         self.send_playback(crate::daemon::playback::PlaybackInput::SetSleepTimer(minutes));

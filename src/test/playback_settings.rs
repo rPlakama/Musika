@@ -12,6 +12,7 @@ async fn playback_settings_default_round_trip_and_sanitize() {
     assert!(defaults.stream_cache);
     assert!(defaults.follow_default);
     assert!(defaults.scrobble);
+    assert!((defaults.color_contrast - 0.4).abs() < f64::EPSILON);
 
     let mut changed = defaults.clone();
     changed.repeat = 2;
@@ -26,6 +27,7 @@ async fn playback_settings_default_round_trip_and_sanitize() {
     changed.eq_profile = Some("Rock".to_string());
     changed.exclusive = true;
     changed.bit_perfect = true;
+    changed.color_contrast = 9.0;
     changed.output_backend = crate::playback_settings::OutputBackend::Alsa;
     changed.alsa_device = "hw:0,0".to_string();
     changed.follow_default = false;
@@ -47,6 +49,7 @@ async fn playback_settings_default_round_trip_and_sanitize() {
     assert_eq!(loaded.eq_profile.as_deref(), Some("Rock"));
     assert!(loaded.exclusive);
     assert!(loaded.bit_perfect);
+    assert!((loaded.color_contrast - 1.0).abs() < f64::EPSILON);
     assert_eq!(
         loaded.output_backend,
         crate::playback_settings::OutputBackend::Alsa

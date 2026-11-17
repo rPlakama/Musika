@@ -93,6 +93,9 @@ pub struct PlaybackSettings {
     pub scrobble: bool,
     /// Bypass EQ, ReplayGain and crossfade (a best-effort bit-perfect path).
     pub bit_perfect: bool,
+    /// Material palette contrast offset (-1..=1). 0 is the spec baseline;
+    /// the default 0.4 asks for roughly 40% more separation.
+    pub color_contrast: f64,
 }
 
 impl Default for PlaybackSettings {
@@ -119,6 +122,7 @@ impl Default for PlaybackSettings {
             fixed_pipeline_hz: 48_000,
             scrobble: true,
             bit_perfect: false,
+            color_contrast: crate::colors::engine::DEFAULT_CONTRAST,
         }
     }
 }
@@ -267,6 +271,10 @@ impl PlaybackSettings {
         self.fixed_pipeline_hz = Self::clamp_fixed_rate(self.fixed_pipeline_hz);
         self.stream_format = Self::normalize_stream_format(self.stream_format);
         self.stream_max_bitrate = Self::clamp_stream_bitrate(self.stream_max_bitrate);
+        if !self.color_contrast.is_finite() {
+            self.color_contrast = crate::colors::engine::DEFAULT_CONTRAST;
+        }
+        self.color_contrast = self.color_contrast.clamp(-1.0, 1.0);
         self.stream_cache_mib = Self::clamp_cache_mib(self.stream_cache_mib);
         self
     }

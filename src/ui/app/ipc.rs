@@ -102,6 +102,9 @@ impl AppRoot {
             IpcCommand::Stream(change) => {
                 self.bridge.set_stream_change(change);
             }
+            IpcCommand::ColorContrast(contrast) => {
+                self.bridge.set_color_contrast(contrast);
+            }
             IpcCommand::OutputSet(device) => {
                 self.bridge.set_output_device(Some(device), false);
             }

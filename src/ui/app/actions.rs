@@ -22,6 +22,7 @@ enum SettingsRowAction {
     AlbumOnly,
     Normalize,
     Eq,
+    ColorContrast,
     Scrobble,
     BitPerfect,
     Exclusive,
@@ -428,6 +429,7 @@ impl AppRoot {
             ("Album-only crossfade".into(), yes_no(s.crossfade_album_only), SettingsRowAction::AlbumOnly),
             ("Normalization".into(), format!("{:?}", self.player.normalization()), SettingsRowAction::Normalize),
             ("Equalizer".into(), self.eq_profile.clone().unwrap_or_else(|| "Off".into()), SettingsRowAction::Eq),
+            ("Palette contrast".into(), format!("{:.0}%", s.color_contrast * 100.0), SettingsRowAction::ColorContrast),
             ("Scrobbling".into(), yes_no(s.scrobble), SettingsRowAction::Scrobble),
             ("Bit-perfect DSP".into(), yes_no(s.bit_perfect), SettingsRowAction::BitPerfect),
             ("Exclusive access".into(), yes_no(s.exclusive), SettingsRowAction::Exclusive),
@@ -486,6 +488,15 @@ impl AppRoot {
             SettingsRowAction::Normalize => self.player.cycle_normalization(),
             SettingsRowAction::Eq => {
                 self.bridge.cycle_eq();
+            }
+            SettingsRowAction::ColorContrast => {
+                const STEPS: [f64; 6] = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0];
+                let next = STEPS
+                    .iter()
+                    .copied()
+                    .find(|step| *step > self.settings.color_contrast + 0.01)
+                    .unwrap_or(STEPS[0]);
+                self.bridge.set_color_contrast(next);
             }
             SettingsRowAction::Scrobble => {
                 self.bridge.set_scrobble(!self.settings.scrobble);

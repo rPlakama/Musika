@@ -191,6 +191,8 @@ pub enum IpcCommand {
     },
     /// Change the stream bitrate/format/cache policy.
     Stream(crate::playback_settings::StreamChange),
+    /// Set the generated palette contrast offset (-1..=1).
+    ColorContrast(f64),
     /// Sleep timer: `Some(minutes)` arms it, `None` cancels it.
     Sleep(Option<u64>),
     /// Enable/disable scrobbling.
@@ -269,6 +271,7 @@ impl IpcCommand {
             | Self::OutputMode { .. }
             | Self::OutputBackend { .. }
             | Self::Stream(_)
+            | Self::ColorContrast(_)
             | Self::Sleep(_)
             | Self::Scrobble(_)
             | Self::EqNext
@@ -588,6 +591,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         form: CommandForm::Advanced(ArgHints::Values(&[
             "quality", "format", "cache", "size", "fixed",
         ])),
+    },
+    CommandSpec {
+        name: "colors",
+        usage: "colors contrast <value>",
+        description: "Set generated palette contrast (-1.0 baseline to 1.0 maximum)",
+        form: CommandForm::Advanced(ArgHints::Values(&["contrast"])),
     },
     CommandSpec {
         name: "eq",
@@ -1363,6 +1372,21 @@ fn advanced_parse(name: &str, rest: &str, usage: &str) -> Result<IpcCommand, Com
             )),
         },
 
+        "colors" => match split_quoted_args(rest)?.as_slice() {
+            [what, value] if what == "contrast" => {
+                let contrast = parse_number(value, "contrast")?;
+                if !(-1.0..=1.0).contains(&contrast) {
+                    return Err(CommandError(
+                        "contrast must be in -1.0..=1.0".to_string(),
+                    ));
+                }
+                Ok(IpcCommand::ColorContrast(contrast))
+            }
+            _ => Err(CommandError(
+                "usage: colors contrast <value>".to_string(),
+            )),
+        },
+
         "sleep" => match split_quoted_args(rest)?.as_slice() {
             [target] if target == "off" => Ok(IpcCommand::Sleep(None)),
             [minutes] => Ok(IpcCommand::Sleep(Some(
@@ -1782,6 +1806,8 @@ pub fn canonical_string(command: &IpcCommand) -> String {
 fn advanced_canonical(command: &IpcCommand) -> String {
     use IpcCommand::*;
     match command {
+
+        ColorContrast(contrast) => format!("colors contrast {contrast}"),
 
         PlaylistCreate {
             name,
@@ -2478,6 +2504,16 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn parses_color_contrast_and_rejects_out_of_range() {
+        assert_eq!(
+            parse("colors contrast 0.6"),
+            Ok(IpcCommand::ColorContrast(0.6))
+        );
+        assert!(parse("colors contrast 2").is_err());
+        assert!(parse("colors").is_err());
     }
 
     #[test]

@@ -127,6 +127,8 @@ pub(crate) enum PlaybackInput {
     },
     /// One live stream-quality/cache change.
     ApplyStreamChange(crate::playback_settings::StreamChange),
+    /// Set the Material palette contrast offset (-1..=1).
+    SetColorContrast(f64),
     /// Start (`Some(minutes)`) or cancel (`None`) the sleep timer.
     SetSleepTimer(Option<u64>),
     /// Enable/disable scrobbling.
@@ -172,6 +174,9 @@ impl std::fmt::Debug for PlaybackInput {
             ),
             Self::ApplyStreamChange(change) => {
                 write!(formatter, "ApplyStreamChange({change:?})")
+            }
+            Self::SetColorContrast(contrast) => {
+                write!(formatter, "SetColorContrast({contrast:?})")
             }
             Self::SetSleepTimer(minutes) => write!(formatter, "SetSleepTimer({minutes:?})"),
             Self::SetScrobble(enabled) => write!(formatter, "SetScrobble({enabled})"),
@@ -877,6 +882,12 @@ fn run(
             }
             Some(ServiceInput::Command(PlaybackInput::ApplyStreamChange(change))) => {
                 change.apply(&mut service.settings);
+                crate::playback_settings::install(&service.settings);
+                capture_settings(&mut service);
+                force = true;
+            }
+            Some(ServiceInput::Command(PlaybackInput::SetColorContrast(contrast))) => {
+                service.settings.color_contrast = contrast.clamp(-1.0, 1.0);
                 crate::playback_settings::install(&service.settings);
                 capture_settings(&mut service);
                 force = true;

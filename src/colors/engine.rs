@@ -70,7 +70,7 @@ impl Options {
             .ok()
             .and_then(|value| value.trim().parse().ok())
             .filter(|value: &f64| (-1.0..=1.0).contains(value))
-            .unwrap_or(DEFAULT_CONTRAST);
+            .unwrap_or_else(|| crate::playback_settings::current().color_contrast);
 
         let mut source = SourceMode::Dominant;
         let mut seed_override = None;

@@ -33,6 +33,11 @@ use super::seed::{self, SourceMode};
 use crate::consts::now_secs;
 use crate::db::Dbs;
 
+/// Default Material contrast offset. The scale is -1..=1; 0 is the spec
+/// baseline and 0.4 gives the palette roughly 40% more separation than the
+/// previously shipped baseline.
+pub const DEFAULT_CONTRAST: f64 = 0.4;
+
 /// Generation knobs. Anything that changes the role map must be part of the
 /// `generator()` tag so stored schemes invalidate.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -49,7 +54,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             variant: VariantChoice::Smart,
-            contrast: 0.0,
+            contrast: DEFAULT_CONTRAST,
             source: SourceMode::Dominant,
             spec: Spec::Dms,
             seed_override: None,
@@ -65,7 +70,7 @@ impl Options {
             .ok()
             .and_then(|value| value.trim().parse().ok())
             .filter(|value: &f64| (-1.0..=1.0).contains(value))
-            .unwrap_or(0.0);
+            .unwrap_or(DEFAULT_CONTRAST);
 
         let mut source = SourceMode::Dominant;
         let mut seed_override = None;
@@ -197,14 +202,15 @@ pub fn generate_from_path(path: &Path, options: &Options) -> Result<CoverScheme>
     build_scheme(color, colorfulness, options)
 }
 
-/// Convenience wrapper: Tonal Spot at standard contrast under the default
-/// spec (used by tests and any caller that wants a plain scheme).
+/// Convenience wrapper: Tonal Spot at the spec's baseline contrast (used by
+/// tests and callers that want a plain scheme, not the app's raised default).
 pub fn from_seed(seed: Rgb) -> Result<CoverScheme> {
     build_scheme(
         seed,
         0.0,
         &Options {
             variant: VariantChoice::TonalSpot,
+            contrast: 0.0,
             ..Options::default()
         },
     )

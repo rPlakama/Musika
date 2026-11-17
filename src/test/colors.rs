@@ -172,6 +172,12 @@ fn seed_schemes_are_deterministic_and_serializable() {
 }
 
 #[test]
+fn default_contrast_is_forty_percent_above_baseline() {
+    assert!((Options::default().contrast - 0.4).abs() < f64::EPSILON);
+    assert!((crate::colors::engine::DEFAULT_CONTRAST - 0.4).abs() < f64::EPSILON);
+}
+
+#[test]
 fn knob_changes_invalidate_the_cache_tag() {
     let base = Options::default();
     assert_ne!(base.generator(), tonal().generator());

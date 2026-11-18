@@ -386,7 +386,10 @@ reliability and CI items remain roadmap work.
   PipeWire sinks, retargets the live stream without dropping queued PCM and
   persists the choice; the stream format rebuild also carries the target.
   Follow-default tracks PipeWire's `default.audio.sink` metadata live and
-  rebuilds the stream when the default moves.
+  rebuilds the stream when the default moves. A selected sink that disappears
+  from the registry is detected even when PipeWire silently relinks playback:
+  the stream returns to the default sink, the saved choice is cleared, and the
+  UI receives follow-default instead of a dead node.
 
 - **Structured errors, retries and persistence:** `EngineEvent::Failed`
   carries `PlaybackError { kind, stage, message }`; network and 5xx failures

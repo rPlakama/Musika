@@ -574,6 +574,9 @@ impl PlaybackCore {
                     outcome.changed = true;
                 }
             }
+            // Device metadata only: the playback service persists the
+            // follow-default fallback; the transport keeps its state.
+            EngineEvent::OutputFallback { .. } => {}
             EngineEvent::LoadingCleared => self.clear_loading(now_ns, &mut outcome),
         }
         outcome

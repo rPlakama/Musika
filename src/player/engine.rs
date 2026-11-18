@@ -87,6 +87,12 @@ pub(crate) enum EngineEvent {
         message: String,
     },
     SinkRecovered,
+    /// The selected output node disappeared from the PipeWire registry. The
+    /// sink is already using the graph default; the service must persist
+    /// follow-default instead of retrying the dead target.
+    OutputFallback {
+        target: String,
+    },
     /// The loading heuristic fired; emit once per load.
     LoadingCleared,
 }
@@ -382,6 +388,11 @@ fn pump(
         return false;
     }
     if native.take_ended() && !emit(EngineEvent::Ended) {
+        return false;
+    }
+    if let Some(target) = native.take_output_fallback()
+        && !emit(EngineEvent::OutputFallback { target })
+    {
         return false;
     }
     if let Some(status) = native.take_sink_transition() {

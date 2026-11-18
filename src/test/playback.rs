@@ -640,6 +640,67 @@ fn sink_failed_freezes_without_advancing() {
 }
 
 #[test]
+fn missing_output_target_falls_back_only_for_an_absent_pipewire_node() {
+    use crate::daemon::playback::{fall_back_to_default_output, selected_output_missing};
+    use crate::playback_settings::{OutputBackend, PlaybackSettings};
+
+    let devices = vec![crate::player::pipewire::OutputDevice {
+        id: "sink.one".to_string(),
+        label: "One".to_string(),
+    }];
+    let selected = |device: Option<&str>, follow_default: bool| PlaybackSettings {
+        output_device: device.map(str::to_string),
+        follow_default,
+        ..PlaybackSettings::default()
+    };
+
+    assert_eq!(
+        selected_output_missing(&selected(Some("sink.one"), false), &devices),
+        None,
+        "a live node keeps the user's selection"
+    );
+    assert_eq!(
+        selected_output_missing(&selected(Some("sink.gone"), false), &devices),
+        Some("sink.gone".to_string()),
+        "a vanished node falls back to the default"
+    );
+    assert_eq!(
+        selected_output_missing(&selected(Some("sink.gone"), false), &[]),
+        Some("sink.gone".to_string()),
+        "an empty registry still identifies the selected node as gone"
+    );
+    assert_eq!(
+        selected_output_missing(&selected(Some("sink.gone"), true), &devices),
+        None,
+        "follow-default has no selected node to lose"
+    );
+    assert_eq!(
+        selected_output_missing(&selected(None, false), &devices),
+        None
+    );
+    let mut alsa = selected(Some("sink.gone"), false);
+    alsa.output_backend = OutputBackend::Alsa;
+    assert_eq!(
+        selected_output_missing(&alsa, &devices),
+        None,
+        "the PipeWire node fallback does not apply to the ALSA backend"
+    );
+
+    let mut settings = selected(Some("sink.gone"), false);
+    assert_eq!(
+        fall_back_to_default_output(&mut settings, &devices),
+        Some("sink.gone".to_string())
+    );
+    assert!(settings.follow_default);
+    assert_eq!(settings.output_device, None, "the dead node is forgotten");
+
+    let mut live = selected(Some("sink.one"), false);
+    assert_eq!(fall_back_to_default_output(&mut live, &devices), None);
+    assert!(!live.follow_default);
+    assert_eq!(live.output_device.as_deref(), Some("sink.one"));
+}
+
+#[test]
 fn loading_cleared_and_loaded_update_the_snapshot() {
     let mut core = PlaybackCore::new();
     _ = core.load(tracks(2), 0, false);

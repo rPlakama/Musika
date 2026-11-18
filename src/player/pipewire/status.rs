@@ -95,6 +95,11 @@ pub(crate) struct Shared {
     /// Active EQ profile; the worker recompiles when `eq_epoch` changes.
     pub(crate) eq: Mutex<Option<Arc<crate::eq::EqProfile>>>,
     pub(crate) eq_epoch: AtomicU64,
+    /// A selected output node vanished from the registry. The sink loop
+    /// clears its target and records the dead node so the engine can tell the
+    /// service to persist follow-default; playback already continues on the
+    /// graph's default sink.
+    output_fallback: Mutex<Option<String>>,
     /// Engine wakeup, written from the RT process callback (gapless boundary),
     /// the sink loop thread (stream status) and the decode worker (lifecycle).
     wake_fd: libc::c_int,
@@ -142,6 +147,7 @@ impl Shared {
             bit_perfect: AtomicBool::new(false),
             eq: Mutex::new(None),
             eq_epoch: AtomicU64::new(0),
+            output_fallback: Mutex::new(None),
             wake_fd: if wake_fd < 0 { -1 } else { wake_fd },
         }
     }
@@ -153,6 +159,23 @@ impl Shared {
     /// File descriptor the engine can `poll`; `-1` when the eventfd failed.
     pub(crate) fn wake_fd(&self) -> libc::c_int {
         self.wake_fd
+    }
+
+    /// Records a vanished selected output node and wakes the engine. The sink
+    /// loop has already dropped its target; this is notification only.
+    pub(crate) fn set_output_fallback(&self, target: String) {
+        *self
+            .output_fallback
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(target);
+        self.signal();
+    }
+
+    pub(crate) fn take_output_fallback(&self) -> Option<String> {
+        self.output_fallback
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
     }
 
     /// Wakes the engine thread. Safe to call from the RT process callback: it

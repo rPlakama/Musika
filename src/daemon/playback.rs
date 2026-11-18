@@ -395,6 +395,37 @@ struct ServiceState {
     metrics: crate::player::PlaybackMetrics,
 }
 
+/// The selected PipeWire node when it is absent from a fresh registry
+/// snapshot. `None` means there is nothing to fall back from: already
+/// following the default, no explicit node, or another backend.
+pub(crate) fn selected_output_missing(
+    settings: &crate::playback_settings::PlaybackSettings,
+    devices: &[crate::player::pipewire::OutputDevice],
+) -> Option<String> {
+    if settings.output_backend != crate::playback_settings::OutputBackend::Pipewire
+        || settings.follow_default
+    {
+        return None;
+    }
+    let target = settings.output_device.as_deref()?.trim();
+    if target.is_empty() {
+        return None;
+    }
+    (!devices.iter().any(|device| device.id == target)).then(|| target.to_string())
+}
+
+/// Drops a selected PipeWire node that is absent from a registry snapshot and
+/// flips the settings to follow-default. Returns the missing node name.
+pub(crate) fn fall_back_to_default_output(
+    settings: &mut crate::playback_settings::PlaybackSettings,
+    devices: &[crate::player::pipewire::OutputDevice],
+) -> Option<String> {
+    let target = selected_output_missing(settings, devices)?;
+    settings.output_device = None;
+    settings.follow_default = true;
+    Some(target)
+}
+
 impl ServiceState {
     /// Device name the stream should target; `None` follows PipeWire's default.
     fn output_target(&self) -> Option<String> {
@@ -403,6 +434,29 @@ impl ServiceState {
         } else {
             self.settings.output_device.clone()
         }
+    }
+
+    /// Drops a selected PipeWire node that disappeared from the registry and
+    /// returns to the default sink. A failed registry query is not evidence
+    /// that the node is gone, so the selection is kept in that case.
+    fn fallback_from_missing_output(&mut self) -> bool {
+        if self.settings.follow_default
+            || self.settings.output_backend
+                != crate::playback_settings::OutputBackend::Pipewire
+        {
+            return false;
+        }
+        let Ok(devices) = crate::player::pipewire::list_output_devices() else {
+            return false;
+        };
+        let Some(target) = fall_back_to_default_output(&mut self.settings, &devices) else {
+            return false;
+        };
+        capture_settings(self);
+        crate::debug_log!(
+            "playback: output node {target:?} is unavailable; using the default sink"
+        );
+        true
     }
 
     /// Applies the current output target to the live engine. A later engine
@@ -1004,12 +1058,43 @@ fn run(
                 ack = Some((Some(conn), req, true, ErrorCode::Internal));
             }
             Some(ServiceInput::Engine(event)) => match event {
+                EngineEvent::OutputFallback { target } => {
+                    // The sink already switched to the graph default; only
+                    // the persisted selection needs to catch up. A newer user
+                    // choice wins over a stale fallback notification.
+                    let selected = !service.settings.follow_default
+                        && service.settings.output_device.as_deref() == Some(target.as_str());
+                    if selected {
+                        service.settings.output_device = None;
+                        service.settings.follow_default = true;
+                        service.sink_failures = 0;
+                        capture_settings(&mut service);
+                        let message =
+                            "Output device unavailable; using the default sink".to_string();
+                        service.last_error = Some(message.clone());
+                        _ = service.outputs.send(PlaybackOutput::Error(message));
+                        force = true;
+                    }
+                }
                 EngineEvent::SinkFailed { message } => {
                     service.cancel_retry();
                     service.metrics.sink_rebuilds += 1;
                     service.sink_failures += 1;
-                    service.last_error = Some(message.clone());
-                    _ = service.outputs.send(PlaybackOutput::Error(message));
+                    // An unplugged node fails the stream. Resolve it before
+                    // the retry budget can exhaust: a missing node always
+                    // falls back to the default sink instead of retrying the
+                    // same dead target four times.
+                    let fallback = service.fallback_from_missing_output();
+                    if fallback {
+                        service.sink_failures = 0;
+                    }
+                    let failure = if fallback {
+                        "Output device unavailable; using the default sink".to_string()
+                    } else {
+                        message
+                    };
+                    service.last_error = Some(failure.clone());
+                    _ = service.outputs.send(PlaybackOutput::Error(failure));
                     service.drop_engine();
                     if service.sink_failures > 3 {
                         service.sink_failures = 0;
@@ -1027,9 +1112,14 @@ fn run(
                             let outcome = service.core.apply(CoreCommand::Recover { position });
                             apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
                             service.sync_audio();
-                            _ = service.outputs.send(PlaybackOutput::Error(
-                                "PipeWire restarted; playback resumed".to_string(),
-                            ));
+                            let resumed = if fallback {
+                                "Default output restored; playback resumed"
+                            } else {
+                                "PipeWire restarted; playback resumed"
+                            };
+                            _ = service
+                                .outputs
+                                .send(PlaybackOutput::Error(resumed.to_string()));
                         }
                     }
                     force = true;

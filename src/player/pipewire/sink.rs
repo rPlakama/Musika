@@ -18,7 +18,7 @@
 //! folded into a track failure.
 
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -571,6 +571,26 @@ fn rebuild_stream<'c>(
     Ok(())
 }
 
+/// Clears `target` when the registry-ready snapshot has no sink with that
+/// node name. Returns the vanished name so the engine can persist
+/// follow-default. The registry is the authority; a missing default sink does
+/// not count as "target missing" because `target` would already be `None`.
+fn take_missing_target(
+    target: &Rc<RefCell<Option<String>>>,
+    sinks: &Rc<RefCell<HashMap<u32, String>>>,
+    registry_ready: bool,
+) -> Option<String> {
+    if !registry_ready {
+        return None;
+    }
+    let selected = target.borrow().clone()?;
+    if sinks.borrow().values().any(|name| name == &selected) {
+        return None;
+    }
+    *target.borrow_mut() = None;
+    Some(selected)
+}
+
 fn run_sink(
     ring: Arc<Ring>,
     shared: Arc<Shared>,
@@ -605,13 +625,30 @@ fn run_sink(
     let default_changed = Rc::new(Cell::new(false));
     let metadata_keep: Rc<RefCell<Option<(pw::metadata::Metadata, pw::metadata::MetadataListener)>>> =
         Rc::new(RefCell::new(None));
+    // The selected node is checked against this live registry snapshot. A
+    // removed node is not necessarily a stream error: PipeWire can fall back
+    // to the default sink silently, so waiting for `SinkFailed` would leave
+    // the dead device persisted in the settings.
+    let sinks: Rc<RefCell<HashMap<u32, String>>> = Rc::new(RefCell::new(HashMap::new()));
+    let target: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let registry_ready = Rc::new(Cell::new(false));
     let _registry_listener = registry
         .add_listener_local()
         .global({
             let registry = registry.clone();
             let default_changed = Rc::clone(&default_changed);
             let metadata_keep = Rc::clone(&metadata_keep);
+            let sinks = Rc::clone(&sinks);
             move |global| {
+                if global.type_ == pw::types::ObjectType::Node {
+                    if let Some(props) = global.props.as_ref()
+                        && props.get(&pw::keys::MEDIA_CLASS) == Some("Audio/Sink")
+                        && let Some(name) = props.get(&pw::keys::NODE_NAME)
+                    {
+                        sinks.borrow_mut().insert(global.id, name.to_string());
+                    }
+                    return;
+                }
                 if global.type_ != pw::types::ObjectType::Metadata {
                     return;
                 }
@@ -641,16 +678,35 @@ fn run_sink(
                 *metadata_keep.borrow_mut() = Some((metadata, listener));
             }
         })
+        .global_remove({
+            let sinks = Rc::clone(&sinks);
+            move |id| {
+                sinks.borrow_mut().remove(&id);
+            }
+        })
         .register();
 
-    let mut target: Option<String> = None;
+    // A target can be applied before the initial registry enumeration ends.
+    // Delay the missing-node verdict until the sync round-trip says the
+    // snapshot is complete; otherwise a perfectly valid sink would look gone.
+    let sync_ready = Rc::clone(&registry_ready);
+    let pending_sync = core.sync(0).map_err(|error| error.to_string())?;
+    let _core_listener = core
+        .add_listener_local()
+        .done(move |id, seq| {
+            if id == pw::core::PW_ID_CORE && seq == pending_sync {
+                sync_ready.set(true);
+            }
+        })
+        .register();
+
     let mut exclusive = false;
     let mut active = build_stream(
         &core,
         &ring,
         &shared,
         ring.rate(),
-        target.as_deref(),
+        target.borrow().as_deref(),
         exclusive,
     )?;
     let mut volume = 1.0f32;
@@ -701,7 +757,7 @@ fn run_sink(
                         &ring,
                         &shared,
                         rate,
-                        target.as_deref(),
+                        target.borrow().as_deref(),
                         exclusive,
                     );
                     if result.is_ok() {
@@ -715,20 +771,28 @@ fn run_sink(
                     }
                 }
                 SinkCommand::SetTarget { target: next, ack } => {
-                    target = next;
+                    *target.borrow_mut() = next;
+                    let fallback = take_missing_target(
+                        &target,
+                        &sinks,
+                        registry_ready.get(),
+                    );
                     let result = rebuild_stream(
                         &mut active,
                         &core,
                         &ring,
                         &shared,
                         ring.rate(),
-                        target.as_deref(),
+                        target.borrow().as_deref(),
                         exclusive,
                     );
                     if result.is_ok() {
                         let volume_applied = apply_volume(&active.stream, &ring, volume);
                         let mute_applied = apply_mute(&active.stream, &ring, muted);
                         controls_dirty = !(volume_applied && mute_applied);
+                    }
+                    if let Some(lost) = fallback {
+                        shared.set_output_fallback(lost);
                     }
                     if ack.send(result).is_err() {
                         crate::debug_log!("pipewire: target-change ack receiver was dropped");
@@ -745,7 +809,7 @@ fn run_sink(
                         &ring,
                         &shared,
                         ring.rate(),
-                        target.as_deref(),
+                        target.borrow().as_deref(),
                         exclusive,
                     );
                     if result.is_ok() {
@@ -760,7 +824,28 @@ fn run_sink(
                 SinkCommand::Shutdown => running = false,
             }
         }
-        if running && default_changed.replace(false) && target.is_none() {
+        if running
+            && let Some(lost) = take_missing_target(&target, &sinks, registry_ready.get())
+        {
+            // PipeWire can silently relink a stream whose target vanished;
+            // make the fallback explicit and tell the service to persist it.
+            let result = rebuild_stream(
+                &mut active,
+                &core,
+                &ring,
+                &shared,
+                ring.rate(),
+                None,
+                exclusive,
+            );
+            if result.is_ok() {
+                let volume_applied = apply_volume(&active.stream, &ring, volume);
+                let mute_applied = apply_mute(&active.stream, &ring, muted);
+                controls_dirty = !(volume_applied && mute_applied);
+            }
+            shared.set_output_fallback(lost);
+        }
+        if running && default_changed.replace(false) && target.borrow().is_none() {
             let result = rebuild_stream(
                 &mut active,
                 &core,
@@ -925,6 +1010,30 @@ impl PcmSink for Sink {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vanished_selected_sink_clears_the_target_after_sync() {
+        let target = Rc::new(RefCell::new(Some("sink.one".to_string())));
+        let sinks = Rc::new(RefCell::new(HashMap::from([(7, "sink.one".to_string())])));
+
+        assert_eq!(
+            take_missing_target(&target, &sinks, false),
+            None,
+            "the initial registry snapshot is not authoritative yet"
+        );
+        assert_eq!(target.borrow().as_deref(), Some("sink.one"));
+        assert_eq!(
+            take_missing_target(&target, &sinks, true),
+            None,
+            "a present node keeps the target"
+        );
+        sinks.borrow_mut().clear();
+        assert_eq!(
+            take_missing_target(&target, &sinks, true),
+            Some("sink.one".to_string())
+        );
+        assert!(target.borrow().is_none(), "the dead node is forgotten");
+    }
 
     #[test]
     fn fade_out_ramps_to_silence() {

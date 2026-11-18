@@ -217,6 +217,11 @@ impl Native {
         true
     }
 
+    /// Consumes a notification that the selected output node disappeared.
+    pub(crate) fn take_output_fallback(&self) -> Option<String> {
+        self.shared.take_output_fallback()
+    }
+
     /// Consumes the latest PipeWire stream transition (state + error text).
     pub(crate) fn take_sink_transition(&self) -> Option<SinkStatus> {
         let seq = self.shared.sink_seq.load(Ordering::Acquire);

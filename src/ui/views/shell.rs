@@ -6,14 +6,43 @@ use gpui::StatefulInteractiveElement;
 /// Identity of the currently playing cover. The same album keeps the same
 /// thumb and full-resolution sources (and skips every reload/fade) across its
 /// tracks, even when per-song cover ids/URLs differ.
-/// The metadata both top bars fill. The main bar uses the compact form (file
-/// quality); fullscreen uses output + file quality. `TopBarInfo` is the single
-/// shape, so neither bar re-derives labels or bitrate units.
+/// The metadata and audio insights both top bars fill. The main bar uses the
+/// compact form (file quality); fullscreen adds the effect row and output.
+/// `TopBarInfo` is the single shape, so neither bar re-derives labels, device
+/// shortening, bitrate units or insight state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(in crate::ui) struct TopBarInfo {
     pub output: String,
     pub codec: String,
     pub bitrate: String,
+    pub crossfade: bool,
+    pub normalization: bool,
+    pub equalizer: bool,
+}
+
+impl TopBarInfo {
+    fn has_insights(&self) -> bool {
+        self.crossfade || self.normalization || self.equalizer
+    }
+}
+
+/// Device names are the informative part of the output metadata, so drop the
+/// backend prefix and keep the label within ten characters. "Default" is the
+/// fallback when no explicit node/device is configured.
+const OUTPUT_DEVICE_CHARS: usize = 10;
+
+fn output_device_label(device: &str) -> String {
+    let device = device.trim();
+    if device.is_empty() {
+        return "Default".to_string();
+    }
+    let mut chars = device.chars();
+    let mut label: String = chars.by_ref().take(OUTPUT_DEVICE_CHARS).collect();
+    if chars.next().is_some() {
+        label.pop();
+        label.push('…');
+    }
+    label
 }
 
 fn grouped_integer(value: i64) -> String {
@@ -652,29 +681,25 @@ impl AppRoot {
         let settings = &self.settings;
         let output = match settings.output_backend {
             crate::playback_settings::OutputBackend::Alsa => {
-                let device = settings.alsa_device.trim();
-                if device.is_empty() {
-                    "ALSA".to_string()
-                } else {
-                    format!("ALSA · {device}")
-                }
+                output_device_label(&settings.alsa_device)
             }
             crate::playback_settings::OutputBackend::Pipewire => {
-                if settings.follow_default || settings.output_device.is_none() {
-                    "PipeWire · Default".to_string()
+                if settings.follow_default {
+                    output_device_label("")
                 } else {
-                    format!(
-                        "PipeWire · {}",
-                        settings.output_device.as_deref().unwrap_or_default()
-                    )
+                    output_device_label(settings.output_device.as_deref().unwrap_or_default())
                 }
             }
         };
+        let insights = TopBarInfo {
+            output,
+            crossfade: self.player.crossfade(),
+            normalization: self.player.normalization().enabled(),
+            equalizer: self.eq_profile.is_some(),
+            ..TopBarInfo::default()
+        };
         let Some(track) = self.player.current() else {
-            return TopBarInfo {
-                output,
-                ..TopBarInfo::default()
-            };
+            return insights;
         };
         let info = self
             .track_info
@@ -689,10 +714,54 @@ impl AppRoot {
             .map(|info| bitrate_label(info.bit_rate, info.size, track.duration))
             .unwrap_or_default();
         TopBarInfo {
-            output,
             codec,
             bitrate,
+            ..insights
         }
+    }
+
+    fn top_bar_insight_slot(&self, content: impl IntoElement) -> gpui::AnyElement {
+        div()
+            .flex_none()
+            .w(px(18.0))
+            .h(px(18.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(content)
+            .into_any_element()
+    }
+
+    /// Audio-effect insights in one place so the fullscreen identity row no
+    /// longer repeats them. The top bar paints this row before the metadata.
+    fn top_bar_insights_view(&self, info: &TopBarInfo) -> gpui::AnyElement {
+        let mut row = div().flex().flex_none().items_center().gap_1();
+        if info.crossfade {
+            row = row.child(self.top_bar_insight_slot(icon(
+                "transition-fade-sharp.svg",
+                16.0,
+                palette::primary(),
+            )));
+        }
+        if info.normalization {
+            row = row.child(self.top_bar_insight_slot(
+                div()
+                    .text_size(px(13.0))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(palette::primary()))
+                    .child("N"),
+            ));
+        }
+        if info.equalizer {
+            row = row.child(self.top_bar_insight_slot(
+                div()
+                    .text_size(px(11.0))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(palette::primary()))
+                    .child("EQ"),
+            ));
+        }
+        row.into_any_element()
     }
 
     fn top_bar_info_chip(&self, label: &str, value: &str) -> gpui::AnyElement {
@@ -723,20 +792,44 @@ impl AppRoot {
     }
 
     /// The shared metadata line. `compact` drops the output chip so the main
-    /// bar keeps room for its page identity and action chips.
+    /// bar keeps room for its page identity and action chips; fullscreen pins
+    /// the file/rate chips right while the output chip takes the middle.
     pub(in crate::ui) fn top_bar_info_view(
         &self,
         info: &TopBarInfo,
         compact: bool,
     ) -> gpui::AnyElement {
         let mut row = div().flex().items_center().gap_2().min_w_0().overflow_hidden();
+        if !compact {
+            row = row.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(self.top_bar_info_chip("Output", &info.output)),
+            );
+            if !info.codec.is_empty() {
+                row = row.child(self.bar_separator()).child(
+                    div()
+                        .flex_none()
+                        .child(self.top_bar_info_chip("File", &info.codec)),
+                );
+            }
+            if !info.bitrate.is_empty() {
+                row = row.child(self.bar_separator()).child(
+                    div()
+                        .flex_none()
+                        .child(self.top_bar_info_chip("Rate", &info.bitrate)),
+                );
+            }
+            return row.into_any_element();
+        }
         let mut first = true;
         for (label, value) in [
-            (if compact { "" } else { "Output" }, info.output.as_str()),
             ("File", info.codec.as_str()),
             ("Rate", info.bitrate.as_str()),
         ] {
-            if value.is_empty() || label.is_empty() {
+            if value.is_empty() {
                 continue;
             }
             if !first {
@@ -749,6 +842,8 @@ impl AppRoot {
     }
 
     /// Fullscreen's metadata bar, using the exact shell of the page top bar.
+    /// Effect insights sit before the shared metadata view, not beside the
+    /// title, so the identity line stays title/artist/repeat/marks.
     pub(in crate::ui) fn fullscreen_top_bar(&self) -> gpui::AnyElement {
         let info = self.top_bar_info();
         let content = div()
@@ -758,27 +853,17 @@ impl AppRoot {
             .flex()
             .items_center()
             .gap_2()
+            .when(info.has_insights(), |this| {
+                this.child(self.top_bar_insights_view(&info))
+                    .child(self.bar_separator())
+            })
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .overflow_hidden()
-                    .child(self.top_bar_info_chip("Output", &info.output)),
-            )
-            .when(!info.codec.is_empty(), |this| {
-                this.child(self.bar_separator()).child(
-                    div()
-                        .flex_none()
-                        .child(self.top_bar_info_chip("File", &info.codec)),
-                )
-            })
-            .when(!info.bitrate.is_empty(), |this| {
-                this.child(self.bar_separator()).child(
-                    div()
-                        .flex_none()
-                        .child(self.top_bar_info_chip("Rate", &info.bitrate)),
-                )
-            });
+                    .child(self.top_bar_info_view(&info, false)),
+            );
         self.top_bar_shell(content).into_any_element()
     }
 
@@ -1021,9 +1106,9 @@ impl AppRoot {
                                         .child(repeat_label(self.repeat)),
                                 )
                             })
-                            // The audio insights sit in the free space left of
-                            // the volume meter: crossfade glyph and the bold N
-                            // normalization mark, matching the fullscreen row.
+                            // The player bar keeps its compact audio insights
+                            // left of the volume meter; fullscreen promotes the
+                            // same marks (plus EQ) to its top-bar insight row.
                             .when(self.player.crossfade(), |this| {
                                 this.child(
                                     div()
@@ -1252,7 +1337,7 @@ mod cover_cache_tests {
 
 #[cfg(test)]
 mod topbar_info_tests {
-    use super::{TopBarInfo, bitrate_label, grouped_integer};
+    use super::{TopBarInfo, bitrate_label, grouped_integer, output_device_label};
 
     #[test]
     fn bitrate_uses_kbps_until_ten_mbit_then_mb_s() {
@@ -1270,8 +1355,23 @@ mod topbar_info_tests {
     }
 
     #[test]
+    fn output_label_names_the_device_and_caps_at_ten_chars() {
+        assert_eq!(output_device_label("bitperfect"), "bitperfect");
+        assert_eq!(output_device_label("  default  "), "default");
+        assert_eq!(output_device_label(""), "Default");
+        assert_eq!(output_device_label("long-device"), "long-devi…");
+        assert_eq!(output_device_label("último-sink"), "último-si…");
+    }
+
+    #[test]
     fn topbar_info_shape_is_shared_and_empty_by_default() {
         let info = TopBarInfo::default();
         assert!(info.output.is_empty() && info.codec.is_empty() && info.bitrate.is_empty());
+        assert!(!info.has_insights());
+        let info = TopBarInfo {
+            normalization: true,
+            ..TopBarInfo::default()
+        };
+        assert!(info.has_insights());
     }
 }

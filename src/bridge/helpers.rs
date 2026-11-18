@@ -449,8 +449,8 @@ pub(crate) async fn search_rows(
             item: crate::model::ItemMeta {
                 id: playlist.id.clone(),
                 title: playlist.name.clone(),
-                cover_url: String::new(),
-                cover_remote: String::new(),
+                cover_url: playlist.cover.clone(),
+                cover_remote: playlist.cover_remote.clone(),
                 album_id: String::new(),
             },
             track: String::new(),

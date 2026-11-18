@@ -20,8 +20,10 @@ open work; this file is the release history.
   `songIndexToRemove` (Navidrome accepts `songIdToRemove` but silently ignores
   it), highest index first in 64-entry batches; moves/inserts rebuild the
   keep-first order, duplicate cleanup collapses the server copy, and returning
-  to the list reloads its count. Local M3U edits and stale playlist-entry cover
-  ids fall back to the library cover.
+  to the list reloads its count. Playlist artwork is force-refreshed after an
+  edit and the same saved thumb now accompanies playlist rows in the unified
+  search overlay. Local M3U edits and stale playlist-entry cover ids fall back
+  to the library cover.
 - **Resilient connectivity:** an offline transition pauses a live library sync,
   keeps its mode, and replays it after reconnect; an in-flight transaction
   rolls back rather than committing a partial pass. The first successful ping
@@ -31,7 +33,7 @@ open work; this file is the release history.
 - **UI and diagnostics:** search rows use one fixed 56 px scroll stride,
   command suggestions ellipsize instead of wrapping, and the debug FPS HUD
   reports the rolling average image load time.
-- **Verification:** 643 tests pass (19 ignored), `cargo clippy --all-targets`
+- **Verification:** 644 tests pass (19 ignored), `cargo clippy --all-targets`
   is clean. Real-server checks: Acutes collapsed 381 → 5 and Oah 417 → 104
   duplicate entries, temporary playlist reorder/delete passed, cold-cache
   cover warming produced 60 thumbnails after an automatic incremental sync,

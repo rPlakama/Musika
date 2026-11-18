@@ -180,6 +180,23 @@ pub(crate) async fn fetch_ids(
     refresh_inner(pool, client, &ids, &[], false).await
 }
 
+/// Fetches specific cover ids unconditionally (no ETag/Last-Modified),
+/// replacing the cached image. Playlist covers are regenerated server-side
+/// while their ids stay stable, so a normal conditional fetch would keep the
+/// old thumbnail forever.
+pub(crate) async fn fetch_ids_forced(
+    pool: &SqlitePool,
+    client: &Arc<SubsonicClient>,
+    ids: &[String],
+) -> Result<CoverReport> {
+    let ids: BTreeSet<String> = ids.iter().filter(|id| !id.is_empty()).cloned().collect();
+    if ids.is_empty() {
+        return Ok(CoverReport::default());
+    }
+    let forced: Vec<String> = ids.iter().cloned().collect();
+    refresh_inner(pool, client, &ids, &forced, false).await
+}
+
 async fn refresh_inner(
     pool: &SqlitePool,
     client: &Arc<SubsonicClient>,

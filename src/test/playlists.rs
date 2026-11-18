@@ -2589,3 +2589,70 @@ fn assert_le_batch(request: &str) {
         assert!(count <= 64, "{key} batch has {count} ids: {request}");
     }
 }
+
+/// Search rows carry the same playlist artwork as the Playlists scope. The
+/// provider URL is the fallback while the local thumb is cold; resolving it
+/// also queues the on-demand cover cache write.
+#[tokio::test]
+async fn search_rows_include_playlist_cover_fallbacks() {
+    let credentials = playlist_pool().await;
+    sqlx::migrate!("./migrations")
+        .run(&credentials)
+        .await
+        .unwrap();
+    crate::crypto::use_test_key();
+    crate::sqlite::save_credentials(
+        &credentials,
+        "alice",
+        "secret",
+        "http://server.test",
+        "navidrome",
+    )
+    .await
+    .unwrap();
+    let library = playlist_pool().await;
+    sqlx::migrate!("./migrations_library")
+        .run(&library)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "CREATE TABLE covers (
+             id TEXT PRIMARY KEY, file TEXT NOT NULL, hash TEXT, content_type TEXT,
+             size INTEGER, etag TEXT, last_modified TEXT, fetched_at TEXT NOT NULL);",
+    )
+    .execute(&library)
+    .await
+    .unwrap();
+    let playlist = playlist_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO playlist (id, source, name, cover_art, song_count, duration, fetched_at)
+             VALUES ('pl1', 'subsonic', 'Mix', 'pl-cover', 2, 200, 0);",
+    )
+    .execute(&playlist)
+    .await
+    .unwrap();
+    let dbs = dbs_with_credentials(&credentials, &library, &playlist);
+
+    let hits = search_rows(&dbs, "mix", 10).await.unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].name, "Mix");
+    assert!(
+        hits[0].cover.contains("getCoverArt"),
+        "provider fallback: {}",
+        hits[0].cover
+    );
+    assert!(
+        hits[0].cover_remote.contains("getCoverArt"),
+        "provider fallback: {}",
+        hits[0].cover_remote
+    );
+    assert!(
+        hits[0].cover_remote.contains("id=pl-cover"),
+        "playlist cover id: {}",
+        hits[0].cover_remote
+    );
+}

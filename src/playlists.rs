@@ -758,6 +758,10 @@ pub struct PlaylistHit {
     pub name: String,
     pub subtitle: String,
     pub meta: String,
+    /// Local cover URL, when the playlist's provider/first-entry art is cached.
+    pub cover: String,
+    /// Provider fallback while the local copy is cold.
+    pub cover_remote: String,
 }
 
 /// One playlist segment row, deriving the same title/subtitle/meta text the
@@ -808,6 +812,26 @@ fn playlist_segment_row(
     }
 }
 
+/// First non-empty entry cover per playlist, in position order.
+async fn first_playlist_covers(
+    dbs: &Dbs,
+) -> Result<std::collections::HashMap<String, String>> {
+    let entries: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT playlist_id, cover_art FROM playlist_song
+         WHERE cover_art IS NOT NULL AND cover_art != ''
+         ORDER BY playlist_id, position",
+    )
+    .fetch_all(&dbs.playlist)
+    .await?;
+    let mut map = std::collections::HashMap::new();
+    for (playlist_id, cover) in entries {
+        if let Some(cover) = cover {
+            map.entry(playlist_id).or_insert(cover);
+        }
+    }
+    Ok(map)
+}
+
 /// The segment payload: every playlist, m3u and Subsonic, as typed list rows.
 pub async fn list(dbs: &Dbs) -> Result<Vec<crate::model::Row>> {
     list_filtered(dbs, false).await
@@ -825,22 +849,7 @@ pub async fn list_filtered(dbs: &Dbs, downloaded_only: bool) -> Result<Vec<crate
     )
     .fetch_all(&dbs.playlist)
     .await?;
-    let first_covers: std::collections::HashMap<String, String> = {
-        let entries: Vec<(String, Option<String>)> = sqlx::query_as(
-            "SELECT playlist_id, cover_art FROM playlist_song
-             WHERE cover_art IS NOT NULL AND cover_art != ''
-             ORDER BY playlist_id, position",
-        )
-        .fetch_all(&dbs.playlist)
-        .await?;
-        let mut map = std::collections::HashMap::new();
-        for (playlist_id, cover) in entries {
-            if let Some(cover) = cover {
-                map.entry(playlist_id).or_insert(cover);
-            }
-        }
-        map
-    };
+    let first_covers = first_playlist_covers(dbs).await?;
     let mut ids: Vec<Option<String>> = rows.iter().map(|row| row.cover_art.clone()).collect();
     ids.extend(first_covers.values().cloned().map(Some));
     let covers = crate::covers::url_map_for(dbs, ids.iter()).await?;
@@ -941,6 +950,8 @@ async fn load_subsonic_songs(dbs: &Dbs, client: &SubsonicClient, playlist_id: &s
                 // them agree with the deduplicated server copy.
                 if let Err(err) = refresh_subsonic(dbs, client).await {
                     eprintln!("playlists: could not refresh after cleaning duplicates: {err:#}");
+                } else {
+                    refresh_playlist_cover(dbs, client, playlist_id).await;
                 }
             }
             Err(err) => {
@@ -987,6 +998,34 @@ async fn server_playlist_order(
     let raw = fetch_server_playlist_ids(&client, &playlist.id).await?;
     let ordered = dedup_keep_first_ids(&raw);
     Ok((client, raw, ordered))
+}
+
+/// Playlist cover images are regenerated server-side when entries change,
+/// often under the same id. Force one download so the list/search thumbnails
+/// show the new image instead of the stale conditional-cache copy.
+async fn refresh_playlist_cover(
+    dbs: &Dbs,
+    client: &SubsonicClient,
+    playlist_id: &str,
+) {
+    let Ok(Some(Some(cover))) = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT cover_art FROM playlist WHERE id = ?1",
+    )
+    .bind(playlist_id)
+    .fetch_optional(&dbs.playlist)
+    .await
+    else {
+        return;
+    };
+    if cover.trim().is_empty() {
+        return;
+    }
+    let client = std::sync::Arc::new(client.clone());
+    if let Err(err) =
+        crate::covers::fetch_ids_forced(&dbs.covers, &client, std::slice::from_ref(&cover)).await
+    {
+        eprintln!("playlists: could not refresh the playlist cover: {err:#}");
+    }
 }
 
 /// Removes raw entry indexes (highest first) and appends `add` in bounded
@@ -1051,6 +1090,7 @@ async fn replace_server_playlist(
     refresh_subsonic(dbs, client)
         .await
         .context("refreshing the server playlist list")?;
+    refresh_playlist_cover(dbs, client, &playlist.id).await;
     Ok(())
 }
 
@@ -1461,22 +1501,33 @@ pub async fn search_rows(dbs: &Dbs, query: &str, limit: i64) -> Result<Vec<Playl
     .bind(limit.max(1))
     .fetch_all(&dbs.playlist)
     .await?;
+    let first_covers = first_playlist_covers(dbs).await?;
+    let mut cover_ids: Vec<Option<String>> = rows.iter().map(|row| row.cover_art.clone()).collect();
+    cover_ids.extend(first_covers.values().cloned().map(Some));
+    let covers = crate::covers::url_map_for(dbs, cover_ids.iter()).await?;
+    let remotes = crate::covers::remote_map_for(dbs, cover_ids.iter()).await?;
     Ok(rows
         .iter()
-        .map(|row| PlaylistHit {
-            id: row.id.clone(),
-            name: row.name.clone(),
-            subtitle: format!(
-                "{} · {} song{}",
-                playlist_origin(row),
-                row.song_count,
-                if row.song_count == 1 { "" } else { "s" }
-            ),
-            meta: if row.duration > 0 {
-                crate::browse::rows::format_duration(Some(row.duration as i32))
-            } else {
-                String::new()
-            },
+        .map(|row| {
+            let segment =
+                playlist_segment_row(row, &covers, &remotes, first_covers.get(&row.id));
+            PlaylistHit {
+                id: row.id.clone(),
+                name: row.name.clone(),
+                subtitle: format!(
+                    "{} · {} song{}",
+                    playlist_origin(row),
+                    row.song_count,
+                    if row.song_count == 1 { "" } else { "s" }
+                ),
+                meta: if row.duration > 0 {
+                    crate::browse::rows::format_duration(Some(row.duration as i32))
+                } else {
+                    String::new()
+                },
+                cover: segment.item.cover_url,
+                cover_remote: segment.item.cover_remote,
+            }
         })
         .collect())
 }
@@ -1710,6 +1761,7 @@ pub async fn remove_from_playlist(
         refresh_subsonic(dbs, &client)
             .await
             .context("refreshing the server playlist list")?;
+        refresh_playlist_cover(dbs, &client, &playlist.id).await;
     }
     Ok(display_playlist_name(&playlist.name))
 }
@@ -1751,6 +1803,7 @@ pub async fn remove_playlist_positions(
         refresh_subsonic(dbs, &client)
             .await
             .context("refreshing the server playlist list")?;
+        refresh_playlist_cover(dbs, &client, &playlist.id).await;
     }
     Ok(display_playlist_name(&playlist.name))
 }

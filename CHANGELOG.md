@@ -3,6 +3,40 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.7.5 - _Incremental Patches_
+
+- **One fullscreen status surface:** the page bar and fullscreen view now share
+  `TopBarInfo` and the same bar styling. Fullscreen shows the live output node,
+  codec and source rate/file before the track metadata, and carries crossfade,
+  normalization, EQ, favorite and download marks in that row. The output label
+  names the actual sink (ten-character cap), and protocol v6 adds the source
+  file snapshot. The duplicate normalization badge in the player bar is gone.
+- **Palette controls:** contrast is configurable (40% default) and saturation
+  takes a signed HCT chroma offset (-1..1). `colors contrast|saturation` and
+  the `Ctrl-,` numeric rows apply live to the current cover, and the settings
+  are persisted with the palette cache tag.
+- **Playlist correctness:** Enter on a playlist page starts at the cursor row.
+  Server edits fetch the raw playlist order first and remove entries with
+  `songIndexToRemove` (Navidrome accepts `songIdToRemove` but silently ignores
+  it), highest index first in 64-entry batches; moves/inserts rebuild the
+  keep-first order, duplicate cleanup collapses the server copy, and returning
+  to the list reloads its count. Local M3U edits and stale playlist-entry cover
+  ids fall back to the library cover.
+- **Resilient connectivity:** an offline transition pauses a live library sync,
+  keeps its mode, and replays it after reconnect; an in-flight transaction
+  rolls back rather than committing a partial pass. The first successful ping
+  now starts an incremental pass, and a deep automatic pass warms cover art.
+  A vanished PipeWire output node falls back to the default sink and persists
+  `follow_default`.
+- **UI and diagnostics:** search rows use one fixed 56 px scroll stride,
+  command suggestions ellipsize instead of wrapping, and the debug FPS HUD
+  reports the rolling average image load time.
+- **Verification:** 643 tests pass (19 ignored), `cargo clippy --all-targets`
+  is clean. Real-server checks: Acutes collapsed 381 → 5 and Oah 417 → 104
+  duplicate entries, temporary playlist reorder/delete passed, cold-cache
+  cover warming produced 60 thumbnails after an automatic incremental sync,
+  and the release Nix build succeeds.
+
 ## 0.7.4 - _Deeper mechanism, various additions_
 
 - **A real playback core:** stream failures now carry a structured kind/stage

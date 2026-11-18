@@ -6,10 +6,10 @@ use gpui::StatefulInteractiveElement;
 /// Identity of the currently playing cover. The same album keeps the same
 /// thumb and full-resolution sources (and skips every reload/fade) across its
 /// tracks, even when per-song cover ids/URLs differ.
-/// The metadata and audio insights both top bars fill. The main bar uses the
-/// compact form (file quality); fullscreen adds the effect row and output.
+/// The metadata and status insights both top bars fill. The main bar uses the
+/// compact form (file quality); fullscreen adds the insight row and output.
 /// `TopBarInfo` is the single shape, so neither bar re-derives labels, device
-/// shortening, bitrate units or insight state.
+/// shortening, bitrate units, effect state or track marks.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(in crate::ui) struct TopBarInfo {
     pub output: String,
@@ -18,11 +18,19 @@ pub(in crate::ui) struct TopBarInfo {
     pub crossfade: bool,
     pub normalization: bool,
     pub equalizer: bool,
+    pub favorite: bool,
+    pub downloaded: bool,
+    pub pending_download: bool,
 }
 
 impl TopBarInfo {
     fn has_insights(&self) -> bool {
-        self.crossfade || self.normalization || self.equalizer
+        self.crossfade
+            || self.normalization
+            || self.equalizer
+            || self.favorite
+            || self.downloaded
+            || self.pending_download
     }
 }
 
@@ -701,6 +709,8 @@ impl AppRoot {
         let Some(track) = self.player.current() else {
             return insights;
         };
+        let pending_download = self.marks.pending(&track.id, &track.album_id);
+        let downloaded = self.marks.downloaded(&track.id, &track.album_id);
         let info = self
             .track_info
             .as_ref()
@@ -716,6 +726,9 @@ impl AppRoot {
         TopBarInfo {
             codec,
             bitrate,
+            favorite: track.favorite,
+            downloaded,
+            pending_download,
             ..insights
         }
     }
@@ -732,8 +745,9 @@ impl AppRoot {
             .into_any_element()
     }
 
-    /// Audio-effect insights in one place so the fullscreen identity row no
-    /// longer repeats them. The top bar paints this row before the metadata.
+    /// Status insights in one place so the fullscreen identity row no longer
+    /// repeats effects or track marks. The top bar paints this row before the
+    /// metadata.
     fn top_bar_insights_view(&self, info: &TopBarInfo) -> gpui::AnyElement {
         let mut row = div().flex().flex_none().items_center().gap_1();
         if info.crossfade {
@@ -760,6 +774,28 @@ impl AppRoot {
                     .text_color(rgb(palette::primary()))
                     .child("EQ"),
             ));
+        }
+        if info.favorite {
+            row = row.child(self.top_bar_insight_slot(icon(
+                "baseline-favorite.svg",
+                16.0,
+                FAVORITE_GOLD,
+            )));
+        }
+        if info.pending_download {
+            row = row.child(self.top_bar_insight_slot(spinning_icon(
+                "fullscreen-topbar-download-spin",
+                0,
+                "loading-loop.svg",
+                16.0,
+                palette::primary(),
+            )));
+        } else if info.downloaded {
+            row = row.child(self.top_bar_insight_slot(icon(
+                "outline-download.svg",
+                16.0,
+                palette::primary(),
+            )));
         }
         row.into_any_element()
     }
@@ -1368,10 +1404,15 @@ mod topbar_info_tests {
         let info = TopBarInfo::default();
         assert!(info.output.is_empty() && info.codec.is_empty() && info.bitrate.is_empty());
         assert!(!info.has_insights());
-        let info = TopBarInfo {
-            normalization: true,
-            ..TopBarInfo::default()
-        };
-        assert!(info.has_insights());
+        for info in [
+            TopBarInfo { crossfade: true, ..TopBarInfo::default() },
+            TopBarInfo { normalization: true, ..TopBarInfo::default() },
+            TopBarInfo { equalizer: true, ..TopBarInfo::default() },
+            TopBarInfo { favorite: true, ..TopBarInfo::default() },
+            TopBarInfo { downloaded: true, ..TopBarInfo::default() },
+            TopBarInfo { pending_download: true, ..TopBarInfo::default() },
+        ] {
+            assert!(info.has_insights());
+        }
     }
 }

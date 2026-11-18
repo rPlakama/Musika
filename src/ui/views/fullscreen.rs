@@ -139,33 +139,16 @@ impl AppRoot {
         let title_size = (metrics::font_size("headline", self.win_h)
             * metrics::width_scale(self.win_w))
         .clamp(18.0, 32.0);
-        let favorite = track.as_ref().is_some_and(|track| track.favorite);
-        let pending = track
-            .as_ref()
-            .is_some_and(|track| self.marks.pending(&track.id, &track.album_id));
-        let downloaded = track
-            .as_ref()
-            .is_some_and(|track| self.marks.downloaded(&track.id, &track.album_id));
         // Natural widths for the identity line: the title is sized to its text
         // (capped to the row budget) so the artist sits immediately after it
         // instead of being pinned to the right edge; the repeat insight follows
-        // the artist and the marks keep the right edge via a flexible spacer.
+        // the artist. Effects and track marks live in the top bar.
         let repeat_visible = self.repeat != crate::player::Repeat::Off;
         let repeat_text = repeat_label(self.repeat);
         let identity_inner = (self.win_w - 50.0).max(220.0);
-        let mark_gap = 8.0;
-        let mut marks_width = 0.0;
-        if favorite {
-            marks_width += (title_size * 0.62).clamp(13.0, 19.0) + mark_gap;
-        }
-        if pending {
-            marks_width += (title_size * 0.58).clamp(12.0, 18.0) + mark_gap;
-        }
-        if downloaded && !pending {
-            marks_width += (title_size * 0.58).clamp(12.0, 18.0) + mark_gap;
-        }
+        let repeat_gap = 8.0;
         let repeat_width = if repeat_visible {
-            line_width(window, repeat_text, 12.0, 400.0) + mark_gap
+            line_width(window, repeat_text, 12.0, 400.0) + repeat_gap
         } else {
             0.0
         };
@@ -177,7 +160,7 @@ impl AppRoot {
             } else {
                 line_width(window, &artist, 12.0, 400.0)
             },
-            marks_width + repeat_width,
+            repeat_width,
         );
         // The same predicate that blocks Tab in `on_tab` gates the focus
         // chrome: while the lyrics overlay owns the keyboard, the player
@@ -356,8 +339,8 @@ impl AppRoot {
                     .child(
                         // One identity line: the title keeps the focus border
                         // and its Alt anchor, the artist sits immediately to
-                        // its right, the repeat insight follows the artist and
-                        // the favourite/pending/download marks keep the edge.
+                        // its right, and the repeat insight follows the artist.
+                        // Effects and track marks live in the top bar.
                         div()
                             .w_full()
                             .rounded_md()
@@ -432,7 +415,8 @@ impl AppRoot {
                                     .when(repeat_visible, |this| {
                                         // Repeat insight: the same "one"/"all"
                                         // label the bottom player bar uses,
-                                        // placed next to the artist.
+                                        // placed next to the artist. Effects
+                                        // and track marks live in the top bar.
                                         this.child(
                                             div()
                                                 .flex_none()
@@ -440,30 +424,6 @@ impl AppRoot {
                                                 .text_color(rgb(palette::primary()))
                                                 .child(repeat_text),
                                         )
-                                    })
-                                    .child(div().flex_1().min_w(px(8.0)))
-                                    .when(favorite, |this| {
-                                        this.child(icon(
-                                            "baseline-favorite.svg",
-                                            (title_size * 0.62).clamp(13.0, 19.0),
-                                            FAVORITE_GOLD,
-                                        ))
-                                    })
-                                    .when(pending, |this| {
-                                        this.child(spinning_icon(
-                                            "fullscreen-download-spin",
-                                            0,
-                                            "loading-loop.svg",
-                                            (title_size * 0.58).clamp(12.0, 18.0),
-                                            palette::primary(),
-                                        ))
-                                    })
-                                    .when(downloaded && !pending, |this| {
-                                        this.child(icon(
-                                            "outline-download.svg",
-                                            (title_size * 0.58).clamp(12.0, 18.0),
-                                            palette::primary(),
-                                        ))
                                     }),
                             ),
                     )
@@ -527,9 +487,9 @@ impl AppRoot {
 /// Sizes for the fullscreen identity line.
 ///
 /// The title is shaped to its text and then capped so the artist sits right
-/// after it while the repeat insight and the right-edge marks still fit. The
-/// artist is capped independently; both fall back to a minimum so a very
-/// narrow window still shows something before the row clips.
+/// after it while the repeat insight still fits. The artist is capped
+/// independently; both fall back to a minimum so a very narrow window still
+/// shows something before the row clips.
 pub(in crate::ui) fn identity_widths(
     inner: f32,
     title: f32,

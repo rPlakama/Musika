@@ -270,8 +270,8 @@ impl AppRoot {
         }
         let mut songs: Vec<String> = Vec::new();
         let mut albums: Vec<String> = Vec::new();
-        // The fullscreen title shows the current track's marks even when it is
-        // not part of the visible list window.
+        // The fullscreen top bar shows the current track's marks even when it
+        // is not part of the visible list window.
         if let Some(track) = self.player.current() {
             if !track.id.is_empty() {
                 songs.push(track.id.clone());

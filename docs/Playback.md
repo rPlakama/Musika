@@ -318,10 +318,10 @@ reliability and CI items remain roadmap work.
   resampler, and dither.
 - Transitions/loudness: close the rate-change gap, add fade-in/out, optional
   crossfade, and loudness normalization.
-- Crossfade UI: a control beside repeat, using the provided
+- Crossfade UI: a top-bar insight using the provided
   `src/icons/transition-fade-sharp.svg`, bound to `Ctrl+F`.
-- Normalization UI: a bold `N` on the top bar and in fullscreen to the right of
-  repeat, bound to `Ctrl+Shift+N`. `Ctrl+N` stays next-track.
+- Normalization UI: a bold `N` in the top-bar insight row, bound to
+  `Ctrl+Shift+N`. `Ctrl+N` stays next-track.
 - Engineering: playback counters plus structured errors; extend the
   `PlaybackCore` model tests and add media fuzz tests.
 - Rejected/deferred: no configurable buffer/latency settings; no deeper
@@ -420,11 +420,12 @@ reliability and CI items remain roadmap work.
   fallback) and the worker applies the linear gain before the ring in the F32
   domain (final clipping is left to the graph/device). Default off; no EBU R128
   scan yet.
-- **UI:** a bold `N` chip on both top bars; fullscreen puts crossfade, `N`
-  and `EQ` insights before its output/file metadata, and the output chip names
-  the active device (ten characters max) instead of its backend. Mode changes
-  travel through `PlayerOp` and the existing `PlaybackState.reserved` bits (no
-  frame-size change). All of it is session-only, like volume.
+- **UI:** a bold `N` chip on both top bars; fullscreen puts crossfade, `N`,
+  `EQ`, favourite and download marks before its output/file metadata, and the
+  output chip names the active device (ten characters max) instead of its
+  backend. Mode changes travel through `PlayerOp` and the existing
+  `PlaybackState.reserved` bits (no frame-size change). All of it is
+  session-only, like volume.
 - **Tests:** unit tests for the fade envelope, ReplayGain mode selection and
   clipping, crossfade-aware boundary offset, protocol round-trips and core
   state; the live ignored crossfade test asserts the boundary arrives with a

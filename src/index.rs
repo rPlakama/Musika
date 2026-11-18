@@ -47,6 +47,12 @@ pub struct SyncReport {
     pub songs: usize,
     /// The caller starts the asynchronous cover pass after the sync returns.
     pub covers_due: bool,
+    /// Whether this pass exercised the deep reconciler, either because the
+    /// caller asked for it or because the periodic full-sync deadline or a
+    /// low manifest overlap forced it. The cover pass follows this, not the
+    /// requested [`crate::bridge::SyncMode`], so an automatic incremental pass
+    /// that is internally deep still warms playlist/album art.
+    pub deep: bool,
     /// Covers whose album art changed, forced past the conditional request.
     pub forced_covers: Vec<String>,
     /// Lyrics fetched by the bounded sync backfill.
@@ -54,6 +60,14 @@ pub struct SyncReport {
     /// ARC-44: server playlists refreshed by this run.
     #[cfg_attr(not(debug_assertions), allow(dead_code))]
     pub playlists: usize,
+}
+
+impl SyncReport {
+    /// A deep pass that found covers worth revalidating: the caller should run
+    /// the cover cache pass even when the request was `Incremental`.
+    pub fn wants_cover_pass(&self) -> bool {
+        self.deep && self.covers_due
+    }
 }
 
 /// Coarse progress update emitted while a sync runs.
@@ -387,6 +401,7 @@ where
         albums: after.1.max(0) as usize,
         songs: after.0.max(0) as usize,
         covers_due,
+        deep,
         forced_covers: changes.covers,
         lyrics,
         playlists,

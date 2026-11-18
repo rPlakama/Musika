@@ -2360,3 +2360,60 @@ async fn referenced_cover_ids_include_playlist_and_entry_art() {
     assert!(ids.contains("pl-cover"));
     assert!(ids.contains("dc-1"));
 }
+
+#[test]
+fn playlist_rows_fall_back_to_a_resolvable_library_cover() {
+    let entry = "entry-cover".to_string();
+    let library = "library-cover".to_string();
+    let covers = std::collections::HashMap::from([(
+        library.clone(),
+        "file:///covers/library.jpg".to_string(),
+    )]);
+    let remotes = std::collections::HashMap::from([(
+        "remote-cover".to_string(),
+        "https://server/getCoverArt?id=remote".to_string(),
+    )]);
+
+    // A stale entry id must not blank out the warmed library art.
+    assert_eq!(
+        playlist_row_cover(Some(&entry), Some(&library), &covers, &remotes),
+        Some(&library)
+    );
+    // The entry cover wins when it is locally cached...
+    assert_eq!(
+        playlist_row_cover(
+            Some(&entry),
+            Some(&library),
+            &std::collections::HashMap::from([(
+                entry.clone(),
+                "file:///covers/entry.jpg".to_string(),
+            )]),
+            &remotes,
+        ),
+        Some(&entry)
+    );
+    // ...or has a provider fallback.
+    assert_eq!(
+        playlist_row_cover(
+            Some(&"remote-cover".to_string()),
+            Some(&library),
+            &covers,
+            &remotes,
+        ),
+        Some(&"remote-cover".to_string())
+    );
+    // Nothing resolvable preserves the entry preference.
+    assert_eq!(
+        playlist_row_cover(
+            Some(&entry),
+            Some(&library),
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        ),
+        Some(&entry)
+    );
+    assert_eq!(
+        playlist_row_cover(None, None, &covers, &remotes),
+        None
+    );
+}

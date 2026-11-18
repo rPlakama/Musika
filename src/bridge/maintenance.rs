@@ -235,7 +235,11 @@ async fn run_sync_once(tx: UnboundedSender<Event>, mode: SyncMode) -> anyhow::Re
     })
     .await
     .map_err(|err| anyhow::anyhow!("Library sync failed: {err:#}"))?;
-    if mode != SyncMode::Incremental && report.covers_due {
+    // `mode` only says what the caller asked for. The first/periodic pass can
+    // be internally deep while still being `Incremental` (the automatic
+    // startup/login sync), and that pass must warm playlist/entry art just as
+    // a manual deep pass does. A shallow increment stays cover-light.
+    if report.wants_cover_pass() {
         _ = tx.send(Event::SyncProgress {
             message: "Refreshing covers…".to_string(),
             done: 90,

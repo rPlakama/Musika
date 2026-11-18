@@ -1096,6 +1096,26 @@ async fn store_deduped_page_rows(
     Ok(())
 }
 
+/// Picks the cover a playlist row can actually paint.
+///
+/// The playlist entry's art is preferred when the cache or the provider URL
+/// map has it. A stale entry id (typically from an older playlist refresh)
+/// must not blank out the canonical library-song cover the cover pass already
+/// warmed; the library cover is the fallback.
+pub(crate) fn playlist_row_cover<'a>(
+    entry: Option<&'a String>,
+    library: Option<&'a String>,
+    covers: &std::collections::HashMap<String, String>,
+    remotes: &std::collections::HashMap<String, String>,
+) -> Option<&'a String> {
+    let usable = |id: &&String| covers.contains_key(*id) || remotes.contains_key(*id);
+    entry
+        .filter(usable)
+        .or_else(|| library.filter(usable))
+        .or(entry)
+        .or(library)
+}
+
 /// The playlist page payload: identity, song rows and every distinct song cover
 /// for the header collage. Rows keep playlist order and never show a song
 /// twice, even when the cache could not be cleaned.
@@ -1184,10 +1204,14 @@ pub async fn page(
     let mut list_rows: Vec<crate::model::Row> = Vec::with_capacity(rows.len());
     for row in &rows {
         let library_song = row.song_id.as_ref().and_then(|id| by_id.get(id));
-        let cover_id = row
+        let entry_cover = row
             .cover_art
             .as_ref()
-            .or_else(|| library_song.and_then(|song| song.cover_art.as_ref()));
+            .filter(|cover| !cover.trim().is_empty());
+        let library_cover = library_song
+            .and_then(|song| song.cover_art.as_ref())
+            .filter(|cover| !cover.trim().is_empty());
+        let cover_id = playlist_row_cover(entry_cover, library_cover, &covers, &remotes);
         let cover = cover_id
             .and_then(|id| covers.get(id).cloned())
             .unwrap_or_default();

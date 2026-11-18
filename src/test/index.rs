@@ -19,3 +19,20 @@ fn complete_fetches_pass_and_partial_ones_fail() {
     let err = ensure_complete(&["a".to_string(), "b".to_string()], 3).unwrap_err();
     assert!(err.to_string().contains("2 of 3"));
 }
+
+#[test]
+fn cover_pass_follows_the_effective_depth() {
+    let report = SyncReport {
+        deep: true,
+        covers_due: true,
+        ..SyncReport::default()
+    };
+    assert!(report.wants_cover_pass());
+
+    let shallow = SyncReport {
+        deep: false,
+        covers_due: true,
+        ..SyncReport::default()
+    };
+    assert!(!shallow.wants_cover_pass());
+}

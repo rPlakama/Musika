@@ -1142,9 +1142,9 @@ impl AppRoot {
                                         .child(repeat_label(self.repeat)),
                                 )
                             })
-                            // The player bar keeps its compact audio insights
-                            // left of the volume meter; fullscreen promotes the
-                            // same marks (plus EQ) to its top-bar insight row.
+                            // The player bar keeps crossfade/EQ left of the
+                            // volume meter; normalization lives in the top bar
+                            // so the same N is not painted twice.
                             .when(self.player.crossfade(), |this| {
                                 this.child(
                                     div()
@@ -1156,16 +1156,6 @@ impl AppRoot {
                                             (m.time_size * 1.35).clamp(13.0, 18.0),
                                             palette::primary(),
                                         )),
-                                )
-                            })
-                            .when(self.player.normalization().enabled(), |this| {
-                                this.child(
-                                    div()
-                                        .flex_none()
-                                        .text_size(px(m.time_size + 1.0))
-                                        .font_weight(gpui::FontWeight::BOLD)
-                                        .text_color(rgb(palette::primary()))
-                                        .child("N"),
                                 )
                             })
                             .when_some(self.eq_profile.clone(), |this, _name| {

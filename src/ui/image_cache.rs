@@ -32,7 +32,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Instant;
 
 use futures_util::FutureExt as _;
 use gpui::{
@@ -67,6 +68,8 @@ const STALE_FRAMES: u64 = 2;
 /// else is still released two frames after it stops being painted.
 pub(crate) const DEFAULT_WARM_SLOTS: usize = 3;
 const MAX_WARM_SLOTS: usize = 8;
+/// Completed image loads kept for the HUD's average load-time reading.
+const LOAD_SAMPLE_WINDOW: usize = 128;
 /// Smallest decode edge worth keeping warm. Row/player thumbnails (64-384 px)
 /// are cheap to re-decode and would otherwise crowd the hero slots.
 const WARM_MIN_EDGE: u32 = 512;
@@ -130,11 +133,54 @@ pub(crate) struct CacheStats {
     pub hits: u64,
     /// Loads that had to start a decode.
     pub misses: u64,
+    /// Average wall time of the completed loads in the recent window,
+    /// including provider fetch time for remote art.
+    pub load_us: u64,
+    /// Number of completed loads in that window.
+    pub load_samples: usize,
 }
 
 impl CacheStats {
     pub(crate) fn mib(self) -> f32 {
         self.bytes as f32 / BYTES_PER_MIB as f32
+    }
+}
+
+/// Rolling window of completed image-load durations, in microseconds.
+#[derive(Debug)]
+struct LoadWindow {
+    samples: [u64; LOAD_SAMPLE_WINDOW],
+    head: usize,
+    len: usize,
+}
+
+impl Default for LoadWindow {
+    fn default() -> Self {
+        Self {
+            samples: [0; LOAD_SAMPLE_WINDOW],
+            head: 0,
+            len: 0,
+        }
+    }
+}
+
+impl LoadWindow {
+    fn push(&mut self, micros: u64) {
+        self.samples[self.head] = micros;
+        self.head = (self.head + 1) % LOAD_SAMPLE_WINDOW;
+        self.len = (self.len + 1).min(LOAD_SAMPLE_WINDOW);
+    }
+
+    fn average_us(&self) -> u64 {
+        if self.len == 0 {
+            return 0;
+        }
+        let sum: u64 = self.samples.iter().take(self.len).sum();
+        sum / self.len as u64
+    }
+
+    fn samples(&self) -> usize {
+        self.len
     }
 }
 
@@ -163,6 +209,9 @@ pub(crate) struct BoundedImageCache {
     /// Large decoded images retained across page changes (see
     /// [`DEFAULT_WARM_SLOTS`]).
     warm_slots: usize,
+    /// Completed load durations for the debug HUD, written by the background
+    /// decode/fetch task when it actually finishes.
+    loads: Arc<Mutex<LoadWindow>>,
 }
 
 /// One decode in flight. The task is owned by the cache entry, so dropping
@@ -201,6 +250,7 @@ impl BoundedImageCache {
             frame: 0,
             touch_seq: 0,
             warm_slots: warm_slots_from(std::env::var("MUSIKA_IMAGE_CACHE_WARM").ok().as_deref()),
+            loads: Arc::new(Mutex::new(LoadWindow::default())),
         }
     }
 
@@ -265,11 +315,14 @@ impl BoundedImageCache {
     }
 
     pub(crate) fn stats(&self) -> CacheStats {
+        let loads = self.loads.lock().unwrap_or_else(PoisonError::into_inner);
         CacheStats {
             entries: self.entries.len(),
             bytes: self.lru.used,
             hits: self.hits,
             misses: self.misses,
+            load_us: loads.average_us(),
+            load_samples: loads.samples(),
         }
     }
 
@@ -382,7 +435,7 @@ impl BoundedImageCache {
             self.unload(key, window, cx);
         }
         self.misses = self.misses.saturating_add(1);
-        let task = load_image_task(resource, cx, edge);
+        let task = load_image_task(resource, cx, edge, Arc::clone(&self.loads));
         self.entries.insert(
             key,
             Entry {
@@ -557,20 +610,40 @@ fn is_stale(frame: u64, last_used: u64) -> bool {
 /// Builds the loading task for one image: local files decode through the
 /// display-sized fast decoder; everything else (remote provider art, embedded
 /// assets) keeps gpui's stock loader.
-fn load_image_task(resource: &Resource, cx: &mut App, max_edge: u32) -> DecodeFuture {
+fn load_image_task(
+    resource: &Resource,
+    cx: &mut App,
+    max_edge: u32,
+    loads: Arc<Mutex<LoadWindow>>,
+) -> DecodeFuture {
+    let started = Instant::now();
     let Some(path) = cappable_path(resource) else {
         let future = AssetLogger::<ImageAssetLoader>::load(resource.clone(), cx);
-        return Box::pin(cx.background_executor().spawn(future));
+        return Box::pin(cx.background_executor().spawn(async move {
+            let result = future.await;
+            record_load(&loads, started);
+            result
+        }));
     };
     let max_edge = if max_edge == 0 {
         decode_max_edge()
     } else {
         max_edge
     };
-    Box::pin(
-        cx.background_executor()
-            .spawn(async move { fast_image::decode_for_display(&path, max_edge) }),
-    )
+    Box::pin(cx.background_executor().spawn(async move {
+        let result = fast_image::decode_for_display(&path, max_edge);
+        record_load(&loads, started);
+        result
+    }))
+}
+
+/// Records one completed image load for the debug HUD.
+fn record_load(loads: &Mutex<LoadWindow>, started: Instant) {
+    let micros = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+    loads
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(micros);
 }
 
 /// Local files that decode through [`decode_capped_file`]. Animated cover
@@ -869,6 +942,24 @@ mod tests {
         cache.set_warm_slots(0);
         insert_loaded(&mut cache, 1, true, 10);
         assert!(cache.warm_keys().is_empty());
+    }
+
+    #[test]
+    fn image_load_average_uses_the_recent_window() {
+        let mut loads = LoadWindow::default();
+        assert_eq!(loads.average_us(), 0);
+        for _ in 0..10 {
+            loads.push(2_000);
+        }
+        assert_eq!(loads.average_us(), 2_000);
+        assert_eq!(loads.samples(), 10);
+
+        // Push past the window: only the last 128 samples count (3..=130).
+        for value in 1..=130 {
+            loads.push(value * 1_000);
+        }
+        assert_eq!(loads.samples(), LOAD_SAMPLE_WINDOW);
+        assert_eq!(loads.average_us(), 66_500);
     }
 
     #[test]

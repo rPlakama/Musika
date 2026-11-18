@@ -93,7 +93,11 @@ impl Render for AppRoot {
             self.recenter_after_resize();
         }
         #[cfg(debug_assertions)]
-        self.frame_hud.observe(self.clock.dt);
+        {
+            let image_load_us = self.image_cache.read(cx).stats().load_us;
+            self.frame_hud.observe(self.clock.dt);
+            self.frame_hud.observe_image_load(image_load_us);
+        }
         palette::publish(self.palette_motion.value(&self.clock));
         if !self.palette_motion.settled(&self.clock) {
             perf::request_frame(window, "palette");

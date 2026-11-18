@@ -113,11 +113,21 @@ impl FrameStats {
 #[derive(Default)]
 pub struct FrameHud {
     stats: FrameStats,
+    image_load_us: u64,
 }
 
 impl FrameHud {
     pub fn observe(&mut self, dt: f32) {
         self.stats.push(dt * 1000.0);
+    }
+
+    /// Mirrors the image cache's rolling average into the HUD.
+    #[allow(
+        dead_code,
+        reason = "the list_bench example includes this module without the render HUD"
+    )]
+    pub fn observe_image_load(&mut self, micros: u64) {
+        self.image_load_us = micros;
     }
 
     pub fn view(&self) -> gpui::AnyElement {
@@ -129,6 +139,10 @@ impl FrameHud {
             format!("Low 1%: {} FPS", format_value(stats.low_1pct, 1)),
             format!("Average: {} FPS", format_value(stats.avg_fps, 1)),
             format!("AverageMS: {} ms", format_value(stats.avg_ms, 2)),
+            format!(
+                "Avg image load: {} ms",
+                format_value(self.image_load_us as f32 / 1000.0, 2)
+            ),
             format!("Delay: {} ms", format_value(stats.delay_ms, 2)),
         ];
         div()

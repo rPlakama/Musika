@@ -1,63 +1,256 @@
 //! Sync, wipe and container-maintenance requests.
 
+use std::sync::PoisonError;
+
+use tokio::sync::watch;
+
 use super::*;
+
+/// One queued library sync.
+///
+/// The daemon serialises runs: a request while one is live is folded into the
+/// next pass, and a pass interrupted by an offline transition keeps its mode.
+/// `generation` invalidates a pass that was running when the account changed,
+/// so an old result can neither be re-queued nor announced.
+#[derive(Debug, Default)]
+struct SyncQueueState {
+    running: bool,
+    pending: Option<SyncMode>,
+    generation: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct SyncQueue {
+    state: Mutex<SyncQueueState>,
+}
+
+impl SyncQueue {
+    pub(crate) fn new() -> Self {
+        Self {
+            state: Mutex::new(SyncQueueState::default()),
+        }
+    }
+
+    /// Records `mode`. Returns `true` when the caller must spawn
+    /// [`drive_syncs`] to own the queue.
+    pub(crate) fn request(&self, mode: SyncMode) -> bool {
+        let mut state = self.lock();
+        state.pending = Some(merge_modes(state.pending, mode));
+        if state.running {
+            false
+        } else {
+            state.running = true;
+            true
+        }
+    }
+
+    /// Claims the next pass. When none is pending, releases the supervisor
+    /// slot in the same lock so a concurrent request is never stranded.
+    pub(crate) fn next(&self) -> Option<(SyncMode, u64)> {
+        let mut state = self.lock();
+        match state.pending.take() {
+            Some(mode) => Some((mode, state.generation)),
+            None => {
+                state.running = false;
+                None
+            }
+        }
+    }
+
+    /// Puts an interrupted pass back. The supervisor slot stays held, so the
+    /// same driver resumes it once the server is reachable again.
+    fn requeue(&self, mode: SyncMode, generation: u64) {
+        let mut state = self.lock();
+        if state.generation == generation {
+            state.pending = Some(merge_modes(state.pending, mode));
+        }
+    }
+
+    /// Drops queued work and invalidates a live pass (account switch/logout).
+    /// The session watch cancels the run; its result is discarded.
+    pub(crate) fn clear(&self) {
+        let mut state = self.lock();
+        state.pending = None;
+        state.generation = state.generation.wrapping_add(1);
+    }
+
+    /// Ends the supervisor after a terminal failure or a lost session watch.
+    /// The slot, queue and generation move under one lock so a request racing
+    /// the failure either starts a fresh driver or is left for `next`.
+    pub(crate) fn finish(&self) {
+        let mut state = self.lock();
+        state.pending = None;
+        state.running = false;
+        state.generation = state.generation.wrapping_add(1);
+    }
+
+    /// Whether `generation` still belongs to the current account/session.
+    fn is_current(&self, generation: u64) -> bool {
+        self.lock().generation == generation
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, SyncQueueState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+fn mode_rank(mode: SyncMode) -> u8 {
+    match mode {
+        SyncMode::Incremental => 0,
+        SyncMode::All => 1,
+        SyncMode::Repair => 2,
+    }
+}
+
+/// A request never downgrades a pass that is already queued: an automatic
+/// incremental ping must not replace a user's `sync all` or `sync repair`.
+fn merge_modes(pending: Option<SyncMode>, mode: SyncMode) -> SyncMode {
+    match pending {
+        Some(pending) if mode_rank(pending) >= mode_rank(mode) => pending,
+        _ => mode,
+    }
+}
 
 impl Bridge {
     /// Run an incremental, deep, or clean-rebuild library sync.
+    ///
+    /// The request is queued rather than spawned directly. The driver pauses
+    /// a live pass when the session goes offline and replays the same mode
+    /// when it returns; a ping-triggered pass is always incremental.
     pub fn sync(&self, mode: SyncMode) {
+        if !crate::session::online() {
+            _ = self.tx.send(Event::SyncPaused);
+        }
+        if !self.sync.request(mode) {
+            return;
+        }
+        let queue = Arc::clone(&self.sync);
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
-            let Some(dbs) = crate::app::dbs() else { return };
-            let Ok(client) = crate::session::client(&dbs).await else {
-                _ = tx.send(Event::Error("Sync needs a live session.".to_string()));
-                return;
-            };
-            let client = Arc::new(client);
-            if mode == SyncMode::Repair {
-                _ = tx.send(Event::SyncProgress {
-                    message: "Repairing library…".to_string(),
-                    done: 0,
-                    total: 100,
-                });
-                if let Err(err) = crate::db::wipe_library(&dbs).await {
-                    _ = tx.send(Event::Error(format!("Library repair failed: {err:#}")));
-                    return;
-                }
-            }
-            let deep = mode != SyncMode::Incremental;
-            let progress_tx = tx.clone();
-            let report = match crate::index::sync_library(&dbs, client.clone(), deep, |progress| {
-                _ = progress_tx.send(Event::SyncProgress {
-                    message: progress.message,
-                    done: progress.done,
-                    total: progress.total,
-                });
+            let online = crate::session::watch_online();
+            let run_tx = tx.clone();
+            drive_syncs(queue, tx, online, move |mode| {
+                run_sync_once(run_tx.clone(), mode)
             })
-            .await
-            {
-                Ok(report) => report,
-                Err(err) => {
-                    _ = tx.send(Event::Error(format!("Library sync failed: {err:#}")));
-                    crate::linux::malloc_trim();
-                    return;
-                }
-            };
-            if mode != SyncMode::Incremental && report.covers_due {
-                _ = tx.send(Event::SyncProgress {
-                    message: "Refreshing covers…".to_string(),
-                    done: 90,
-                    total: 100,
-                });
-                crate::index::cache_covers(&dbs, &client, &report.forced_covers).await;
-            }
-            // A sync holds large JSON bodies and cover buffers transiently;
-            // return the freed pages now instead of keeping the high-water
-            // mark resident for the daemon's whole lifetime.
-            crate::linux::malloc_trim();
-            _ = tx.send(Event::LibrarySynced);
+            .await;
         });
     }
+}
 
+/// Runs queued syncs until the queue drains.
+///
+/// `online` is the session's connectivity feed. A transition to offline drops
+/// the live pass (which aborts its fetch tasks and rolls back an in-flight
+/// transaction) and parks the mode; the next online transition claims it
+/// again. A failure while the feed still reports online is a real error and
+/// is surfaced once.
+pub(crate) async fn drive_syncs<F, Fut>(
+    queue: Arc<SyncQueue>,
+    tx: UnboundedSender<Event>,
+    mut online: watch::Receiver<bool>,
+    run: F,
+) where
+    F: Fn(SyncMode) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = anyhow::Result<()>> + Send + 'static,
+{
+    loop {
+        if !*online.borrow() {
+            // The pass is parked, not failed. The UI stops its spinner and
+            // resumes when the first progress event follows reconnect.
+            _ = tx.send(Event::SyncPaused);
+        }
+        if !wait_until_online(&mut online).await {
+            queue.finish();
+            break;
+        }
+        let Some((mode, generation)) = queue.next() else {
+            break;
+        };
+        let result = tokio::select! {
+            result = run(mode) => result,
+            _ = online.wait_for(|online| !*online) => {
+                // Dropping the run future cancels its network fetches; an
+                // in-flight SQLite transaction rolls back on drop. Nothing
+                // partial is committed, so the whole pass is replayed.
+                queue.requeue(mode, generation);
+                continue;
+            }
+        };
+        if !queue.is_current(generation) {
+            // The session changed under the pass; discard its result instead
+            // of announcing a sync for the previous account.
+            continue;
+        }
+        match result {
+            Ok(()) => {
+                _ = tx.send(Event::LibrarySynced);
+            }
+            Err(error) => {
+                crate::linux::malloc_trim();
+                if !*online.borrow() {
+                    queue.requeue(mode, generation);
+                    continue;
+                }
+                _ = tx.send(Event::Error(error.to_string()));
+                queue.finish();
+                break;
+            }
+        }
+    }
+}
+
+async fn wait_until_online(online: &mut watch::Receiver<bool>) -> bool {
+    if *online.borrow() {
+        return true;
+    }
+    online.wait_for(|online| *online).await.is_ok()
+}
+
+async fn run_sync_once(tx: UnboundedSender<Event>, mode: SyncMode) -> anyhow::Result<()> {
+    let Some(dbs) = crate::app::dbs() else {
+        return Err(anyhow::anyhow!("Sync needs a live session."));
+    };
+    let Ok(client) = crate::session::client(&dbs).await else {
+        return Err(anyhow::anyhow!("Sync needs a live session."));
+    };
+    let client = Arc::new(client);
+    if mode == SyncMode::Repair {
+        _ = tx.send(Event::SyncProgress {
+            message: "Repairing library…".to_string(),
+            done: 0,
+            total: 100,
+        });
+        if let Err(err) = crate::db::wipe_library(&dbs).await {
+            return Err(anyhow::anyhow!("Library repair failed: {err:#}"));
+        }
+    }
+    let deep = mode != SyncMode::Incremental;
+    let progress_tx = tx.clone();
+    let report = crate::index::sync_library(&dbs, client.clone(), deep, |progress| {
+        _ = progress_tx.send(Event::SyncProgress {
+            message: progress.message,
+            done: progress.done,
+            total: progress.total,
+        });
+    })
+    .await
+    .map_err(|err| anyhow::anyhow!("Library sync failed: {err:#}"))?;
+    if mode != SyncMode::Incremental && report.covers_due {
+        _ = tx.send(Event::SyncProgress {
+            message: "Refreshing covers…".to_string(),
+            done: 90,
+            total: 100,
+        });
+        crate::index::cache_covers(&dbs, &client, &report.forced_covers).await;
+    }
+    // A sync holds large JSON bodies and cover buffers transiently; return
+    // the freed pages now instead of keeping the high-water mark resident
+    // for the daemon's whole lifetime.
+    crate::linux::malloc_trim();
+    Ok(())
+}
+
+impl Bridge {
     /// Wipe a maintenance scope. Library/index/cover scopes are independent.
     pub fn wipe(&self, scope: String) {
         let tx = self.tx.clone();

@@ -127,6 +127,9 @@ mod rows;
 /// Sync reconciliation (ARC: library changes vs removals/additions).
 mod sync_reconcile;
 
+/// Sync scheduling: one pass at a time, paused by offline and replayed.
+mod sync_queue;
+
 /// Server list fields may be a single object or an array; an empty array must
 /// stay empty (it used to deserialize into one default row with an empty id).
 mod one_or_many_lists;

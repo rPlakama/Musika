@@ -201,9 +201,10 @@ async fn run_async() {
     // logout clears this until the next successful login.
     let mut connectivity_active = crate::accounts::active_identity().is_some();
     let connectivity_inflight = Arc::new(AtomicBool::new(false));
-    // One full pass is owed per app opening (and per account switch): the
-    // first health probe that reaches the server claims it. Later reconnects
-    // must not trigger another deep sync.
+    // One pass is owed per app opening (and per account switch): the first
+    // health probe that reaches the server claims it. It is incremental —
+    // the successful ping must not trigger a deep pass. Later reconnects must
+    // not trigger another sync either.
     let startup_sync_owed = Arc::new(AtomicBool::new(connectivity_active));
     let restore_started = Instant::now();
     restore_status(&playback_control, &mut page, bridge.is_offline()).await;
@@ -244,13 +245,13 @@ async fn run_async() {
                         let _ = playback_control.send(PlaybackInput::SetOffline(*offline));
                         if *offline {
                             // Offline login: the first successful probe owns
-                            // the full pass.
+                            // the pass.
                             startup_sync_owed.store(true, Ordering::Release);
                         } else {
                             // `authenticate` already answered a ping, so the
                             // sync can start now instead of waiting a tick.
                             startup_sync_owed.store(false, Ordering::Release);
-                            bridge.sync(SyncMode::All);
+                            bridge.sync(SyncMode::Incremental);
                         }
                     }
                     Event::LoggedOut => {
@@ -353,6 +354,7 @@ async fn run_async() {
                     | Event::LibrarySynced
                     | Event::RadioSaved { .. }
                     | Event::SyncProgress { .. }
+                    | Event::SyncPaused
                     | Event::PageContainerState { .. }
                     | Event::Wiped { .. }
                     | Event::DownloadSettled
@@ -503,11 +505,11 @@ async fn run_async() {
                         if online && sync_owed.swap(false, Ordering::AcqRel) {
                             // First reachable probe since the app opened (or
                             // since an offline login / account switch): one
-                            // deep pass, never on plain reconnects.
+                            // incremental pass, never on plain reconnects.
                             crate::debug_log!(
-                                "daemon: first reachable probe; starting a full sync"
+                                "daemon: first reachable probe; starting an incremental sync"
                             );
-                            bridge.sync(SyncMode::All);
+                            bridge.sync(SyncMode::Incremental);
                         }
                     });
                 }

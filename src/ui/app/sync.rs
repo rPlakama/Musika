@@ -46,6 +46,20 @@ impl AppRoot {
             .target(target, anim::STANDARD_MS, anim::Curve::Bounce, &self.clock);
     }
 
+    /// The core parked the sync because the server went away. The spinner
+    /// stops without the "finished" bounce: the pass will start over from the
+    /// beginning once the connection returns.
+    pub(in crate::ui) fn pause_sync(&mut self) {
+        if !self.syncing {
+            return;
+        }
+        self.clock.tick();
+        self.syncing = false;
+        self.sync_progress = 0.0;
+        self.sync_fill.snap(0.0);
+        self.sync_settle = anim::Behavior::new(0.0);
+    }
+
     pub(in crate::ui) fn mark_sync_progress(&mut self, done: usize, total: usize) {
         self.clock.tick();
         if !self.syncing {

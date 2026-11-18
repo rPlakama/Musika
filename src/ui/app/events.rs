@@ -266,6 +266,9 @@ impl AppRoot {
             } => {
                 self.mark_sync_progress(done, total);
             }
+            Event::SyncPaused => {
+                self.pause_sync();
+            }
             Event::LibrarySynced => {
                 self.sync_progress = 1.0;
                 self.finish_sync();

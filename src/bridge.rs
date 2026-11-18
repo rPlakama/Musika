@@ -18,6 +18,9 @@ mod auth;
 mod covers;
 mod library;
 mod maintenance;
+pub(crate) use maintenance::SyncQueue;
+#[cfg(test)]
+pub(crate) use maintenance::drive_syncs;
 mod marks;
 mod page;
 mod playback;
@@ -161,6 +164,9 @@ pub enum Event {
         done: usize,
         total: usize,
     },
+    /// The live sync stopped because the server went away. It keeps its mode
+    /// and resumes on the next online transition; no toast is attached.
+    SyncPaused,
     PageContainerState {
         kind: crate::model::PageKind,
         id: String,
@@ -331,6 +337,8 @@ pub struct Bridge {
     /// notifications use `Event`.
     playback: OnceLock<crate::daemon::playback::PlaybackControl>,
     palette_inflight: Arc<Mutex<Option<String>>>,
+    /// Serialises library passes and remembers one interrupted by offline.
+    sync: Arc<SyncQueue>,
 }
 
 impl Bridge {
@@ -343,6 +351,7 @@ impl Bridge {
             marks_generation: AtomicU64::new(0),
             playback: OnceLock::new(),
             palette_inflight: Arc::new(Mutex::new(None)),
+            sync: Arc::new(SyncQueue::new()),
         };
         bridge.refresh_header();
         bridge
@@ -416,6 +425,7 @@ mod serde_tests {
             },
             Event::IpcRan("playlist add selected; \"Mix\"".to_string()),
             Event::Connection { online: false },
+            Event::SyncPaused,
             Event::OutputDevices {
                 devices: vec![crate::player::pipewire::OutputDevice {
                     id: "sink.one".to_string(),

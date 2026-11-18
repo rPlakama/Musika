@@ -101,7 +101,7 @@ mpris_position:5000000
 
 | Command | Usage | What it does |
 | --- | --- | --- |
-| `sync` | `sync [all|repair]` | Incremental sync by default; `all` performs the deep pass; `repair` rebuilds the search/library indexes. The first successful server ping after the app opens (or after a login) starts one `sync all` automatically. |
+| `sync` | `sync [all|repair]` | Incremental sync by default; `all` performs the deep pass; `repair` rebuilds the search/library indexes. The first successful server ping after the app opens (or after a login) starts one incremental sync automatically. If the server goes away during a sync, the pass pauses and replays the same mode when connectivity returns. |
 | `refresh` | `refresh` | Start an incremental sync. |
 | `output` | `output <list\|default\|node-name\|exclusive <on\|off>\|bitperfect <on\|off>\|backend <pipewire\|alsa>\|alsa <device>>` | List PipeWire sinks, follow the default, target a named `node.name`, request exclusive access, bypass DSP, or select the direct ALSA backend/device; choices are persisted (backend changes apply at the next engine start). |
 | `colors` | `colors contrast <value>` or `colors saturation <value>` | Set the generated palette contrast offset (default `0.4`) or HCT chroma/saturation offset (default `0.0`). Both take `-1.0..=1.0`; `-1` removes contrast/chroma and `+1` is the maximum. In `Ctrl-,`, select **Palette contrast** or **Palette saturation** and use `h`/`l` for 0.1 steps; Enter cycles the signed range. |

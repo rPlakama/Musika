@@ -4,6 +4,8 @@ use super::*;
 
 impl Bridge {
     pub fn login(&self, server_url: String, username: String, password: String) {
+        // A pass from the previous session must not wake up for this account.
+        self.sync.clear();
         self.set_offline(false);
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
@@ -28,6 +30,7 @@ impl Bridge {
     }
 
     pub fn offline_login(&self, server_url: String, username: String) {
+        self.sync.clear();
         self.set_offline(true);
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
@@ -57,6 +60,7 @@ impl Bridge {
     /// End the live session but keep the stored account and its data.
     pub fn logout(&self) {
         let tx = self.tx.clone();
+        self.sync.clear();
         self.set_offline(true);
         crate::app::runtime().spawn(async move {
             crate::session::invalidate().await;
@@ -68,6 +72,7 @@ impl Bridge {
     /// Remove the active account. Data is kept only when `keep_data` is set.
     pub fn remove_account(&self, keep_data: bool) {
         let tx = self.tx.clone();
+        self.sync.clear();
         self.set_offline(true);
         crate::app::runtime().spawn(async move {
             crate::session::invalidate().await;

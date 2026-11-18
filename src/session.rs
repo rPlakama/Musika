@@ -19,15 +19,20 @@
 //! Kept out of the Qt bridge so cache and payload modules can use the client
 //! without depending on `legacy`.
 
-#[cfg(not(test))]
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+use tokio::sync::watch;
 
 use crate::http_client::SubsonicClient;
 
 /// Whether the server is reachable for on-demand work outside the sync (cover
 /// misses): offline logins and the pre-login state keep it false.
 static ONLINE: AtomicBool = AtomicBool::new(false);
+/// The same flag as a change feed. Long-running work (the library sync) parks
+/// here instead of polling, and wakes as soon as the health probe reports a
+/// transition.
+static ONLINE_WATCH: OnceLock<watch::Sender<bool>> = OnceLock::new();
 
 /// One client per credential set: the reqwest pool/TLS context is shared by
 /// every action (and the credential read only happens when the key changes).
@@ -47,7 +52,29 @@ pub(crate) fn online() -> bool {
 }
 
 pub(crate) fn set_online(online: bool) -> bool {
-    ONLINE.swap(online, Ordering::Relaxed)
+    let was = ONLINE.swap(online, Ordering::Relaxed);
+    let _ = online_watch().send_if_modified(|value| {
+        if *value == online {
+            false
+        } else {
+            *value = online;
+            true
+        }
+    });
+    was
+}
+
+/// A receiver for connectivity transitions. The current value is delivered
+/// immediately, so a sync starting while offline sees `false` before it waits.
+pub(crate) fn watch_online() -> watch::Receiver<bool> {
+    online_watch().subscribe()
+}
+
+fn online_watch() -> &'static watch::Sender<bool> {
+    ONLINE_WATCH.get_or_init(|| {
+        let (tx, _rx) = watch::channel(ONLINE.load(Ordering::Relaxed));
+        tx
+    })
 }
 
 /// Installs the credentials just used to authenticate, so the first [`client`]

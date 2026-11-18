@@ -442,14 +442,17 @@ impl SubsonicClient {
         self.call_ok("updatePlaylist", &params).await
     }
 
-    /// `updatePlaylist` — remove songs from an existing server playlist.
-    /// OpenSubsonic/Subsonic use repeated `songIdToRemove` parameters.
-    pub async fn update_playlist_remove(&self, id: &str, song_ids: &[String]) -> Result<()> {
-        if song_ids.is_empty() {
+    /// `updatePlaylist` — remove entries from an existing server playlist.
+    ///
+    /// The Subsonic write parameter is the **index** of the entry, not its
+    /// song id. Navidrome accepts `songIdToRemove` and returns `ok` but does
+    /// nothing with it, so every caller must use the raw playlist positions.
+    pub async fn update_playlist_remove_indexes(&self, id: &str, indexes: &[usize]) -> Result<()> {
+        if indexes.is_empty() {
             return Ok(());
         }
         let mut params: Vec<(&str, String)> = vec![("playlistId", id.to_string())];
-        push_all(&mut params, "songIdToRemove", song_ids);
+        push_all(&mut params, "songIndexToRemove", indexes);
         self.call_ok("updatePlaylist", &params).await
     }
 

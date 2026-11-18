@@ -861,7 +861,7 @@ async fn add_to_playlist_refreshes_the_server_entries() {
     let server = std::thread::spawn(move || {
         let mut requests: Vec<String> = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(10);
-        while requests.len() < 3 && Instant::now() < deadline {
+        while requests.len() < 5 && Instant::now() < deadline {
             let (mut socket, _) = match listener.accept() {
                 Ok(pair) => pair,
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -1143,7 +1143,8 @@ async fn remove_playlist_positions_updates_a_server_playlist() {
     let server = std::thread::spawn(move || {
         let mut requests: Vec<String> = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(10);
-        while requests.len() < 3 && Instant::now() < deadline {
+        let mut playlist_hits = 0;
+        while requests.len() < 4 && Instant::now() < deadline {
             let (mut socket, _) = match listener.accept() {
                 Ok(pair) => pair,
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -1157,11 +1158,19 @@ async fn remove_playlist_positions_updates_a_server_playlist() {
             let read = socket.read(&mut buffer).unwrap_or(0);
             let request = String::from_utf8_lossy(&buffer[..read]).to_string();
             let body = if request.contains("getPlaylist.view") {
-                r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlist":{"entry":[{"id":"s1","title":"First","artist":"Artist"},{"id":"s3","title":"Third","artist":"Artist"}]}}}"#
+                let entry = if playlist_hits == 0 {
+                    r#"[{"id":"s1","title":"First","artist":"Artist"},{"id":"s2","title":"Second","artist":"Artist"},{"id":"s3","title":"Third","artist":"Artist"}]"#
+                } else {
+                    r#"[{"id":"s1","title":"First","artist":"Artist"},{"id":"s3","title":"Third","artist":"Artist"}]"#
+                };
+                playlist_hits += 1;
+                // First fetch is the raw pre-edit order; the later one is the
+                // reloaded post-edit order.
+                format!(r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1","playlist":{{"entry":{entry}}}}}}}"#)
             } else if request.contains("getPlaylists.view") {
-                r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlists":{"playlist":[{"id":"pl1","name":"Mix","songCount":2,"duration":300}]}}}"#
+                r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlists":{"playlist":[{"id":"pl1","name":"Mix","songCount":2,"duration":300}]}}}"#.to_string()
             } else {
-                r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#
+                r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#.to_string()
             };
             let head = format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
@@ -1229,7 +1238,7 @@ async fn remove_playlist_positions_updates_a_server_playlist() {
         .iter()
         .find(|request| request.contains("updatePlaylist.view"))
         .expect("updatePlaylist request");
-    assert!(remove.contains("songIdToRemove=s2"), "{remove}");
+    assert!(remove.contains("songIndexToRemove=1"), "{remove}");
     assert!(requests.iter().any(|request| request.contains("getPlaylist.view")));
     assert!(requests.iter().any(|request| request.contains("getPlaylists.view")));
 }
@@ -1336,7 +1345,7 @@ async fn insert_song_ids_at_rebuilds_a_server_playlist_order() {
     let server = std::thread::spawn(move || {
         let mut requests: Vec<String> = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(10);
-        while requests.len() < 4 && Instant::now() < deadline {
+        while requests.len() < 5 && Instant::now() < deadline {
             let (mut socket, _) = match listener.accept() {
                 Ok(pair) => pair,
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -1421,8 +1430,9 @@ async fn insert_song_ids_at_rebuilds_a_server_playlist_order() {
         .filter(|request| request.contains("updatePlaylist.view"))
         .collect();
     assert_eq!(updates.len(), 2, "remove + add: {requests:?}");
-    assert!(updates[0].contains("songIdToRemove=s1"), "{updates:?}");
-    assert!(updates[0].contains("songIdToRemove=s2"), "{updates:?}");
+    assert!(updates[0].contains("songIndexToRemove=0"), "{updates:?}");
+    assert!(updates[0].contains("songIndexToRemove=1"), "{updates:?}");
+    assert!(updates[0].contains("songIndexToRemove=2"), "{updates:?}");
     let added = updates[1];
     let s1 = added.find("songIdToAdd=s1").expect("s1 add");
     let s3 = added.find("songIdToAdd=s3").expect("s3 add");
@@ -2066,15 +2076,19 @@ async fn server_duplicate_cleanup_rebuilds_order_and_counts() {
     );
     let remove = requests
         .iter()
-        .find(|request| request.contains("songIdToRemove=s1"))
-        .expect("remove request");
+        .find(|request| request.contains("songIndexToRemove="))
+        .unwrap_or_else(|| panic!("remove request missing: {requests:?}"));
     assert_eq!(
-        remove.matches("songIdToRemove=s1").count(),
-        2,
-        "both copies are removed: {remove}"
+        remove.matches("songIndexToRemove=").count(),
+        4,
+        "every raw entry is removed: {remove}"
     );
-    assert!(remove.contains("songIdToRemove=s2"), "{remove}");
-    assert!(remove.contains("songIdToRemove=s3"), "{remove}");
+    for index in 0..4 {
+        assert!(
+            remove.contains(&format!("songIndexToRemove={index}")),
+            "{remove}"
+        );
+    }
     let add = requests
         .iter()
         .find(|request| request.contains("songIdToAdd="))
@@ -2092,9 +2106,8 @@ async fn server_duplicate_cleanup_rebuilds_order_and_counts() {
     );
 }
 
-/// A move whose cached order was stale and held a duplicate must not write
-/// that duplicate back to the server: the cache is deduplicated before the
-/// remove/re-add rebuild.
+/// A move fetches the raw server order first, so a stale cached duplicate
+/// cannot leak into the remove/re-add rebuild.
 #[tokio::test]
 async fn server_move_with_a_duplicated_cache_writes_no_duplicates() {
     use std::io::{Read, Write};
@@ -2113,7 +2126,8 @@ async fn server_move_with_a_duplicated_cache_writes_no_duplicates() {
     let server = std::thread::spawn(move || {
         let mut requests: Vec<String> = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(10);
-        while requests.len() < 4 && Instant::now() < deadline {
+        let mut playlist_hits = 0;
+        while requests.len() < 5 && Instant::now() < deadline {
             let (mut socket, _) = match listener.accept() {
                 Ok(pair) => pair,
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -2127,11 +2141,17 @@ async fn server_move_with_a_duplicated_cache_writes_no_duplicates() {
             let read = socket.read(&mut buffer).unwrap_or(0);
             let request = String::from_utf8_lossy(&buffer[..read]).to_string();
             let body = if request.contains("getPlaylist.view") {
-                r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlist":{"entry":[{"id":"s2","title":"Second"},{"id":"s1","title":"First"},{"id":"s3","title":"Third"}]}}}"#
+                let entry = if playlist_hits == 0 {
+                    r#"[{"id":"s2","title":"Second"},{"id":"s1","title":"First"},{"id":"s3","title":"Third"}]"#
+                } else {
+                    r#"[{"id":"s1","title":"First"},{"id":"s2","title":"Second"},{"id":"s3","title":"Third"}]"#
+                };
+                playlist_hits += 1;
+                format!(r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1","playlist":{{"entry":{entry}}}}}}}"#)
             } else if request.contains("getPlaylists.view") {
-                r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlists":{"playlist":[{"id":"pl1","name":"Mix","songCount":3,"duration":500}]}}}"#
+                r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlists":{"playlist":[{"id":"pl1","name":"Mix","songCount":3,"duration":500}]}}}"#.to_string()
             } else {
-                r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#
+                r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#.to_string()
             };
             let head = format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
@@ -2186,11 +2206,11 @@ async fn server_move_with_a_duplicated_cache_writes_no_duplicates() {
     assert_eq!(
         cached,
         vec![
-            Some("s2".to_string()),
             Some("s1".to_string()),
+            Some("s2".to_string()),
             Some("s3".to_string())
         ],
-        "the deduplicated cache drove the move"
+        "the fresh server order drove the move"
     );
     let count: i64 = sqlx::query_scalar("SELECT song_count FROM playlist WHERE id = 'pl1'")
         .fetch_one(&playlist)
@@ -2208,10 +2228,15 @@ async fn server_move_with_a_duplicated_cache_writes_no_duplicates() {
         1,
         "a stale duplicate is never written back: {add}"
     );
-    let second = add.find("songIdToAdd=s2").expect("s2 add");
     let first = add.find("songIdToAdd=s1").expect("s1 add");
+    let second = add.find("songIdToAdd=s2").expect("s2 add");
     let third = add.find("songIdToAdd=s3").expect("s3 add");
-    assert!(second < first && first < third, "moved order: {add}");
+    assert!(first < second && second < third, "moved order: {add}");
+    let remove = requests
+        .iter()
+        .find(|request| request.contains("songIndexToRemove="))
+        .expect("index removal");
+    assert_eq!(remove.matches("songIndexToRemove=").count(), 3, "{remove}");
 }
 
 #[tokio::test]
@@ -2448,7 +2473,7 @@ async fn server_edits_batch_a_long_playlist() {
     let server = std::thread::spawn(move || {
         let mut requests: Vec<String> = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(10);
-        while requests.len() < 8 && Instant::now() < deadline {
+        while requests.len() < 9 && Instant::now() < deadline {
             let (mut socket, _) = match listener.accept() {
                 Ok(pair) => pair,
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -2525,13 +2550,18 @@ async fn server_edits_batch_a_long_playlist() {
         .collect();
     let removes: Vec<&&String> = updates
         .iter()
-        .filter(|request| request.contains("songIdToRemove="))
+        .filter(|request| request.contains("songIndexToRemove="))
         .collect();
     let adds: Vec<&&String> = updates
         .iter()
         .filter(|request| request.contains("songIdToAdd="))
         .collect();
     assert_eq!((removes.len(), adds.len()), (3, 3), "{updates:?}");
+    assert!(removes[0].contains("songIndexToRemove=129"), "{removes:?}");
+    assert!(
+        removes.last().is_some_and(|request| request.contains("songIndexToRemove=0")),
+        "{removes:?}"
+    );
     for request in &removes {
         assert_le_batch(request);
     }
@@ -2554,7 +2584,7 @@ async fn server_edits_batch_a_long_playlist() {
 }
 
 fn assert_le_batch(request: &str) {
-    for key in ["songIdToRemove=", "songIdToAdd="] {
+    for key in ["songIndexToRemove=", "songIdToAdd="] {
         let count = request.matches(key).count();
         assert!(count <= 64, "{key} batch has {count} ids: {request}");
     }

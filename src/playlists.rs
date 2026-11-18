@@ -956,17 +956,53 @@ async fn load_subsonic_songs(dbs: &Dbs, client: &SubsonicClient, playlist_id: &s
 /// duplicate cleanup and every server reorder hit this on long playlists).
 const SERVER_EDIT_BATCH: usize = 64;
 
-/// Updates one server playlist in bounded remove/add batches, preserving the
-/// order of `add` across batches.
-async fn update_server_songs(
+/// Raw server entries in playlist order, duplicates kept. Edits need the
+/// actual positions because the Subsonic write API removes by index; the
+/// cached page order is deduplicated and cannot address duplicate copies.
+async fn fetch_server_playlist_ids(
     client: &SubsonicClient,
     playlist_id: &str,
-    remove: &[String],
+) -> Result<Vec<String>> {
+    let page = client
+        .get_playlist(playlist_id)
+        .await
+        .context("fetching the server playlist")?;
+    Ok(page
+        .entry
+        .into_iter()
+        .map(|song| song.id)
+        .filter(|id| !id.trim().is_empty())
+        .collect())
+}
+
+/// Fresh server state for an edit: the client, raw ids, and the keep-first
+/// order the playlist page displays.
+async fn server_playlist_order(
+    dbs: &Dbs,
+    playlist: &PlaylistRef,
+) -> Result<(SubsonicClient, Vec<String>, Vec<String>)> {
+    let client = crate::session::client(dbs)
+        .await
+        .context("editing a server playlist needs a signed-in server")?;
+    let raw = fetch_server_playlist_ids(&client, &playlist.id).await?;
+    let ordered = dedup_keep_first_ids(&raw);
+    Ok((client, raw, ordered))
+}
+
+/// Removes raw entry indexes (highest first) and appends `add` in bounded
+/// batches. Descending removal keeps lower positions valid across chunks.
+async fn update_server_indexes(
+    client: &SubsonicClient,
+    playlist_id: &str,
+    remove_indexes: &[usize],
     add: &[String],
 ) -> Result<()> {
-    for chunk in remove.chunks(SERVER_EDIT_BATCH) {
+    let mut indexes = remove_indexes.to_vec();
+    indexes.sort_unstable_by(|left, right| right.cmp(left));
+    indexes.dedup();
+    for chunk in indexes.chunks(SERVER_EDIT_BATCH) {
         client
-            .update_playlist_remove(playlist_id, chunk)
+            .update_playlist_remove_indexes(playlist_id, chunk)
             .await
             .with_context(|| format!("removing {} server playlist entries", chunk.len()))?;
     }
@@ -976,6 +1012,45 @@ async fn update_server_songs(
             .await
             .with_context(|| format!("adding {} server playlist entries", chunk.len()))?;
     }
+    Ok(())
+}
+
+/// Removes every raw occurrence of `ids` without touching the other rows.
+async fn remove_server_ids(
+    client: &SubsonicClient,
+    playlist_id: &str,
+    raw: &[String],
+    ids: &std::collections::HashSet<&str>,
+) -> Result<()> {
+    let indexes: Vec<usize> = raw
+        .iter()
+        .enumerate()
+        .filter(|(_, song_id)| ids.contains(song_id.as_str()))
+        .map(|(index, _)| index)
+        .collect();
+    update_server_indexes(client, playlist_id, &indexes, &[]).await
+}
+
+/// Replaces the whole server order in one remove-all/add pass, cleaning any
+/// duplicate copies the old `songIdToRemove` path accumulated.
+async fn replace_server_playlist(
+    dbs: &Dbs,
+    playlist: &PlaylistRef,
+    ordered_ids: &[String],
+    client: &SubsonicClient,
+    raw_len: usize,
+) -> Result<()> {
+    let ordered_ids = dedup_keep_first_ids(ordered_ids);
+    let indexes: Vec<usize> = (0..raw_len).collect();
+    update_server_indexes(client, &playlist.id, &indexes, &ordered_ids)
+        .await
+        .context("rewriting the server playlist order")?;
+    load_subsonic_songs(dbs, client, &playlist.id)
+        .await
+        .context("refreshing the server playlist songs")?;
+    refresh_subsonic(dbs, client)
+        .await
+        .context("refreshing the server playlist list")?;
     Ok(())
 }
 
@@ -990,7 +1065,8 @@ async fn clean_server_duplicate_entries(
     current_order: &[String],
     deduped_order: &[String],
 ) -> Result<()> {
-    update_server_songs(client, playlist_id, current_order, deduped_order)
+    let indexes: Vec<usize> = (0..current_order.len()).collect();
+    update_server_indexes(client, playlist_id, &indexes, deduped_order)
         .await
         .context("cleaning duplicated server playlist entries")?;
     Ok(())
@@ -1590,34 +1666,19 @@ async fn append_resolved(dbs: &Dbs, playlist: &PlaylistRef, song_ids: &[String])
         let path = local_playlist_path(playlist)?;
         upsert_local_m3u(dbs, &path, usize::MAX, &song_ids).await?;
     } else {
-        let client = crate::session::client(dbs)
-            .await
-            .context("adding to a server playlist needs a signed-in server")?;
-        let existing = cached_playlist_song_ids(dbs, &playlist.id).await?;
+        let (client, raw, mut ordered) = server_playlist_order(dbs, playlist).await?;
         let wanted: std::collections::HashSet<&str> = song_ids.iter().map(String::as_str).collect();
-        let duplicates: Vec<String> = existing
-            .into_iter()
-            .filter(|id| wanted.contains(id.as_str()))
-            .collect();
-        update_server_songs(&client, &playlist.id, &duplicates, &song_ids)
-            .await
-            .context("updating the server playlist")?;
-        // The list refresh only carries counts; reload the ordered entries so
-        // an open playlist page (and the next one) shows the new songs.
-        load_subsonic_songs(dbs, &client, &playlist.id)
-            .await
-            .context("refreshing the server playlist songs")?;
-        refresh_subsonic(dbs, &client)
-            .await
-            .context("refreshing the server playlist list")?;
+        ordered.retain(|id| !wanted.contains(id.as_str()));
+        ordered.extend(song_ids);
+        replace_server_playlist(dbs, playlist, &ordered, &client, raw.len()).await?;
     }
     Ok(())
 }
 
 /// Remove free-form targets from an existing playlist, mirroring
 /// [`add_to_playlist`] (`playlist rm <target...>; <playlist>`). M3U files are
-/// rewritten without the matching entries; server playlists use
-/// `songIdToRemove`.
+/// rewritten without the matching entries; server playlists remove every raw
+/// occurrence of the matched song ids by index.
 pub async fn remove_from_playlist(
     dbs: &Dbs,
     targets: &[String],
@@ -1637,10 +1698,10 @@ pub async fn remove_from_playlist(
         let path = local_playlist_path(&playlist)?;
         remove_local_m3u(dbs, &path, &song_ids, &playlist.name).await?;
     } else {
-        let client = crate::session::client(dbs)
-            .await
-            .context("removing from a server playlist needs a signed-in server")?;
-        update_server_songs(&client, &playlist.id, &song_ids, &[])
+        let (client, raw, _) = server_playlist_order(dbs, &playlist).await?;
+        let wanted: std::collections::HashSet<&str> =
+            song_ids.iter().map(String::as_str).collect();
+        remove_server_ids(&client, &playlist.id, &raw, &wanted)
             .await
             .context("updating the server playlist")?;
         load_subsonic_songs(dbs, &client, &playlist.id)
@@ -1655,7 +1716,8 @@ pub async fn remove_from_playlist(
 
 /// Remove playlist entries by zero-based position (the playlist page `d d`
 /// path). Positions are exact for local M3U files; server playlists map the
-/// cached positions to song ids and use `songIdToRemove`.
+/// page's deduplicated positions to song ids and remove every raw occurrence
+/// by index.
 pub async fn remove_playlist_positions(
     dbs: &Dbs,
     playlist_query: &str,
@@ -1671,23 +1733,16 @@ pub async fn remove_playlist_positions(
         let path = local_playlist_path(&playlist)?;
         remove_positions_local_m3u(dbs, &path, &positions, &playlist.name).await?;
     } else {
-        // The page's positions index the deduplicated view, so map them
-        // through the same keep-first cache order instead of raw database
-        // positions: a stale cached duplicate must not shift the target id.
-        let ordered = cached_playlist_song_ids(dbs, &playlist.id).await?;
-        let mut sorted: Vec<usize> = positions.iter().copied().collect();
-        sorted.sort_unstable();
-        let song_ids: Vec<String> = sorted
-            .into_iter()
-            .filter_map(|position| ordered.get(position).cloned())
+        let (client, raw, ordered) = server_playlist_order(dbs, &playlist).await?;
+        let wanted: std::collections::HashSet<&str> = positions
+            .iter()
+            .filter_map(|position| ordered.get(*position))
+            .map(String::as_str)
             .collect();
-        if song_ids.is_empty() {
+        if wanted.is_empty() {
             return Err(anyhow!("No playlist entries to remove."));
         }
-        let client = crate::session::client(dbs)
-            .await
-            .context("removing from a server playlist needs a signed-in server")?;
-        update_server_songs(&client, &playlist.id, &song_ids, &[])
+        remove_server_ids(&client, &playlist.id, &raw, &wanted)
             .await
             .context("updating the server playlist")?;
         load_subsonic_songs(dbs, &client, &playlist.id)
@@ -1854,9 +1909,9 @@ pub async fn insert_song_ids_at(
         let path = local_playlist_path(&playlist)?;
         upsert_local_m3u(dbs, &path, position, &song_ids).await?;
     } else {
-        let mut ordered = cached_playlist_song_ids(dbs, &playlist.id).await?;
+        let (client, raw, mut ordered) = server_playlist_order(dbs, &playlist).await?;
         upsert_ids(&mut ordered, position, &song_ids);
-        rebuild_server_playlist(dbs, &playlist, &ordered).await?;
+        replace_server_playlist(dbs, &playlist, &ordered, &client, raw.len()).await?;
     }
     Ok(display_playlist_name(&playlist.name))
 }
@@ -1887,13 +1942,13 @@ pub async fn move_playlist_entry(
         write_m3u_entries(&path, &entries)?;
         scan_dir(dbs, dir).await?;
     } else {
-        let mut ordered = cached_playlist_song_ids(dbs, &playlist.id).await?;
+        let (client, raw, mut ordered) = server_playlist_order(dbs, &playlist).await?;
         if from >= ordered.len() || to >= ordered.len() {
             return Err(anyhow!("The playlist row is out of date."));
         }
         let id = ordered.remove(from);
         ordered.insert(to, id);
-        rebuild_server_playlist(dbs, &playlist, &ordered).await?;
+        replace_server_playlist(dbs, &playlist, &ordered, &client, raw.len()).await?;
     }
     Ok(display_playlist_name(&playlist.name))
 }
@@ -1934,7 +1989,7 @@ pub async fn move_playlist_block(
         write_m3u_entries(&path, &entries)?;
         scan_dir(dbs, dir).await?;
     } else {
-        let mut ordered = cached_playlist_song_ids(dbs, &playlist.id).await?;
+        let (client, raw, mut ordered) = server_playlist_order(dbs, &playlist).await?;
         let end = (start + len).min(ordered.len());
         let block_len = end.saturating_sub(start);
         let new_start = start as i64 + i64::from(delta);
@@ -1948,24 +2003,9 @@ pub async fn move_playlist_block(
         let new_start = new_start as usize;
         let block: Vec<String> = ordered.drain(start..end).collect();
         ordered.splice(new_start..new_start, block);
-        rebuild_server_playlist(dbs, &playlist, &ordered).await?;
+        replace_server_playlist(dbs, &playlist, &ordered, &client, raw.len()).await?;
     }
     Ok(display_playlist_name(&playlist.name))
-}
-
-/// The cached ordered song ids of a playlist (server rows only; M3U entries
-/// always resolve through the file).
-async fn cached_playlist_song_ids(dbs: &Dbs, playlist_id: &str) -> Result<Vec<String>> {
-    let rows: Vec<Option<String>> = sqlx::query_scalar(
-        "SELECT song_id FROM playlist_song WHERE playlist_id = ?1 ORDER BY position",
-    )
-    .bind(playlist_id)
-    .fetch_all(&dbs.playlist)
-    .await?;
-    let ids: Vec<String> = rows.into_iter().flatten().collect();
-    // Edit operations rebuild the server playlist from this order; a stale
-    // cache holding a duplicate must not be written back as a duplicate.
-    Ok(dedup_keep_first_ids(&ids))
 }
 
 /// Parse the M3U body for `song_ids` back into entries for local insertion.
@@ -1981,34 +2021,6 @@ fn write_m3u_entries(path: &Path, entries: &[M3uEntry]) -> Result<()> {
     }
     std::fs::write(path, out)
         .with_context(|| format!("writing the playlist file {}", path.display()))?;
-    Ok(())
-}
-
-/// Rebuild a server playlist in the given order. The API can only append and
-/// remove, so removing every cached id and re-adding the new order is the only
-/// way to insert/move; the ordered entries are reloaded from the server after,
-/// which also cleans any duplicate the server still reported.
-async fn rebuild_server_playlist(
-    dbs: &Dbs,
-    playlist: &PlaylistRef,
-    ordered_ids: &[String],
-) -> Result<()> {
-    let client = crate::session::client(dbs)
-        .await
-        .context("editing a server playlist needs a signed-in server")?;
-    let current = cached_playlist_song_ids(dbs, &playlist.id).await?;
-    // The cache is already deduplicated, but treat the target order the same
-    // way: a move/insert must never write a duplicate back to the server.
-    let ordered_ids = dedup_keep_first_ids(ordered_ids);
-    update_server_songs(&client, &playlist.id, &current, &ordered_ids)
-        .await
-        .context("rewriting the server playlist order")?;
-    load_subsonic_songs(dbs, &client, &playlist.id)
-        .await
-        .context("refreshing the server playlist songs")?;
-    refresh_subsonic(dbs, &client)
-        .await
-        .context("refreshing the server playlist list")?;
     Ok(())
 }
 

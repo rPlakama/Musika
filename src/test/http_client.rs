@@ -202,7 +202,7 @@ async fn update_playlist_posts_repeated_song_id_to_add() {
 }
 
 #[tokio::test]
-async fn update_playlist_posts_repeated_song_id_to_remove() {
+async fn update_playlist_posts_repeated_song_index_to_remove() {
     use std::io::{Read, Write};
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
@@ -225,14 +225,15 @@ async fn update_playlist_posts_repeated_song_id_to_remove() {
 
     let client = SubsonicClient::new(&format!("http://{addr}"), "alice", "secret");
     client
-        .update_playlist_remove("pl1", &["s1".into(), "s2".into()])
+        .update_playlist_remove_indexes("pl1", &[0, 2])
         .await
         .expect("remove from playlist");
     let request = server.join().expect("server thread");
     assert!(request.contains("/rest/updatePlaylist.view"));
     assert!(request.contains("playlistId=pl1"));
-    assert!(request.contains("songIdToRemove=s1"));
-    assert!(request.contains("songIdToRemove=s2"));
+    assert!(request.contains("songIndexToRemove=0"));
+    assert!(request.contains("songIndexToRemove=2"));
+    assert!(!request.contains("songIdToRemove"));
     assert!(!request.contains("songIdToAdd"));
 }
 

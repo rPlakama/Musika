@@ -75,6 +75,7 @@ macro_rules! for_each_bridge_rpc {
             request_container_state(kind: $crate::model::PageKind, id: String),
             request_album_state(album_id: String),
             request_colors(cover_art: String),
+            request_track_info(song_id: String),
             // Playback and queues.
             play_song(song_id: String, order: String),
             play_song_in_album(song_id: String),

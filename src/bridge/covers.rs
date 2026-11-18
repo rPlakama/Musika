@@ -40,3 +40,32 @@ impl Bridge {
         });
     }
 }
+
+impl Bridge {
+    /// Source-file metadata for the topbar. The library owns the provider
+    /// bitrate/suffix; the UI never touches the database.
+    pub fn request_track_info(&self, song_id: String) {
+        if song_id.is_empty() {
+            return;
+        }
+        let tx = self.tx.clone();
+        crate::app::runtime().spawn(async move {
+            let Some(dbs) = crate::app::dbs() else { return };
+            let info = crate::library::song_file_info(&dbs.library, &song_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|(size, suffix, bit_rate)| TrackInfo {
+                    song_id: song_id.clone(),
+                    suffix,
+                    bit_rate,
+                    size,
+                })
+                .unwrap_or_else(|| TrackInfo {
+                    song_id,
+                    ..TrackInfo::default()
+                });
+            _ = tx.send(Event::TrackInfo(info));
+        });
+    }
+}

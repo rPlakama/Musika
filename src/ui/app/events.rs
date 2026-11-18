@@ -26,6 +26,16 @@ impl AppRoot {
                     }
                 }
             }
+            Event::TrackInfo(info) => {
+                let current = self
+                    .player
+                    .current()
+                    .map(|track| track.id.as_str())
+                    .unwrap_or_default();
+                if current == info.song_id {
+                    self.track_info = Some(info);
+                }
+            }
             Event::EqChanged(name) => {
                 let changed = self.eq_profile != name;
                 self.eq_profile = name;

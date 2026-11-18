@@ -31,6 +31,16 @@ pub enum SyncMode {
     Repair,
 }
 
+/// Source file facts for the fullscreen/status top bars. `bit_rate` is the
+/// provider's kbps value; `size` lets the UI derive a rate when it is absent.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TrackInfo {
+    pub song_id: String,
+    pub suffix: Option<String>,
+    pub bit_rate: Option<i64>,
+    pub size: Option<i64>,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Event {
     LoginRequired {
@@ -50,6 +60,8 @@ pub enum Event {
     EqChanged(Option<String>),
     /// Core answer: the persisted playback preference snapshot.
     Settings(Box<crate::playback_settings::PlaybackSettings>),
+    /// Core answer: source-file metadata for the current queue row.
+    TrackInfo(TrackInfo),
     LoggedIn {
         server_url: String,
         username: String,
@@ -410,6 +422,12 @@ mod serde_tests {
                     label: "Sink One".to_string(),
                 }],
             },
+            Event::TrackInfo(TrackInfo {
+                song_id: "song.one".to_string(),
+                suffix: Some("flac".to_string()),
+                bit_rate: Some(1_411),
+                size: Some(42_000_000),
+            }),
         ] {
             let json = serde_json::to_string(&event).unwrap();
             let back: Event = serde_json::from_str(&json).unwrap();

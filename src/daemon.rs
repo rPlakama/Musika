@@ -363,6 +363,7 @@ async fn run_async() {
                     | Event::IpcRan(_)
                     | Event::Lyrics { .. }
                     | Event::OutputDevices { .. }
+                    | Event::TrackInfo(_)
                     | Event::Search { .. } => {}
                 }
                 // Queue content travels as queue deltas, never as whole-queue

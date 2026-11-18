@@ -257,6 +257,7 @@ impl AppRoot {
             .flex_col()
             .p(px(16.0))
             .gap_3()
+            .child(self.fullscreen_top_bar())
             .child(
                 div()
                     .flex()

@@ -6,6 +6,48 @@ use gpui::StatefulInteractiveElement;
 /// Identity of the currently playing cover. The same album keeps the same
 /// thumb and full-resolution sources (and skips every reload/fade) across its
 /// tracks, even when per-song cover ids/URLs differ.
+/// The metadata both top bars fill. The main bar uses the compact form (file
+/// quality); fullscreen uses output + file quality. `TopBarInfo` is the single
+/// shape, so neither bar re-derives labels or bitrate units.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(in crate::ui) struct TopBarInfo {
+    pub output: String,
+    pub codec: String,
+    pub bitrate: String,
+}
+
+fn grouped_integer(value: i64) -> String {
+    let digits = value.abs().to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, ch) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    if value < 0 {
+        format!("-{out}")
+    } else {
+        out
+    }
+}
+
+/// File rate in the unit that keeps the number readable: kbps below 10 Mbit/s,
+/// MB/s above it. `None` when the provider omitted both bitrate and size.
+fn bitrate_label(bit_rate: Option<i64>, size: Option<i64>, duration: f64) -> String {
+    let kbps = bit_rate.filter(|value| *value > 0).map(|value| value as f64).or_else(|| {
+        (duration > 0.0)
+            .then_some(size?)
+            .filter(|value| *value > 0)
+            .map(|bytes| bytes as f64 * 8.0 / duration / 1000.0)
+    });
+    match kbps {
+        None => String::new(),
+        Some(kbps) if kbps >= 10_000.0 => format!("{:.1} MB/s", kbps / 8000.0),
+        Some(kbps) => format!("{} kbps", grouped_integer(kbps.round() as i64)),
+    }
+}
+
 #[derive(Default)]
 pub(in crate::ui) struct CurrentCover {
     key: Option<String>,
@@ -468,6 +510,17 @@ impl AppRoot {
             }
             SuperiorMode::Home | SuperiorMode::Playlist => {}
         }
+        if self.win_w >= 900.0 {
+            let info = self.top_bar_info();
+            let info_view = self.top_bar_info_view(&info, true);
+            row = row.child(
+                div()
+                    .flex_none()
+                    .max_w(px(self.win_w * 0.34))
+                    .overflow_hidden()
+                    .child(info_view),
+            );
+        }
         row = row.child(self.topbar_action_chip(
             TopBarAction::Normalization,
             Some(&page),
@@ -543,13 +596,27 @@ impl AppRoot {
         perf::request_frame(window, "topbar-marquee");
     }
 
-    pub(in crate::ui) fn top_bar(&self, cx: &Context<Self>) -> impl IntoElement {
-        let mode = self.superior_mode();
-        let content = if mode.is_page() {
-            self.page_context_bar(mode, cx)
-        } else {
-            self.home_bar(cx)
-        };
+    /// Keeps the source-file snapshot in sync with the queue row without
+    /// re-querying on every transport tick.
+    pub(in crate::ui) fn refresh_track_info(&mut self) {
+        let current = self
+            .player
+            .current()
+            .map(|track| track.id.clone())
+            .unwrap_or_default();
+        if current == self.track_info_song && (current.is_empty() || self.track_info.is_some()) {
+            return;
+        }
+        self.track_info_song = current.clone();
+        self.track_info = None;
+        if !current.is_empty() {
+            self.bridge.request_track_info(current);
+        }
+    }
+
+    /// One shell for both top bars. The page/home bar and the fullscreen
+    /// metadata bar share the height, surface, padding and bottom rule.
+    pub(in crate::ui) fn top_bar_shell(&self, content: impl IntoElement) -> impl IntoElement {
         div()
             .relative()
             .w_full()
@@ -567,6 +634,152 @@ impl AppRoot {
                     .h(px(1.0))
                     .bg(rgb(palette::outline_variant())),
             )
+    }
+
+    pub(in crate::ui) fn top_bar(&self, cx: &Context<Self>) -> impl IntoElement {
+        let mode = self.superior_mode();
+        let content = if mode.is_page() {
+            self.page_context_bar(mode, cx)
+        } else {
+            self.home_bar(cx)
+        };
+        self.top_bar_shell(content)
+    }
+
+    /// Source/output facts for the top bars. One owner for the labels and
+    /// units; callers only decide where to paint the result.
+    pub(in crate::ui) fn top_bar_info(&self) -> TopBarInfo {
+        let settings = &self.settings;
+        let output = match settings.output_backend {
+            crate::playback_settings::OutputBackend::Alsa => {
+                let device = settings.alsa_device.trim();
+                if device.is_empty() {
+                    "ALSA".to_string()
+                } else {
+                    format!("ALSA · {device}")
+                }
+            }
+            crate::playback_settings::OutputBackend::Pipewire => {
+                if settings.follow_default || settings.output_device.is_none() {
+                    "PipeWire · Default".to_string()
+                } else {
+                    format!(
+                        "PipeWire · {}",
+                        settings.output_device.as_deref().unwrap_or_default()
+                    )
+                }
+            }
+        };
+        let Some(track) = self.player.current() else {
+            return TopBarInfo {
+                output,
+                ..TopBarInfo::default()
+            };
+        };
+        let info = self
+            .track_info
+            .as_ref()
+            .filter(|info| info.song_id == track.id);
+        let codec = info
+            .and_then(|info| info.suffix.as_deref())
+            .filter(|suffix| !suffix.is_empty())
+            .map(str::to_ascii_uppercase)
+            .unwrap_or_default();
+        let bitrate = info
+            .map(|info| bitrate_label(info.bit_rate, info.size, track.duration))
+            .unwrap_or_default();
+        TopBarInfo {
+            output,
+            codec,
+            bitrate,
+        }
+    }
+
+    fn top_bar_info_chip(&self, label: &str, value: &str) -> gpui::AnyElement {
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .min_w_0()
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(9.0))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(rgb(palette::on_surface_variant()))
+                    .child(label.to_ascii_uppercase()),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .text_size(px(12.0))
+                    .text_color(rgb(palette::on_surface()))
+                    .child(value.to_string()),
+            )
+            .into_any_element()
+    }
+
+    /// The shared metadata line. `compact` drops the output chip so the main
+    /// bar keeps room for its page identity and action chips.
+    pub(in crate::ui) fn top_bar_info_view(
+        &self,
+        info: &TopBarInfo,
+        compact: bool,
+    ) -> gpui::AnyElement {
+        let mut row = div().flex().items_center().gap_2().min_w_0().overflow_hidden();
+        let mut first = true;
+        for (label, value) in [
+            (if compact { "" } else { "Output" }, info.output.as_str()),
+            ("File", info.codec.as_str()),
+            ("Rate", info.bitrate.as_str()),
+        ] {
+            if value.is_empty() || label.is_empty() {
+                continue;
+            }
+            if !first {
+                row = row.child(self.bar_separator());
+            }
+            row = row.child(self.top_bar_info_chip(label, value));
+            first = false;
+        }
+        row.into_any_element()
+    }
+
+    /// Fullscreen's metadata bar, using the exact shell of the page top bar.
+    pub(in crate::ui) fn fullscreen_top_bar(&self) -> gpui::AnyElement {
+        let info = self.top_bar_info();
+        let content = div()
+            .w_full()
+            .h_full()
+            .px_4()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(self.top_bar_info_chip("Output", &info.output)),
+            )
+            .when(!info.codec.is_empty(), |this| {
+                this.child(self.bar_separator()).child(
+                    div()
+                        .flex_none()
+                        .child(self.top_bar_info_chip("File", &info.codec)),
+                )
+            })
+            .when(!info.bitrate.is_empty(), |this| {
+                this.child(self.bar_separator()).child(
+                    div()
+                        .flex_none()
+                        .child(self.top_bar_info_chip("Rate", &info.bitrate)),
+                )
+            });
+        self.top_bar_shell(content).into_any_element()
     }
 
     /// Refreshes the playing-cover identity once per render, before any
@@ -1035,4 +1248,30 @@ mod cover_cache_tests {
         assert!(!cache.changed());
     }
 
+}
+
+#[cfg(test)]
+mod topbar_info_tests {
+    use super::{TopBarInfo, bitrate_label, grouped_integer};
+
+    #[test]
+    fn bitrate_uses_kbps_until_ten_mbit_then_mb_s() {
+        assert_eq!(bitrate_label(Some(1_411), None, 0.0), "1,411 kbps");
+        assert_eq!(bitrate_label(Some(12_000), None, 0.0), "1.5 MB/s");
+        assert_eq!(bitrate_label(None, Some(10_000_000), 10.0), "8,000 kbps");
+        assert_eq!(bitrate_label(None, None, 10.0), "");
+    }
+
+    #[test]
+    fn bitrate_groups_thousands() {
+        assert_eq!(grouped_integer(1_411), "1,411");
+        assert_eq!(grouped_integer(12_000_000), "12,000,000");
+        assert_eq!(grouped_integer(0), "0");
+    }
+
+    #[test]
+    fn topbar_info_shape_is_shared_and_empty_by_default() {
+        let info = TopBarInfo::default();
+        assert!(info.output.is_empty() && info.codec.is_empty() && info.bitrate.is_empty());
+    }
 }

@@ -856,6 +856,9 @@ struct AppRoot {
     eq_profile: Option<String>,
     /// Last playback settings snapshot published by the core.
     settings: crate::playback_settings::PlaybackSettings,
+    /// Source-file facts for the current queue row.
+    track_info: Option<crate::bridge::TrackInfo>,
+    track_info_song: String,
     settings_open: bool,
     settings_cursor: usize,
     error: Option<String>,
@@ -1172,6 +1175,7 @@ impl AppRoot {
                             return false;
                         }
                     }
+                    this.refresh_track_info();
                     if notify {
                         cx.notify();
                     }
@@ -1193,6 +1197,8 @@ impl AppRoot {
             connection_offline: false,
             eq_profile: None,
             settings: crate::playback_settings::PlaybackSettings::default(),
+            track_info: None,
+            track_info_song: String::new(),
             settings_open: false,
             settings_cursor: 0,
             error: None,

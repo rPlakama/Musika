@@ -2417,3 +2417,145 @@ fn playlist_rows_fall_back_to_a_resolvable_library_cover() {
         None
     );
 }
+
+/// A long server playlist is rewritten in bounded `updatePlaylist` batches:
+/// one remove/add pair is not allowed to grow the query string past proxy
+/// limits, and the add order survives the chunks.
+#[tokio::test]
+async fn server_edits_batch_a_long_playlist() {
+    use std::io::{Read, Write};
+    use std::time::{Duration, Instant};
+
+    let credentials = playlist_pool().await;
+    sqlx::migrate!("./migrations")
+        .run(&credentials)
+        .await
+        .unwrap();
+    crate::crypto::use_test_key();
+
+    let entries: Vec<String> = (0..130)
+        .map(|index| format!(r#"{{"id":"s{index:03}","title":"T{index:03}"}}"#))
+        .collect();
+    let playlist_body = format!(
+        r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1","playlist":{{"entry":[{}]}}}}}}"#,
+        entries.join(",")
+    );
+    let list_body = r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlists":{"playlist":[{"id":"pl1","name":"Long","songCount":130}]}}}"#;
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        let mut requests: Vec<String> = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while requests.len() < 8 && Instant::now() < deadline {
+            let (mut socket, _) = match listener.accept() {
+                Ok(pair) => pair,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(_) => break,
+            };
+            _ = socket.set_read_timeout(Some(Duration::from_secs(5)));
+            let mut buffer = [0u8; 16384];
+            let read = socket.read(&mut buffer).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let body = if request.contains("getPlaylist.view") {
+                playlist_body.as_str()
+            } else if request.contains("getPlaylists.view") {
+                list_body
+            } else {
+                r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#
+            };
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(head.as_bytes()).expect("head");
+            socket.write_all(body.as_bytes()).expect("body");
+            socket.flush().expect("flush");
+            requests.push(request);
+        }
+        requests
+    });
+
+    let server_url = format!("http://{addr}");
+    crate::sqlite::save_credentials(&credentials, "alice", "secret", &server_url, "navidrome")
+        .await
+        .unwrap();
+
+    let library = playlist_pool().await;
+    let playlist = playlist_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO playlist (id, source, name, song_count, duration, fetched_at)
+         VALUES ('pl1', 'subsonic', 'Long', 130, 1, 0)",
+    )
+    .execute(&playlist)
+    .await
+    .unwrap();
+    let mut tx = playlist.begin().await.unwrap();
+    for index in 0..130 {
+        sqlx::query(
+            "INSERT INTO playlist_song (playlist_id, position, song_id, title)
+             VALUES ('pl1', ?1, ?2, ?3)",
+        )
+        .bind(index)
+        .bind(format!("s{index:03}"))
+        .bind(format!("T{index:03}"))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+    let dbs = dbs_with_credentials(&credentials, &library, &playlist);
+
+    insert_song_ids_at(&dbs, "pl1", 1, &["s999".to_string()])
+        .await
+        .unwrap();
+
+    let requests = server.join().expect("server thread");
+    let updates: Vec<&String> = requests
+        .iter()
+        .filter(|request| request.contains("updatePlaylist.view"))
+        .collect();
+    let removes: Vec<&&String> = updates
+        .iter()
+        .filter(|request| request.contains("songIdToRemove="))
+        .collect();
+    let adds: Vec<&&String> = updates
+        .iter()
+        .filter(|request| request.contains("songIdToAdd="))
+        .collect();
+    assert_eq!((removes.len(), adds.len()), (3, 3), "{updates:?}");
+    for request in &removes {
+        assert_le_batch(request);
+    }
+    for request in &adds {
+        assert_le_batch(request);
+    }
+
+    let added: Vec<&str> = adds
+        .iter()
+        .flat_map(|request| request.split("songIdToAdd=").skip(1))
+        .map(|tail| {
+            tail.split(|ch: char| ch == '&' || ch.is_whitespace())
+                .next()
+                .unwrap_or_default()
+        })
+        .collect();
+    assert_eq!(added.len(), 131);
+    assert_eq!(&added[..3], ["s000", "s999", "s001"]);
+    assert_eq!(added.last().copied(), Some("s129"));
+}
+
+fn assert_le_batch(request: &str) {
+    for key in ["songIdToRemove=", "songIdToAdd="] {
+        let count = request.matches(key).count();
+        assert!(count <= 64, "{key} batch has {count} ids: {request}");
+    }
+}

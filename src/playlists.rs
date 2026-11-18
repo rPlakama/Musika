@@ -951,6 +951,34 @@ async fn load_subsonic_songs(dbs: &Dbs, client: &SubsonicClient, playlist_id: &s
     Ok(())
 }
 
+/// `updatePlaylist` is a query-string GET. Large remove/add lists otherwise
+/// exceed proxy/server request-line limits and arrive as a broken pipe (the
+/// duplicate cleanup and every server reorder hit this on long playlists).
+const SERVER_EDIT_BATCH: usize = 64;
+
+/// Updates one server playlist in bounded remove/add batches, preserving the
+/// order of `add` across batches.
+async fn update_server_songs(
+    client: &SubsonicClient,
+    playlist_id: &str,
+    remove: &[String],
+    add: &[String],
+) -> Result<()> {
+    for chunk in remove.chunks(SERVER_EDIT_BATCH) {
+        client
+            .update_playlist_remove(playlist_id, chunk)
+            .await
+            .with_context(|| format!("removing {} server playlist entries", chunk.len()))?;
+    }
+    for chunk in add.chunks(SERVER_EDIT_BATCH) {
+        client
+            .update_playlist_add(playlist_id, chunk)
+            .await
+            .with_context(|| format!("adding {} server playlist entries", chunk.len()))?;
+    }
+    Ok(())
+}
+
 /// Physically remove duplicate server entries: remove every entry in the
 /// current order (duplicates included, one removal per occurrence), then
 /// re-add the keep-first order. The caller owns the reload/refresh; this never
@@ -962,14 +990,9 @@ async fn clean_server_duplicate_entries(
     current_order: &[String],
     deduped_order: &[String],
 ) -> Result<()> {
-    client
-        .update_playlist_remove(playlist_id, current_order)
+    update_server_songs(client, playlist_id, current_order, deduped_order)
         .await
-        .context("removing the duplicated server playlist entries")?;
-    client
-        .update_playlist_add(playlist_id, deduped_order)
-        .await
-        .context("re-adding the deduplicated server playlist order")?;
+        .context("cleaning duplicated server playlist entries")?;
     Ok(())
 }
 
@@ -1576,14 +1599,7 @@ async fn append_resolved(dbs: &Dbs, playlist: &PlaylistRef, song_ids: &[String])
             .into_iter()
             .filter(|id| wanted.contains(id.as_str()))
             .collect();
-        if !duplicates.is_empty() {
-            client
-                .update_playlist_remove(&playlist.id, &duplicates)
-                .await
-                .context("clearing the duplicate server entries")?;
-        }
-        client
-            .update_playlist_add(&playlist.id, &song_ids)
+        update_server_songs(&client, &playlist.id, &duplicates, &song_ids)
             .await
             .context("updating the server playlist")?;
         // The list refresh only carries counts; reload the ordered entries so
@@ -1624,8 +1640,7 @@ pub async fn remove_from_playlist(
         let client = crate::session::client(dbs)
             .await
             .context("removing from a server playlist needs a signed-in server")?;
-        client
-            .update_playlist_remove(&playlist.id, &song_ids)
+        update_server_songs(&client, &playlist.id, &song_ids, &[])
             .await
             .context("updating the server playlist")?;
         load_subsonic_songs(dbs, &client, &playlist.id)
@@ -1672,8 +1687,7 @@ pub async fn remove_playlist_positions(
         let client = crate::session::client(dbs)
             .await
             .context("removing from a server playlist needs a signed-in server")?;
-        client
-            .update_playlist_remove(&playlist.id, &song_ids)
+        update_server_songs(&client, &playlist.id, &song_ids, &[])
             .await
             .context("updating the server playlist")?;
         load_subsonic_songs(dbs, &client, &playlist.id)
@@ -1986,18 +2000,9 @@ async fn rebuild_server_playlist(
     // The cache is already deduplicated, but treat the target order the same
     // way: a move/insert must never write a duplicate back to the server.
     let ordered_ids = dedup_keep_first_ids(ordered_ids);
-    if !current.is_empty() {
-        client
-            .update_playlist_remove(&playlist.id, &current)
-            .await
-            .context("clearing the server playlist order")?;
-    }
-    if !ordered_ids.is_empty() {
-        client
-            .update_playlist_add(&playlist.id, &ordered_ids)
-            .await
-            .context("writing the server playlist order")?;
-    }
+    update_server_songs(&client, &playlist.id, &current, &ordered_ids)
+        .await
+        .context("rewriting the server playlist order")?;
     load_subsonic_songs(dbs, &client, &playlist.id)
         .await
         .context("refreshing the server playlist songs")?;

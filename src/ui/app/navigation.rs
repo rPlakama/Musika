@@ -491,6 +491,10 @@ impl AppRoot {
                 // Arriving Home ends the travel session; a later page must not
                 // inherit places from before the trip to Home.
                 self.travel.clear();
+                // Playlist edits (and a page's own server refresh/dedupe)
+                // update the list rows behind the page. Reload the list on the
+                // way back instead of showing its pre-edit count/order.
+                self.reload();
             }
         }
     }

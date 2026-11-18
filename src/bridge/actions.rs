@@ -221,14 +221,14 @@ impl Bridge {
         });
     }
 
-    pub fn quick_play_playlist(&self, id: String) {
+    pub fn quick_play_playlist(&self, id: String, start: usize) {
         let tx = self.tx.clone();
         let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             emit_queue_pair(
                 &tx,
-                crate::queue::playlist_tracks(&dbs, &id, offline, 0)
+                crate::queue::playlist_tracks(&dbs, &id, offline, start as i64)
                     .await
                     .map(|(tracks, start)| (tracks, start as usize)),
                 "Could not play the playlist",

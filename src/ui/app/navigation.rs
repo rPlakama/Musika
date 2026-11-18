@@ -574,7 +574,10 @@ impl AppRoot {
                 }
             }
             page_profile::PageAction::PlayPlaylist => {
-                self.bridge.quick_play_playlist(descriptor.id);
+                // A playlist page starts at the row under the cursor, not the
+                // playlist head. The core maps the row to its queue index after
+                // offline rows are skipped.
+                self.bridge.quick_play_playlist(descriptor.id, index);
             }
             page_profile::PageAction::PlayRadio => {
                 let seed_kind = descriptor

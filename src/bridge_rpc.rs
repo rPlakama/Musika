@@ -100,7 +100,7 @@ macro_rules! for_each_bridge_rpc {
             quick_download(kind: String, id: String, on: bool),
             quick_go_album(song_id: String),
             quick_go_artist(album_id: String),
-            quick_play_playlist(id: String),
+            quick_play_playlist(id: String, start: usize),
             open_album_artist_reveal(album_id: String),
             download_artist(artist_id: String, on: bool),
             // History, accounts and maintenance.

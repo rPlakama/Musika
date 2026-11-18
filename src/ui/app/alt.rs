@@ -778,7 +778,8 @@ impl AppRoot {
                 self.bridge.quick_go_artist(target.album_id);
             }
             QuickVerb::PlayPlaylist => {
-                self.bridge.quick_play_playlist(target.playlist_id);
+                // The quick verb plays the whole playlist from its head.
+                self.bridge.quick_play_playlist(target.playlist_id, 0);
             }
             QuickVerb::DeletePlaylist => {
                 self.bridge.delete_playlist(target.playlist_id);

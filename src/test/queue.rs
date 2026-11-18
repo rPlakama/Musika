@@ -336,3 +336,53 @@ fn stream_quality_parameters_reach_the_provider_url() {
     assert!(!original.contains("maxBitRate"), "{original}");
     assert!(!original.contains("format="), "{original}");
 }
+
+/// The playlist page's Enter starts at the row under the cursor, and a row
+/// with no song id must not shift that queue index.
+#[tokio::test]
+async fn playlist_queue_start_tracks_the_clicked_row() {
+    let dbs = test_dbs().await;
+    crate::sqlite::save_credentials(
+        &dbs.credentials,
+        "alice",
+        "secret",
+        "http://server.test",
+        "navidrome",
+    )
+    .await
+    .unwrap();
+    sqlx::migrate!("./migrations_playlist")
+        .run(&dbs.playlist)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO songs (id, title, artist, album, duration, path) VALUES
+             ('s0', 'Zero', 'Artist', 'Album', 100, 'Music/0.flac'),
+             ('s2', 'Two', 'Artist', 'Album', 200, 'Music/2.flac'),
+             ('s3', 'Three', 'Artist', 'Album', 300, 'Music/3.flac')",
+    )
+    .execute(&dbs.library)
+    .await
+    .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO playlist (id, source, name, song_count, duration, fetched_at)
+             VALUES ('pl1', 'subsonic', 'Mix', 4, 600, 0);
+         INSERT INTO playlist_song (playlist_id, position, song_id, title)
+             VALUES ('pl1', 0, 's0', 'Zero'),
+                    ('pl1', 1, NULL, 'Missing'),
+                    ('pl1', 2, 's2', 'Two'),
+                    ('pl1', 3, 's3', 'Three');",
+    )
+    .execute(&dbs.playlist)
+    .await
+    .unwrap();
+
+    let (tracks, start) = playlist_tracks(&dbs, "pl1", false, 3).await.unwrap();
+    let ids: Vec<&str> = tracks.iter().map(|track| track.id.as_str()).collect();
+    assert_eq!(ids, ["s0", "s2", "s3"]);
+    assert_eq!(start, 2, "the null row is skipped before the cursor");
+    assert_eq!(tracks[start as usize].id, "s3");
+
+    let (_, start) = playlist_tracks(&dbs, "pl1", false, 0).await.unwrap();
+    assert_eq!(start, 0);
+}

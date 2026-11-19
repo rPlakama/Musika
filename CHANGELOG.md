@@ -3,6 +3,23 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.7.6 - _Layouts and virtual spacing_
+
+- **One layout table:** the page, top bar and player bar now derive from the
+  same 1200x800 window fractions. Tall narrow and short wide pages keep a cover
+  pane, the adaptive row floor is 27 px, and the window cannot shrink below
+  480x320 without losing the cover.
+- **Lateral pages:** once the client has 130% more width than the stacked cover
+  needs, the page puts the rows beside the cover instead of leaving empty side
+  space. This is width-relative rather than an absolute 1440 px breakpoint, so
+  wide-but-short windows use the same split.
+- **Virtual chrome:** the top and player bars clamp at 90% of their reference
+  height on short windows, and every child (transport, metadata, chips, icons,
+  padding) inherits the bar's scale. Compact file/rate metadata in the top bar
+  scrolls horizontally when it overflows.
+- **Verification:** 654 tests pass (19 ignored), `cargo clippy --all-targets`
+  is clean, and the packaged Nix build opens and renders the new layout.
+
 ## 0.7.5 - _Incremental Patches_
 
 - **One fullscreen status surface:** the page bar and fullscreen view now share

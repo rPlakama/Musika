@@ -243,7 +243,7 @@ impl AppRoot {
                             .w_full()
                             .flex()
                             .items_center()
-                            .h(px((row_h - 2.0).max(18.0)))
+                            .h(px((row_h - 2.0).max(metrics::MIN_ROW_HEIGHT - 2.0)))
                             .mt(px(1.0))
                             .px_3()
                             .rounded_sm()

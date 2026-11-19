@@ -25,7 +25,7 @@ pub struct ScrollProfile {
 pub const LIBRARY: ScrollProfile = ScrollProfile {
     row_ratio: 0.105,
     nominal_row_h: 58.0,
-    min_row_h: 18.0,
+    min_row_h: metrics::MIN_ROW_HEIGHT,
     overscan_rows: 10,
     follow_ms: 300.0,
     adaptive: true,
@@ -33,7 +33,7 @@ pub const LIBRARY: ScrollProfile = ScrollProfile {
 pub const ALBUM: ScrollProfile = ScrollProfile {
     row_ratio: 0.06,
     nominal_row_h: 36.0,
-    min_row_h: 18.0,
+    min_row_h: metrics::MIN_ROW_HEIGHT,
     overscan_rows: 10,
     follow_ms: 300.0,
     adaptive: true,
@@ -44,7 +44,7 @@ pub const ALBUM: ScrollProfile = ScrollProfile {
 pub const SEARCH: ScrollProfile = ScrollProfile {
     row_ratio: 0.12,
     nominal_row_h: 56.0,
-    min_row_h: 18.0,
+    min_row_h: metrics::MIN_ROW_HEIGHT,
     overscan_rows: 10,
     follow_ms: 300.0,
     adaptive: false,
@@ -52,7 +52,7 @@ pub const SEARCH: ScrollProfile = ScrollProfile {
 pub const QUEUE: ScrollProfile = ScrollProfile {
     row_ratio: 0.10,
     nominal_row_h: 56.0,
-    min_row_h: 18.0,
+    min_row_h: metrics::MIN_ROW_HEIGHT,
     overscan_rows: 10,
     follow_ms: 300.0,
     adaptive: true,
@@ -322,6 +322,27 @@ mod tests {
         assert!((ALBUM.row_ratio - 0.06).abs() < f32::EPSILON);
         assert!((QUEUE.row_ratio - 0.10).abs() < f32::EPSILON);
         assert_eq!(LIBRARY.follow_ms, 300.0);
+        for profile in [LIBRARY, ALBUM, SEARCH, QUEUE] {
+            assert_eq!(profile.min_row_h, metrics::MIN_ROW_HEIGHT);
+        }
+    }
+
+    #[test]
+    fn row_floor_is_the_raised_shared_minimum() {
+        // A profile whose adaptive target and 82% floor both fall below the
+        // absolute floor must still land on the shared 25.2 px minimum.
+        let profile = ScrollProfile {
+            row_ratio: 0.001,
+            nominal_row_h: 1.0,
+            min_row_h: metrics::MIN_ROW_HEIGHT,
+            overscan_rows: 1,
+            follow_ms: 0.0,
+            adaptive: true,
+        };
+        let mut modal = ScrollModal::new(profile);
+        assert_eq!(modal.row_h, 1.0);
+        assert!(modal.ensure_metrics(10.0));
+        assert_eq!(modal.row_h, metrics::MIN_ROW_HEIGHT);
     }
 
     #[test]

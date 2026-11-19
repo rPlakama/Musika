@@ -33,7 +33,8 @@ pub const COMPACT_WIDTH: f32 = 900.0;
 /// `Theme.widthScale` default floor (UI-57).
 pub const WIDTH_SCALE_FLOOR: f32 = 0.7;
 /// `ScrollContent.minRowHeight`: the smallest whole row the lists ever get.
-pub const MIN_ROW_HEIGHT: f32 = 18.0;
+/// Raised 40% from the original 18 px floor (18 * 1.4 = 25.2).
+pub const MIN_ROW_HEIGHT: f32 = 25.2;
 /// A row may lose at most 18% of its captured baseline (UI-58).
 pub const BASELINE_FLOOR: f32 = 0.82;
 
@@ -213,7 +214,7 @@ impl SurfaceMetrics {
 
     /// `ScrollContent.adaptiveRowHeight`: the adaptive row scaled by the
     /// profile, rounded to a whole pixel (Qt's content coordinate is
-    /// integer-based) and never below the 18 px floor.
+    /// integer-based) and never below the raised 25.2 px floor.
     ///
     /// The first call captures the baseline; later calls ignore the reference
     /// for the floor and only use it for the nominal height.
@@ -682,13 +683,14 @@ mod tests {
 
         // A zero reference is not a real measure: it must not capture.
         let mut pending = SurfaceMetrics::new();
-        assert_eq!(pending.row_height(ScrollProfile::PAGE, 0.0), 18.0);
+        assert_eq!(pending.row_height(ScrollProfile::PAGE, 0.0), MIN_ROW_HEIGHT);
         assert_eq!(pending.baseline(), 0.0);
         assert_eq!(pending.row_height(ScrollProfile::PAGE, 1000.0), 55.0);
     }
 
     #[test]
     fn row_height_rounds_to_whole_pixels() {
+        assert_close(MIN_ROW_HEIGHT, 25.2);
         // 641 * 0.055 = 35.255 -> 35.
         let mut page = SurfaceMetrics::new();
         assert_eq!(page.row_height(ScrollProfile::PAGE, 641.0), 35.0);
@@ -699,9 +701,13 @@ mod tests {
         // 500 px: max(60, 0.82*120) * 1.04 = 102.336 -> 102.
         assert_eq!(search.row_height(ScrollProfile::SEARCH, 500.0), 102.0);
 
-        // The 18 px minimum applies after rounding: 100 * 0.12 * 1.04 = 12.48.
+        // The raised 25.2 px minimum applies after rounding:
+        // 100 * 0.12 * 1.04 = 12.48.
         let mut tiny = SurfaceMetrics::new();
-        assert_eq!(tiny.row_height(ScrollProfile::SEARCH, 100.0), 18.0);
+        assert_eq!(
+            tiny.row_height(ScrollProfile::SEARCH, 100.0),
+            MIN_ROW_HEIGHT
+        );
 
         // Integers stay exact (no double rounding).
         assert_eq!(tiny.row_height(ScrollProfile::LIBRARY, 1000.0), 105.0);

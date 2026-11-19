@@ -300,7 +300,9 @@ pub const SPLIT_COVER_FRACTION: f32 = 0.40;
 pub const SPLIT_MIN_COVER_FRACTION: f32 = 0.28;
 /// Gap between the cover and list panes in the split layout.
 pub const SPLIT_GAP_FRACTION: f32 = 0.015;
-/// Minimum row-pane width that still reads as a list.
+/// Minimum row-pane width for the optional wide split. A short window always
+/// splits instead: it has no vertical room to stack a cover, so preserving the
+/// cover and a narrower list beats dropping the cover.
 pub const MIN_ROWS_WIDTH: f32 = 280.0;
 
 /// The three vertical bands every shell surface shares: top bar, body and
@@ -398,14 +400,16 @@ impl PageLayout {
         let reference_body = WindowLayout::reference().body_h;
         let reference_hero = PageLayout::stacked_hero_art(WindowLayout::reference());
         let cover_fraction = cover_side / width;
-        let wide_split = width >= WIDE_SPLIT_MIN_WIDTH
-            && cover_fraction < WIDE_SPLIT_COVER_RATIO
-            && split_list_w >= MIN_ROWS_WIDTH;
+        let split_fits = split_list_w >= MIN_ROWS_WIDTH;
+        let wide_split =
+            width >= WIDE_SPLIT_MIN_WIDTH && cover_fraction < WIDE_SPLIT_COVER_RATIO && split_fits;
         let short_split = body_h < SPLIT_BODY_RATIO * reference_body
             || hero_art < 0.5 * reference_hero
             || stacked_list_h < 3.0 * MIN_ROW_HEIGHT;
-        let rows_only =
-            body_h < ROWS_ONLY_BODY_RATIO * reference_body || split_list_w < MIN_ROWS_WIDTH;
+        // Width never suppresses the cover on its own. A tall, narrow window
+        // stacks the cover and accepts fewer visible rows; only a body that is
+        // too short for any cover falls back to rows-only.
+        let rows_only = body_h < ROWS_ONLY_BODY_RATIO * reference_body;
 
         let mode = if rows_only {
             PageMode::RowsOnly
@@ -461,8 +465,12 @@ impl PageLayout {
     }
 
     /// Height reference for adaptive page-row sizing.
+    ///
+    /// Row density follows the page body, not the remaining list pane. The
+    /// stacked cover must not make the rows smaller than the reference layout;
+    /// it changes how many rows are visible, not their stride.
     pub fn row_reference(&self) -> f32 {
-        (self.list_h - 2.0 * self.list_pad).max(1.0)
+        self.body_h.max(1.0)
     }
 }
 
@@ -512,13 +520,32 @@ mod tests {
             WindowLayout::new(1920.0, 1132.0).page().mode,
             PageMode::Split
         );
+        // A tall, narrow page keeps its cover: list width alone must not
+        // demote the page to rows-only.
         assert_eq!(
-            WindowLayout::new(480.0, 320.0).page().mode,
-            PageMode::RowsOnly
+            WindowLayout::new(505.0, 909.0).page().mode,
+            PageMode::Stacked
         );
+        // A short window splits even when the row pane is under the optional
+        // wide-split width, preserving the cover instead of hiding it.
+        assert_eq!(WindowLayout::new(480.0, 320.0).page().mode, PageMode::Split);
         assert_eq!(
             WindowLayout::new(320.0, 240.0).page().mode,
             PageMode::RowsOnly
+        );
+    }
+
+    #[test]
+    fn tall_narrow_page_keeps_a_usable_stacked_cover() {
+        let layout = WindowLayout::new(505.0, 909.0).page();
+        assert_eq!(layout.mode, PageMode::Stacked);
+        assert!(layout.cover_art() > layout.width * 0.9);
+        assert!(layout.list_h >= 3.0 * MIN_ROW_HEIGHT);
+        // Row density stays tied to the page body rather than the list pane.
+        assert_close(layout.row_reference(), layout.body_h);
+        assert_close(
+            PageLayout::reference().row_reference(),
+            WindowLayout::reference().body_h,
         );
     }
 

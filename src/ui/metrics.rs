@@ -33,8 +33,8 @@ pub const COMPACT_WIDTH: f32 = 900.0;
 /// `Theme.widthScale` default floor (UI-57).
 pub const WIDTH_SCALE_FLOOR: f32 = 0.7;
 /// `ScrollContent.minRowHeight`: the smallest whole row the lists ever get.
-/// Raised 40% from the original 18 px floor (18 * 1.4 = 25.2).
-pub const MIN_ROW_HEIGHT: f32 = 25.2;
+/// Raised from the original 18 px floor to 27 px.
+pub const MIN_ROW_HEIGHT: f32 = 27.0;
 /// A row may lose at most 18% of its captured baseline (UI-58).
 pub const BASELINE_FLOOR: f32 = 0.82;
 
@@ -214,7 +214,7 @@ impl SurfaceMetrics {
 
     /// `ScrollContent.adaptiveRowHeight`: the adaptive row scaled by the
     /// profile, rounded to a whole pixel (Qt's content coordinate is
-    /// integer-based) and never below the raised 25.2 px floor.
+    /// integer-based) and never below the raised 27 px floor.
     ///
     /// The first call captures the baseline; later calls ignore the reference
     /// for the floor and only use it for the nominal height.
@@ -704,7 +704,7 @@ mod tests {
 
     #[test]
     fn row_height_rounds_to_whole_pixels() {
-        assert_close(MIN_ROW_HEIGHT, 25.2);
+        assert_close(MIN_ROW_HEIGHT, 27.0);
         // 641 * 0.055 = 35.255 -> 35.
         let mut page = SurfaceMetrics::new();
         assert_eq!(page.row_height(ScrollProfile::PAGE, 641.0), 35.0);
@@ -715,7 +715,7 @@ mod tests {
         // 500 px: max(60, 0.82*120) * 1.04 = 102.336 -> 102.
         assert_eq!(search.row_height(ScrollProfile::SEARCH, 500.0), 102.0);
 
-        // The raised 25.2 px minimum applies after rounding:
+        // The raised 27 px minimum applies after rounding:
         // 100 * 0.12 * 1.04 = 12.48.
         let mut tiny = SurfaceMetrics::new();
         assert_eq!(

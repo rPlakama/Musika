@@ -330,7 +330,7 @@ mod tests {
     #[test]
     fn row_floor_is_the_raised_shared_minimum() {
         // A profile whose adaptive target and 82% floor both fall below the
-        // absolute floor must still land on the shared 25.2 px minimum.
+        // absolute floor must still land on the shared 27 px minimum.
         let profile = ScrollProfile {
             row_ratio: 0.001,
             nominal_row_h: 1.0,

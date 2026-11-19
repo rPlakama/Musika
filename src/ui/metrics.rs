@@ -285,6 +285,14 @@ pub const PAGE_LIST_PAD_FRACTION: f32 = 0.012;
 pub const REFERENCE_WIDTH: f32 = 1200.0;
 /// Height of the reference window used to calibrate the page table.
 pub const REFERENCE_HEIGHT: f32 = 800.0;
+/// The window may not shrink below this share of the reference size. At
+/// 480x320 the page still has a split cover pane; below it the cover would be
+/// the first thing lost.
+pub const MIN_WINDOW_FRACTION: f32 = 0.4;
+/// Smallest window width that keeps the page cover available.
+pub const MIN_WINDOW_WIDTH: f32 = REFERENCE_WIDTH * MIN_WINDOW_FRACTION;
+/// Smallest window height that keeps the page cover available.
+pub const MIN_WINDOW_HEIGHT: f32 = REFERENCE_HEIGHT * MIN_WINDOW_FRACTION;
 /// Below this body height the stacked page switches to the split layout.
 pub const SPLIT_BODY_RATIO: f32 = 0.72;
 /// Below this body height even the split row pane is discarded.
@@ -509,6 +517,16 @@ mod tests {
         assert_close(layout.header_h, 451.44);
         assert_close(layout.list_h, 230.48);
         assert_close(layout.list_pad, 8.18304);
+    }
+
+    #[test]
+    fn minimum_window_still_has_a_cover_pane() {
+        assert_close(MIN_WINDOW_WIDTH, 480.0);
+        assert_close(MIN_WINDOW_HEIGHT, 320.0);
+        let layout = WindowLayout::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT).page();
+        assert_ne!(layout.mode, PageMode::RowsOnly);
+        assert!(layout.cover_art() > 0.0);
+        assert!(layout.list_w > 0.0);
     }
 
     #[test]

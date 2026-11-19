@@ -214,6 +214,10 @@ pub fn run() {
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    window_min_size: Some(size(
+                        px(metrics::MIN_WINDOW_WIDTH),
+                        px(metrics::MIN_WINDOW_HEIGHT),
+                    )),
                     ..Default::default()
                 },
                 |window, cx| {

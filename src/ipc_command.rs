@@ -384,7 +384,7 @@ impl IpcCommand {
             },
             I::Shuffle {
                 target: ShuffleTarget::Queue,
-            } => P::ShuffleQueue,
+            } => P::ShuffleQueueOrder,
             _ => return None,
         })
     }
@@ -2704,6 +2704,11 @@ mod tests {
             Ok(IpcCommand::Shuffle {
                 target: ShuffleTarget::Queue
             })
+        );
+        assert_eq!(
+            parse("shuffle queue").unwrap().player_op(),
+            Some(crate::ipc_protocol::PlayerOp::ShuffleQueueOrder),
+            "the command must reorder, not toggle the persistent mode"
         );
         assert_eq!(
             parse("shuffle album"),

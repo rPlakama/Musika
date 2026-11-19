@@ -1197,6 +1197,9 @@ impl PlaybackClient {
     pub fn shuffle_queue(&self) {
         self.send(PlayerOp::ShuffleQueue);
     }
+    pub fn shuffle_queue_order(&self) {
+        self.send(PlayerOp::ShuffleQueueOrder);
+    }
     pub fn set_track_favorite(&self, song_id: &str, favorite: bool) {
         self.send(PlayerOp::SetTrackFavorite {
             id: song_id.to_string(),
@@ -1387,6 +1390,9 @@ impl AppPlayer {
     }
     pub fn shuffle_queue(&self) {
         self.client.shuffle_queue();
+    }
+    pub fn shuffle_queue_order(&self) {
+        self.client.shuffle_queue_order();
     }
     pub fn set_track_favorite(&self, song_id: &str, favorite: bool) {
         self.client.set_track_favorite(song_id, favorite);

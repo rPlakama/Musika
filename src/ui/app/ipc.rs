@@ -60,6 +60,7 @@ impl AppRoot {
                 }
                 PlayerOp::SetCrossfade(enabled) => self.player.set_crossfade(enabled),
                 PlayerOp::ShuffleQueue => self.player.shuffle_queue(),
+                PlayerOp::ShuffleQueueOrder => self.player.shuffle_queue_order(),
                 PlayerOp::SetMuted(_)
                 | PlayerOp::Jump(_)
                 | PlayerOp::Remove(_)

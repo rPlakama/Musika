@@ -260,6 +260,7 @@ fn every_player_op_round_trips() {
         },
         PlayerOp::CycleRepeat,
         PlayerOp::ShuffleQueue,
+        PlayerOp::ShuffleQueueOrder,
         PlayerOp::SetTrackFavorite {
             id: "song-1".to_string(),
             favorite: true,

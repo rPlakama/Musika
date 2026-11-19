@@ -154,15 +154,34 @@ impl AppRoot {
         )
     }
 
+    /// Row height that sets the Alt cross's scale. List surfaces use their
+    /// actual measured row; the top-status/fullscreen surfaces use the bar
+    /// height because they have no rows of their own.
+    fn alt_row_height(&self) -> f32 {
+        if self.fullscreen || self.status_focus.is_some() {
+            return metrics::TopBarMetrics::new(self.win_h).bar_h;
+        }
+        if self.search_open && self.search.is_some() {
+            return 56.0;
+        }
+        if self.queue_open {
+            return self.queue_scroll_modal.row_h;
+        }
+        if self.page.is_some() {
+            return self.page_scroll_modal.row_h;
+        }
+        self.library_scroll.row_h
+    }
+
     pub(in crate::ui) fn alt_overlay(&self, progress: f32) -> gpui::AnyElement {
         let (Some(menu), Some((ax, ay))) = (self.alt_menu.as_ref(), self.alt_anchor) else {
             return div().into_any_element();
         };
-        let board = metrics::alt_board_metrics(self.win_w, self.win_h, progress);
-        let page_h = board.page_h;
-        let option_scale = board.option_scale;
-        let box_side = board.tile_side;
-        let frame_side = board.frame_side;
+        let board_metrics = metrics::alt_board_metrics(self.alt_row_height(), progress);
+        let frame_side = board_metrics.frame_side;
+        let slot_side = board_metrics.slot_side;
+        let box_side = slot_side;
+        let page_h = (self.win_h - 120.0).max(1.0);
         // The board is anchored at the focused item but may slide inside the
         // safe window area: topbar/status anchors often sit too close to an
         // edge for a full-size board to stay centred there.
@@ -184,7 +203,11 @@ impl AppRoot {
                 continue;
             };
             let aimed = self.alt.aimed == Some(direction);
-            let size = if aimed { box_side * 1.30 } else { box_side };
+            let size = if aimed {
+                slot_side * 1.30
+            } else {
+                board_metrics.tile_side
+            };
             let (cx, cy) = match direction {
                 Direction::North => (center + box_side * 0.5, box_side * 0.5),
                 Direction::South => (center + box_side * 0.5, frame_side - box_side * 0.5),
@@ -239,7 +262,7 @@ impl AppRoot {
             if icon_name.is_empty() {
                 tile = tile.child(
                     div()
-                        .text_size(px((page_h * 0.018 * option_scale).max(11.0)))
+                        .text_size(px((slot_side * 0.55).max(9.0)))
                         .text_color(rgb(fg))
                         .child(label),
                 );
@@ -259,14 +282,15 @@ impl AppRoot {
             }
             board = board.child(tile);
         }
+        let marker = slot_side * 0.5;
         board = board.child(
             div()
                 .absolute()
-                .left(px(center + box_side * 0.5 - page_h * 0.013))
-                .top(px(center + box_side * 0.5 - page_h * 0.013))
+                .left(px(frame_side * 0.5 - marker * 0.5))
+                .top(px(frame_side * 0.5 - marker * 0.5))
                 .child(icon(
                     "arrow-move-20-regular.svg",
-                    page_h * 0.026,
+                    marker,
                     palette::primary(),
                 ))
                 .opacity(if self.alt.aimed.is_none() { 1.0 } else { 0.6 }),

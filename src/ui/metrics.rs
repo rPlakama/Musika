@@ -347,37 +347,42 @@ impl TopBarMetrics {
     }
 }
 
-/// The Alt board never paints a tile smaller than this, even when both the
-/// window and its derived option ramp are tiny.
-pub const MIN_ALT_TILE: f32 = 36.0;
+/// The Alt cross spans five list rows. That row-derived frame is the whole
+/// scale; it does not need a window-derived option ramp.
+pub const ALT_ARM_ROWS: f32 = 5.0;
+/// The Alt board never paints a tile smaller than this.
+pub const MIN_ALT_TILE: f32 = 18.0;
+/// Soft upper bound for a tile on very tall rows.
+pub const MAX_ALT_TILE: f32 = 24.0;
+/// Soft upper bound for the whole cross, so 4K rows do not spread it across
+/// the screen.
+pub const MAX_ALT_FRAME: f32 = 360.0;
 
 /// Geometry for the Alt board's cross of action tiles.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AltBoardMetrics {
-    pub page_h: f32,
-    pub option_scale: f32,
-    pub tile_side: f32,
+    /// Whole cross side: five list rows.
     pub frame_side: f32,
+    /// Fixed arm slot used for centering (does not animate).
+    pub slot_side: f32,
+    /// Painted tile; the spawn animation scales this around the slot centre.
+    pub tile_side: f32,
 }
 
-/// Responsive Alt board geometry. The option ramp may shrink with the window,
-/// but the tile itself is clamped to [`MIN_ALT_TILE`] so the cross stays
-/// legible at the smallest supported sizes; the frame follows the clamped tile
-/// and is then bounded by the safe window area.
-pub fn alt_board_metrics(window_width: f32, window_height: f32, progress: f32) -> AltBoardMetrics {
-    let page_h = (window_height - 120.0).max(1.0);
-    let option_scale =
-        (0.816 * ((window_width - 20.0) / 1280.0).min((page_h - 20.0) / 720.0)).clamp(0.5, 0.816);
+/// Alt-board geometry derived from one list row. The frame is exactly five
+/// rows (soft-clamped to a visible minimum and a sane maximum); each arm slot
+/// is an eighth of that frame, and the tiles spawn by scaling in place so the
+/// cross never drifts off its anchor.
+pub fn alt_board_metrics(row_h: f32, progress: f32) -> AltBoardMetrics {
+    let row_h = row_h.max(1.0);
+    let frame_side = (row_h * ALT_ARM_ROWS).clamp(MIN_ALT_TILE * 6.0, MAX_ALT_FRAME);
+    // The tile rectangle and its glyph both use half the previous arm scale.
+    let slot_side = (frame_side / 8.0).clamp(MIN_ALT_TILE, MAX_ALT_TILE);
     let spawned = 0.72 + 0.28 * progress;
-    let tile_side = (page_h * 0.07 * option_scale).max(MIN_ALT_TILE) * spawned;
-    let frame_side = (tile_side * 8.0)
-        .min((window_width - 20.0).max(1.0))
-        .min((page_h - 20.0).max(1.0));
     AltBoardMetrics {
-        page_h,
-        option_scale,
-        tile_side,
         frame_side,
+        slot_side,
+        tile_side: slot_side * spawned,
     }
 }
 
@@ -892,31 +897,31 @@ mod tests {
     }
 
     #[test]
-    fn alt_board_keeps_a_visible_tile_on_small_windows() {
-        let reference = alt_board_metrics(REFERENCE_WIDTH, REFERENCE_HEIGHT, 1.0);
-        assert_close(reference.tile_side, MIN_ALT_TILE);
-        assert_close(reference.frame_side, MIN_ALT_TILE * 8.0);
+    fn alt_board_scales_from_the_row_height() {
+        // A normal 57 px row makes the cross exactly five rows wide.
+        let board = alt_board_metrics(57.0, 1.0);
+        assert_close(board.frame_side, 57.0 * ALT_ARM_ROWS);
+        assert!(board.slot_side >= MIN_ALT_TILE);
+        assert!(board.slot_side <= MAX_ALT_TILE);
+        assert!(board.frame_side >= 3.0 * board.slot_side);
+        assert_close(board.tile_side, board.slot_side);
 
-        // The reported 669x427 window previously produced ~10.7 px tiles.
-        let small = alt_board_metrics(669.0, 427.0, 1.0);
-        assert_close(small.tile_side, MIN_ALT_TILE);
-        assert!(small.frame_side >= 4.0 * MIN_ALT_TILE);
-
-        // Even at the minimum window the cross keeps the clamped tile and
-        // fills the safe height instead of vanishing.
-        let minimum = alt_board_metrics(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT, 1.0);
+        // The 27 px row floor still yields a visible tile.
+        let minimum = alt_board_metrics(MIN_ROW_HEIGHT, 1.0);
+        assert_close(minimum.frame_side, MIN_ROW_HEIGHT * ALT_ARM_ROWS);
+        assert_close(minimum.slot_side, MIN_ALT_TILE);
         assert_close(minimum.tile_side, MIN_ALT_TILE);
-        assert!(minimum.frame_side >= 4.0 * MIN_ALT_TILE);
-        assert!(minimum.frame_side <= minimum.page_h - 20.0);
 
-        // Large windows still grow past the clamp.
-        let large = alt_board_metrics(1920.0, 1132.0, 1.0);
-        assert!(large.tile_side > MIN_ALT_TILE);
-        assert!(large.frame_side > reference.frame_side);
+        // Tall rows grow the cross, but both tile and frame stay soft-clamped.
+        let large = alt_board_metrics(100.0, 1.0);
+        assert_close(large.frame_side, MAX_ALT_FRAME);
+        assert_close(large.slot_side, MAX_ALT_TILE);
 
-        // The spawn animation still scales up to the clamp.
-        let spawning = alt_board_metrics(669.0, 427.0, 0.0);
-        assert!(spawning.tile_side < small.tile_side);
+        // The spawn animates arm size in place; the frame/slots do not move.
+        let spawning = alt_board_metrics(57.0, 0.0);
+        assert_close(spawning.frame_side, board.frame_side);
+        assert_close(spawning.slot_side, board.slot_side);
+        assert!(spawning.tile_side < board.tile_side);
     }
 
     #[test]

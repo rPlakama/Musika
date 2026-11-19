@@ -973,6 +973,30 @@ fn shuffle_is_a_mode_and_does_not_reorder_the_queue() {
 }
 
 #[test]
+fn shuffle_queue_permutes_the_visible_queue_and_restarts() {
+    let seed = 0x5EED_1234_u128;
+    let mut core = PlaybackCore::new();
+    core.load(tracks(16), 7, false);
+    let before = ids(&core);
+
+    let mut order: Vec<usize> = (0..before.len()).collect();
+    crate::queue::shuffle_slice(&mut order, seed);
+    let expected: Vec<String> = order.iter().map(|index| before[*index].clone()).collect();
+    assert_ne!(expected, before, "the seed must exercise a real permutation");
+
+    let outcome = core.apply(CoreCommand::ShuffleQueueOrder(seed));
+    assert!(outcome.changed);
+    assert!(outcome.queue_reset, "the UI must receive the new row order");
+    assert_eq!(ids(&core), expected);
+    assert_eq!(core.index(), 0, "playback restarts at the shuffled head");
+    assert_eq!(core.state(), State::Playing);
+    assert!(matches!(
+        only_load(&outcome),
+        AudioCommand::Load { paused: false, .. }
+    ));
+}
+
+#[test]
 fn shuffle_can_be_armed_before_a_queue_exists() {
     let mut core = PlaybackCore::new();
     let outcome = core.apply(CoreCommand::ShuffleQueue);

@@ -16,10 +16,14 @@ open work; this file is the release history.
 - **Virtual chrome:** the top and player bars clamp at 90% of their reference
   height on short windows, and every child (transport, metadata, chips, icons,
   padding) inherits the bar's scale. Compact file/rate metadata in the top bar
-  scrolls horizontally when it overflows. The Alt action board keeps a 36 px
-  minimum tile, so its cross stays visible at 669x427 and at the 480x320 window
-  minimum instead of shrinking into a few pixels.
-- **Verification:** 655 tests pass (19 ignored), `cargo clippy --all-targets`
+  scrolls horizontally when it overflows. The Alt cross is now five list rows
+  across (18..24 px tiles, 360 px soft cap, half-size glyphs) and spawns by
+  scaling its tiles in place, so it stays centered on the selected row instead
+  of drifting.
+- **Shuffle queue:** `shuffle queue` permutes the visible queue and restarts at
+  the new head; the settings row still toggles the separate persistent-shuffle
+  mode without reordering the rows.
+- **Verification:** 656 tests pass (19 ignored), `cargo clippy --all-targets`
   is clean, and the packaged Nix build opens and renders the new layout.
 
 ## 0.7.5 - _Incremental Patches_

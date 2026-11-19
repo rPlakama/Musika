@@ -92,6 +92,7 @@ pub(crate) fn cancels_retry(command: &CoreCommand) -> bool {
             | CoreCommand::Next
             | CoreCommand::Previous
             | CoreCommand::ShuffleQueue
+            | CoreCommand::ShuffleQueueOrder(_)
             | CoreCommand::Remove(_)
             | CoreCommand::RemoveMany(_)
             | CoreCommand::Move { .. }
@@ -850,6 +851,7 @@ fn run(
                         | CoreCommand::Next
                         | CoreCommand::Previous
                         | CoreCommand::ShuffleQueue
+                        | CoreCommand::ShuffleQueueOrder(_)
                 );
                 if !needs_audio || service.ensure_engine() {
                     let setting_change = is_setting_command(&op);
@@ -1457,6 +1459,7 @@ fn core_command(op: &PlayerOp) -> Option<CoreCommand> {
         }
         P::SetCrossfade(enabled) => CoreCommand::SetCrossfade(*enabled),
         P::ShuffleQueue => CoreCommand::ShuffleQueue,
+        P::ShuffleQueueOrder => CoreCommand::ShuffleQueueOrder(crate::consts::now_nanos()),
         P::SetTrackFavorite { id, favorite } => CoreCommand::SetTrackFavorite {
             id: id.clone(),
             favorite: *favorite,
@@ -1476,6 +1479,7 @@ fn needs_engine(op: &PlayerOp) -> bool {
             | PlayerOp::Next
             | PlayerOp::Previous
             | PlayerOp::ShuffleQueue
+            | PlayerOp::ShuffleQueueOrder
     )
 }
 

@@ -59,6 +59,9 @@ pub(crate) enum CoreCommand {
     SetRepeat(Repeat),
     /// Toggle the persistent shuffle mode.
     ShuffleQueue,
+    /// Permute the visible queue and restart at its new head. The seed is
+    /// passed in by the caller so the operation is testable.
+    ShuffleQueueOrder(u128),
     /// Set the shuffle mode explicitly (MPRIS/settings).
     SetShuffle(bool),
     CycleNormalization,
@@ -424,6 +427,7 @@ impl PlaybackCore {
                 }
             }
             CoreCommand::ShuffleQueue => self.set_shuffle(!self.shuffle, &mut outcome),
+            CoreCommand::ShuffleQueueOrder(seed) => self.shuffle_queue_order(seed, &mut outcome),
             CoreCommand::SetShuffle(enabled) => self.set_shuffle(enabled, &mut outcome),
             CoreCommand::SetTrackFavorite { id, favorite } => {
                 self.set_track_favorite(&id, favorite, &mut outcome)
@@ -800,10 +804,7 @@ impl PlaybackCore {
         self.shuffle_plan = (0..self.queue.len())
             .filter(|index| *index != self.index)
             .collect();
-        crate::queue::shuffle_slice(
-            &mut self.shuffle_plan,
-            crate::consts::now_nanos(),
-        );
+        crate::queue::shuffle_slice(&mut self.shuffle_plan, crate::consts::now_nanos());
     }
 
     /// Structural edits shift row indices; rebuild the plan and drop stale
@@ -835,7 +836,8 @@ impl PlaybackCore {
         }
     }
 
-    fn advance_by(&mut self, steps: usize, outcome: &mut Outcome) {        if self.queue.is_empty() || steps == 0 {
+    fn advance_by(&mut self, steps: usize, outcome: &mut Outcome) {
+        if self.queue.is_empty() || steps == 0 {
             return;
         }
         let mut index = self.index;
@@ -1273,6 +1275,33 @@ impl PlaybackCore {
             outcome.queue_reset = true;
         }
         self.gapless_next = self.gapless_index();
+    }
+
+    /// `shuffle queue`: permute the actual queue rows and restart from the
+    /// shuffled head. This is deliberately separate from the persistent
+    /// shuffle mode (`ShuffleQueue`/`SetShuffle`), which keeps the visible
+    /// order intact and only changes what plays next.
+    fn shuffle_queue_order(&mut self, seed: u128, outcome: &mut Outcome) {
+        if self.queue.len() <= 1 {
+            return;
+        }
+        let mut order: Vec<usize> = (0..self.queue.len()).collect();
+        crate::queue::shuffle_slice(&mut order, seed);
+        let shuffled: Vec<Track> = order
+            .iter()
+            .map(|index| self.queue[*index].clone())
+            .collect();
+        self.queue = Arc::new(shuffled);
+        self.index = 0;
+        self.revision += 1;
+        self.history.clear();
+        self.shuffle_plan.clear();
+        outcome.queue_reset = true;
+        outcome.changed = true;
+        if self.shuffle {
+            self.rebuild_shuffle_plan();
+        }
+        self.start_current(false, outcome);
     }
 
     fn set_shuffle(&mut self, enabled: bool, outcome: &mut Outcome) {

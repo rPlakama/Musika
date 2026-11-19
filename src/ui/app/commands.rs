@@ -11,9 +11,10 @@ impl AppRoot {
                     self.push_toast("The queue is empty.".to_string(), ToastKind::Error, None);
                     return;
                 }
-                // The queue is a plain in-memory array: permute it directly
-                // and restart from the shuffled head (docs/Commands.md).
-                self.player.shuffle_queue();
+                // Permute the visible queue and restart at its new head
+                // (docs/Commands.md). The settings toggle uses the separate
+                // persistent-shuffle mode and keeps the row order intact.
+                self.player.shuffle_queue_order();
                 self.playback_error = None;
                 self.request_current_lyrics();
                 if self.queue_open {

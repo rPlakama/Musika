@@ -460,6 +460,8 @@ pub enum PlayerOp {
     },
     CycleRepeat,
     ShuffleQueue,
+    /// Permute the visible queue and restart at its head (`shuffle queue`).
+    ShuffleQueueOrder,
     SetTrackFavorite {
         id: String,
         favorite: bool,
@@ -505,6 +507,7 @@ impl PlayerOp {
             Self::ToggleCrossfade => 23,
             Self::SetNormalization(_) => 24,
             Self::SetCrossfade(_) => 25,
+            Self::ShuffleQueueOrder => 26,
         }
     }
 }
@@ -1041,6 +1044,7 @@ impl PlayerRequest {
             | PlayerOp::ToggleMute
             | PlayerOp::CycleRepeat
             | PlayerOp::ShuffleQueue
+            | PlayerOp::ShuffleQueueOrder
             | PlayerOp::CycleNormalization
             | PlayerOp::ToggleCrossfade
             | PlayerOp::Resync => {}
@@ -1097,6 +1101,7 @@ impl PlayerRequest {
             23 => PlayerOp::ToggleCrossfade,
             24 => PlayerOp::SetNormalization(r.u8()?),
             25 => PlayerOp::SetCrossfade(r.u8()? != 0),
+            26 => PlayerOp::ShuffleQueueOrder,
             tag => {
                 return Err(ProtocolError::new(
                     ErrorCode::BadPayload,

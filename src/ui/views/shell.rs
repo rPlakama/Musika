@@ -165,6 +165,12 @@ pub(in crate::ui) fn current_cover_key(track: &crate::player::Track) -> String {
 }
 
 impl AppRoot {
+    /// Child geometry for the top chrome. The bar height is the parent scale;
+    /// every top-bar helper derives its labels, icons and insets from it.
+    fn top_bar_metrics(&self) -> metrics::TopBarMetrics {
+        metrics::TopBarMetrics::new(self.win_h)
+    }
+
     pub(in crate::ui) fn topbar_action_chip(
         &self,
         action: TopBarAction,
@@ -172,6 +178,7 @@ impl AppRoot {
         anchors: StatusAnchorSlots,
         cx: &Context<Self>,
     ) -> gpui::AnyElement {
+        let m = self.top_bar_metrics();
         let slot = action.slot();
         let focused = self.status_focus == Some(slot);
         let (icon_el, opacity) = match action {
@@ -187,14 +194,20 @@ impl AppRoot {
                 let opacity = if self.syncing { 0.38 } else { 0.85 };
                 if self.syncing || !self.sync_settle.settled(&self.clock) {
                     (
-                        icon_rotated("loading-loop.svg", 18.0, color, self.sync_angle()),
+                        icon_rotated("loading-loop.svg", m.icon_size, color, self.sync_angle()),
                         opacity,
                     )
                 } else {
-                    (icon("reload-ui-2-svgrepo-com.svg", 18.0, color), opacity)
+                    (
+                        icon("reload-ui-2-svgrepo-com.svg", m.icon_size, color),
+                        opacity,
+                    )
                 }
             }
-            TopBarAction::Wipe => (icon("delete-outline.svg", 18.0, palette::on_surface()), 1.0),
+            TopBarAction::Wipe => (
+                icon("delete-outline.svg", m.icon_size, palette::on_surface()),
+                1.0,
+            ),
             TopBarAction::Download => {
                 let cached = page.is_some_and(|page| page.cached);
                 let downloading = page.is_some_and(|page| page.downloading);
@@ -204,7 +217,7 @@ impl AppRoot {
                             "topbar-download-spin",
                             slot,
                             "loading-loop.svg",
-                            18.0,
+                            m.icon_size,
                             palette::on_surface_variant(),
                         ),
                         0.85,
@@ -217,7 +230,7 @@ impl AppRoot {
                             } else {
                                 "outline-download.svg"
                             },
-                            18.0,
+                            m.icon_size,
                             palette::on_surface_variant(),
                         ),
                         1.0,
@@ -233,7 +246,7 @@ impl AppRoot {
                         } else {
                             "heart-add-fill.svg"
                         },
-                        18.0,
+                        m.icon_size,
                         if starred {
                             palette::primary()
                         } else {
@@ -244,19 +257,18 @@ impl AppRoot {
                 )
             }
             TopBarAction::Tool => (
-                icon("dots-fill.svg", 18.0, palette::on_surface_variant()),
+                icon("dots-fill.svg", m.icon_size, palette::on_surface_variant()),
                 1.0,
             ),
             TopBarAction::Normalization => {
                 let on = self.player.normalization().enabled();
                 (
                     div()
-                        .w(px(18.0))
-                        .h(px(18.0))
+                        .size(px(m.icon_size))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_size(px(13.0))
+                        .text_size(px(m.insight_text))
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(rgb(if on {
                             palette::primary()
@@ -274,7 +286,7 @@ impl AppRoot {
             .flex()
             .items_center()
             .justify_center()
-            .rounded_md()
+            .rounded(px(m.action_radius))
             .border_1()
             .border_color(rgb(if focused {
                 palette::primary()
@@ -291,7 +303,7 @@ impl AppRoot {
             .child(
                 div()
                     .id(gpui::ElementId::named_usize("topbar-action", slot))
-                    .p(px(3.0))
+                    .p(px(m.icon_pad))
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.activate_status(slot);
@@ -304,8 +316,9 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn bar_separator(&self) -> gpui::AnyElement {
+        let m = self.top_bar_metrics();
         div()
-            .text_size(px(14.0))
+            .text_size(px(m.body_size))
             .text_color(rgb(palette::on_surface_variant()))
             .child("·")
             .into_any_element()
@@ -316,11 +329,12 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn star_counter(&self, rating: u8) -> gpui::AnyElement {
-        let mut row = div().flex_none().flex().items_center().gap_1();
+        let m = self.top_bar_metrics();
+        let mut row = div().flex_none().flex().items_center().gap(px(m.gap * 0.5));
         for filled in Self::star_glyphs(rating) {
             row = row.child(
                 div()
-                    .text_size(px(13.0))
+                    .text_size(px(m.star_size))
                     .text_color(rgb(if filled {
                         palette::primary()
                     } else {
@@ -333,6 +347,7 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn home_bar(&self, cx: &Context<Self>) -> gpui::AnyElement {
+        let m = self.top_bar_metrics();
         let offline = self.connection_offline;
         let welcome = match (self.header.as_ref(), offline) {
             (Some(header), true) => format!("Welcome, {} · Offline", header.username),
@@ -351,23 +366,21 @@ impl AppRoot {
             .items_center()
             .w_full()
             .h_full()
-            .px_4()
-            .child(
-                div().flex().flex_1().min_w_0().items_center().child(
-                    div().w_full().overflow_hidden().child(MarqueeText::new(
-                        "topbar-welcome",
-                        0,
-                        welcome,
-                        19.0,
-                        400.0,
-                        if offline {
-                            palette::tertiary()
-                        } else {
-                            palette::on_surface_variant()
-                        },
-                    )),
-                ),
-            )
+            .px(px(m.padding_x))
+            .child(div().flex().flex_1().min_w_0().items_center().child(
+                div().w_full().overflow_hidden().child(MarqueeText::new(
+                    "topbar-welcome",
+                    0,
+                    welcome,
+                    m.title_size,
+                    400.0,
+                    if offline {
+                        palette::tertiary()
+                    } else {
+                        palette::on_surface_variant()
+                    },
+                )),
+            ))
             .child(
                 div()
                     .flex()
@@ -376,18 +389,18 @@ impl AppRoot {
                     .overflow_hidden()
                     .justify_end()
                     .items_center()
-                    .gap_3()
+                    .gap(px(m.gap_wide))
                     .child(
                         div()
                             .flex_none()
-                            .w(px(2.0))
-                            .h(px((self.win_h * 0.0648 * 0.16).max(2.0)))
+                            .w(px(m.sync_bar_w))
+                            .h(px(m.sync_bar_h))
                             .rounded_full()
                             .bg(rgb(palette::outline_variant()))
                             .overflow_hidden()
                             .child(
                                 div()
-                                    .w(px(2.0 * self.sync_fill.value(&self.clock)))
+                                    .w(px(m.sync_bar_w * self.sync_fill.value(&self.clock)))
                                     .h_full()
                                     .bg(rgb(if self.syncing {
                                         palette::tertiary()
@@ -409,7 +422,7 @@ impl AppRoot {
                                 children.push(
                                     div()
                                         .flex_none()
-                                        .text_size(px(14.0))
+                                        .text_size(px(m.body_size))
                                         .text_color(rgb(if self.syncing {
                                             palette::tertiary()
                                         } else {
@@ -432,6 +445,7 @@ impl AppRoot {
         mode: SuperiorMode,
         cx: &Context<Self>,
     ) -> gpui::AnyElement {
+        let m = self.top_bar_metrics();
         let Some(page) = self.page_bar() else {
             return div().into_any_element();
         };
@@ -443,20 +457,25 @@ impl AppRoot {
         // Natural-width identity row inside a clipped horizontal viewport;
         // the marquee offset is driven once per render by
         // `refresh_topbar_marquee`. Action chips below stay pinned right.
-        let mut identity = div().flex().flex_none().items_center().gap_2().child(
-            div()
-                .flex_none()
-                .text_size(px(19.0))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(rgb(palette::on_surface()))
-                .whitespace_nowrap()
-                .child(title),
-        );
+        let mut identity = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(m.gap))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(m.title_size))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(rgb(palette::on_surface()))
+                    .whitespace_nowrap()
+                    .child(title),
+            );
         if !page.subtitle.is_empty() {
             identity = identity.child(self.bar_separator()).child(
                 div()
                     .flex_none()
-                    .text_size(px(14.0))
+                    .text_size(px(m.body_size))
                     .text_color(rgb(palette::on_surface_variant()))
                     .whitespace_nowrap()
                     .child(page.subtitle.to_string()),
@@ -470,41 +489,37 @@ impl AppRoot {
             identity = identity.child(self.bar_separator()).child(
                 div()
                     .flex_none()
-                    .text_size(px(14.0))
+                    .text_size(px(m.body_size))
                     .text_color(rgb(palette::on_surface_variant()))
                     .whitespace_nowrap()
                     .child(page.meta.to_string()),
             );
         }
-        let identity_viewport = div()
-            .flex_1()
-            .min_w_0()
-            .overflow_hidden()
-            .child(
-                div()
-                    .id("topbar-identity-scroll")
-                    .overflow_x_scroll()
-                    .scrollbar_width(px(0.0))
-                    .track_scroll(&self.topbar_scroll)
-                    .child(identity),
-            );
+        let identity_viewport = div().flex_1().min_w_0().overflow_hidden().child(
+            div()
+                .id("topbar-identity-scroll")
+                .overflow_x_scroll()
+                .scrollbar_width(px(0.0))
+                .track_scroll(&self.topbar_scroll)
+                .child(identity),
+        );
         let mut row = div()
             .flex()
             .items_center()
             .w_full()
             .h_full()
-            .px_4()
-            .gap_2()
+            .px(px(m.padding_x))
+            .gap(px(m.gap))
             .child(identity_viewport);
         if self.connection_offline {
             row = row.child(
                 div()
                     .flex_none()
-                    .px_2()
-                    .py_1()
+                    .px(px(m.badge_pad_x))
+                    .py(px(m.badge_pad_y))
                     .rounded_full()
                     .bg(rgb(palette::tertiary_container()))
-                    .text_size(px(10.0))
+                    .text_size(px(m.badge_size))
                     .text_color(rgb(palette::on_tertiary_container()))
                     .child("Offline"),
             );
@@ -734,10 +749,10 @@ impl AppRoot {
     }
 
     fn top_bar_insight_slot(&self, content: impl IntoElement) -> gpui::AnyElement {
+        let m = self.top_bar_metrics();
         div()
             .flex_none()
-            .w(px(18.0))
-            .h(px(18.0))
+            .size(px(m.insight_slot))
             .flex()
             .items_center()
             .justify_center()
@@ -749,36 +764,41 @@ impl AppRoot {
     /// repeats effects or track marks. The top bar paints this row before the
     /// metadata.
     fn top_bar_insights_view(&self, info: &TopBarInfo) -> gpui::AnyElement {
-        let mut row = div().flex().flex_none().items_center().gap_1();
+        let m = self.top_bar_metrics();
+        let mut row = div().flex().flex_none().items_center().gap(px(m.gap * 0.5));
         if info.crossfade {
             row = row.child(self.top_bar_insight_slot(icon(
                 "transition-fade-sharp.svg",
-                16.0,
+                m.insight_icon,
                 palette::primary(),
             )));
         }
         if info.normalization {
-            row = row.child(self.top_bar_insight_slot(
-                div()
-                    .text_size(px(13.0))
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .text_color(rgb(palette::primary()))
-                    .child("N"),
-            ));
+            row = row.child(
+                self.top_bar_insight_slot(
+                    div()
+                        .text_size(px(m.insight_text))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(rgb(palette::primary()))
+                        .child("N"),
+                ),
+            );
         }
         if info.equalizer {
-            row = row.child(self.top_bar_insight_slot(
-                div()
-                    .text_size(px(11.0))
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .text_color(rgb(palette::primary()))
-                    .child("EQ"),
-            ));
+            row = row.child(
+                self.top_bar_insight_slot(
+                    div()
+                        .text_size(px(m.insight_small))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(rgb(palette::primary()))
+                        .child("EQ"),
+                ),
+            );
         }
         if info.favorite {
             row = row.child(self.top_bar_insight_slot(icon(
                 "baseline-favorite.svg",
-                16.0,
+                m.insight_icon,
                 FAVORITE_GOLD,
             )));
         }
@@ -787,13 +807,13 @@ impl AppRoot {
                 "fullscreen-topbar-download-spin",
                 0,
                 "loading-loop.svg",
-                16.0,
+                m.insight_icon,
                 palette::primary(),
             )));
         } else if info.downloaded {
             row = row.child(self.top_bar_insight_slot(icon(
                 "outline-download.svg",
-                16.0,
+                m.insight_icon,
                 palette::primary(),
             )));
         }
@@ -801,15 +821,16 @@ impl AppRoot {
     }
 
     fn top_bar_info_chip(&self, label: &str, value: &str) -> gpui::AnyElement {
+        let m = self.top_bar_metrics();
         div()
             .flex()
             .items_center()
-            .gap_1()
+            .gap(px(m.gap * 0.5))
             .min_w_0()
             .child(
                 div()
                     .flex_none()
-                    .text_size(px(9.0))
+                    .text_size(px(m.chip_label_size))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(rgb(palette::on_surface_variant()))
                     .child(label.to_ascii_uppercase()),
@@ -820,7 +841,7 @@ impl AppRoot {
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis()
-                    .text_size(px(12.0))
+                    .text_size(px(m.chip_value_size))
                     .text_color(rgb(palette::on_surface()))
                     .child(value.to_string()),
             )
@@ -835,7 +856,13 @@ impl AppRoot {
         info: &TopBarInfo,
         compact: bool,
     ) -> gpui::AnyElement {
-        let mut row = div().flex().items_center().gap_2().min_w_0().overflow_hidden();
+        let m = self.top_bar_metrics();
+        let mut row = div()
+            .flex()
+            .items_center()
+            .gap(px(m.gap))
+            .min_w_0()
+            .overflow_hidden();
         if !compact {
             row = row.child(
                 div()
@@ -881,14 +908,15 @@ impl AppRoot {
     /// Effect insights sit before the shared metadata view, not beside the
     /// title, so the identity line stays title/artist/repeat/marks.
     pub(in crate::ui) fn fullscreen_top_bar(&self) -> gpui::AnyElement {
+        let m = self.top_bar_metrics();
         let info = self.top_bar_info();
         let content = div()
             .w_full()
             .h_full()
-            .px_4()
+            .px(px(m.padding_x))
             .flex()
             .items_center()
-            .gap_2()
+            .gap(px(m.gap))
             .when(info.has_insights(), |this| {
                 this.child(self.top_bar_insights_view(&info))
                     .child(self.bar_separator())
@@ -1019,7 +1047,7 @@ impl AppRoot {
             Some(track) => (track.title.clone(), track.artist.clone()),
             None => ("Nothing playing".to_string(), String::new()),
         };
-        let m = metrics::PlayerBarMetrics::new(self.win_w, self.win_h);
+        let m = metrics::PlayerBarMetrics::new(self.win_h);
         div()
             .relative()
             .w_full()
@@ -1031,20 +1059,25 @@ impl AppRoot {
                     .top_0()
                     .left_0()
                     .right_0()
-                    .child(progress_bar(progress, self.seek_preview(), 3.0, false)),
+                    .child(progress_bar(
+                        progress,
+                        self.seek_preview(),
+                        m.progress_h,
+                        false,
+                    )),
             )
             .child(
                 div()
                     .flex()
                     .size_full()
-                    .px_3()
-                    .gap_3()
+                    .px(px(m.padding_x))
+                    .gap(px(m.gap))
                     .items_center()
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .gap_3()
+                            .gap(px(m.gap))
                             .flex_1()
                             .min_w_0()
                             .overflow_hidden()
@@ -1056,7 +1089,7 @@ impl AppRoot {
                                 m.cover_side,
                                 m.cover_side,
                                 gpui::ObjectFit::Contain,
-                                4.0,
+                                m.cover_radius,
                                 cover_changed.then(|| {
                                     gpui::SharedString::from(format!(
                                         "cover-fade:player:{}",
@@ -1118,7 +1151,7 @@ impl AppRoot {
                             .items_center()
                             .overflow_hidden()
                             .justify_end()
-                            .gap_3()
+                            .gap(px(m.gap))
                             .child(
                                 div()
                                     .flex_1()
@@ -1146,17 +1179,11 @@ impl AppRoot {
                             // volume meter; normalization lives in the top bar
                             // so the same N is not painted twice.
                             .when(self.player.crossfade(), |this| {
-                                this.child(
-                                    div()
-                                        .flex_none()
-                                        .flex()
-                                        .items_center()
-                                        .child(icon(
-                                            "transition-fade-sharp.svg",
-                                            (m.time_size * 1.35).clamp(13.0, 18.0),
-                                            palette::primary(),
-                                        )),
-                                )
+                                this.child(div().flex_none().flex().items_center().child(icon(
+                                    "transition-fade-sharp.svg",
+                                    m.eq_icon,
+                                    palette::primary(),
+                                )))
                             })
                             .when_some(self.eq_profile.clone(), |this, _name| {
                                 this.child(
@@ -1171,7 +1198,7 @@ impl AppRoot {
                             .child(
                                 div()
                                     .w(px(m.volume_bar))
-                                    .h(px(3.0))
+                                    .h(px(m.volume_h))
                                     .rounded_full()
                                     .bg(rgb(palette::surface_container_high()))
                                     .child(

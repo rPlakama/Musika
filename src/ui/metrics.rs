@@ -228,45 +228,122 @@ impl SurfaceMetrics {
 
 /// Responsive geometry for the inferior playback bar.
 ///
-/// Mirrors `InferiorBar`: the bar height is the stable reference, the title and
-/// artist share the title ramp, and the transport unit is a fraction of the
-/// bar height. The left/right zones use equal flex space in the bar itself;
-/// these are only the in-zone sizes.
+/// Mirrors `InferiorBar`: the bar height is the only reference. Every child
+/// size below is the 1200x800 design value multiplied by this bar's own scale,
+/// so the transport, cover, metadata, padding and meters all grow and shrink
+/// with the bar instead of with fixed pixel floors or the window width. The
+/// left/right zones still use equal flex space in the bar itself; these are
+/// only the in-zone sizes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlayerBarMetrics {
     pub bar_h: f32,
-    pub width_scale: f32,
+    pub scale: f32,
     pub title_size: f32,
     pub artist_size: f32,
     pub time_size: f32,
     pub cover_side: f32,
+    pub cover_radius: f32,
     pub transport_unit: f32,
     pub play_size: f32,
     pub transport_spacing: f32,
     pub volume_bar: f32,
+    pub volume_h: f32,
+    pub progress_h: f32,
+    pub padding_x: f32,
+    pub gap: f32,
+    pub eq_icon: f32,
 }
 
 impl PlayerBarMetrics {
-    pub fn new(window_width: f32, window_height: f32) -> Self {
+    pub fn new(window_height: f32) -> Self {
         let bar_h = (window_height * PLAYER_BAR_FRACTION).max(1.0);
-        let width_scale = width_scale(window_width);
-        let title_full = font_size("label", bar_h) * 1.6;
-        let title_size = clamp(title_full * width_scale, 16.0, title_full);
-        let artist_size = title_size;
-        let time_full = font_size("mono", bar_h);
-        let time_size = clamp(time_full * width_scale, 10.0, time_full);
-        let transport_unit = (bar_h * 0.46).min(window_width * 0.045).max(18.0);
+        let scale = bar_h / PLAYER_BAR_REFERENCE_HEIGHT;
+        let title_size = 16.0 * scale;
+        let time_size = 10.0 * scale;
+        let transport_unit = 30.4704 * scale;
         Self {
             bar_h,
-            width_scale,
+            scale,
             title_size,
-            artist_size,
+            artist_size: title_size,
             time_size,
-            cover_side: bar_h * 0.62,
+            cover_side: 41.0688 * scale,
+            cover_radius: 4.0 * scale,
             transport_unit,
             play_size: transport_unit * 1.22,
             transport_spacing: transport_unit * 0.11,
-            volume_bar: (window_width * 0.07).clamp(28.0, 96.0),
+            volume_bar: 84.0 * scale,
+            volume_h: 3.0 * scale,
+            progress_h: 3.0 * scale,
+            padding_x: 12.0 * scale,
+            gap: 12.0 * scale,
+            eq_icon: 13.5 * scale,
+        }
+    }
+}
+
+/// Responsive geometry for the top chrome band.
+///
+/// The same rule as [`PlayerBarMetrics`]: the bar height is the parent scale.
+/// Every label, glyph, slot, chip and inset is its 1200x800 reference value
+/// multiplied by that scale. The bar itself is still sized by
+/// [`TOP_BAR_FRACTION`], so its children can never outgrow it at a different
+/// window size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TopBarMetrics {
+    pub bar_h: f32,
+    pub scale: f32,
+    pub padding_x: f32,
+    pub padding_y: f32,
+    pub gap: f32,
+    pub gap_wide: f32,
+    pub title_size: f32,
+    pub body_size: f32,
+    pub icon_size: f32,
+    pub icon_pad: f32,
+    pub action_radius: f32,
+    pub badge_size: f32,
+    pub badge_pad_x: f32,
+    pub badge_pad_y: f32,
+    pub star_size: f32,
+    pub insight_slot: f32,
+    pub insight_icon: f32,
+    pub insight_text: f32,
+    pub insight_small: f32,
+    pub chip_label_size: f32,
+    pub chip_value_size: f32,
+    pub sync_bar_w: f32,
+    pub sync_bar_h: f32,
+}
+
+impl TopBarMetrics {
+    pub fn new(window_height: f32) -> Self {
+        let bar_h = (window_height * TOP_BAR_FRACTION).max(1.0);
+        let scale = bar_h / TOP_BAR_REFERENCE_HEIGHT;
+        Self {
+            bar_h,
+            scale,
+            padding_x: 16.0 * scale,
+            padding_y: 4.0 * scale,
+            gap: 8.0 * scale,
+            gap_wide: 12.0 * scale,
+            title_size: 19.0 * scale,
+            body_size: 14.0 * scale,
+            icon_size: 18.0 * scale,
+            icon_pad: 3.0 * scale,
+            action_radius: 6.0 * scale,
+            badge_size: 10.0 * scale,
+            badge_pad_x: 8.0 * scale,
+            badge_pad_y: 4.0 * scale,
+            star_size: 13.0 * scale,
+            insight_slot: 18.0 * scale,
+            insight_icon: 16.0 * scale,
+            insight_text: 13.0 * scale,
+            insight_small: 11.0 * scale,
+            chip_label_size: 9.0 * scale,
+            chip_value_size: 12.0 * scale,
+            sync_bar_w: 2.0 * scale,
+            sync_bar_h: bar_h * 0.16,
         }
     }
 }
@@ -285,6 +362,10 @@ pub const PAGE_LIST_PAD_FRACTION: f32 = 0.012;
 pub const REFERENCE_WIDTH: f32 = 1200.0;
 /// Height of the reference window used to calibrate the page table.
 pub const REFERENCE_HEIGHT: f32 = 800.0;
+/// Child-size calibration for the top bar at the reference window.
+pub const TOP_BAR_REFERENCE_HEIGHT: f32 = REFERENCE_HEIGHT * TOP_BAR_FRACTION;
+/// Child-size calibration for the player bar at the reference window.
+pub const PLAYER_BAR_REFERENCE_HEIGHT: f32 = REFERENCE_HEIGHT * PLAYER_BAR_FRACTION;
 /// The window may not shrink below this share of the reference size. At
 /// 480x320 the page still has a split cover pane; below it the cover would be
 /// the first thing lost.
@@ -746,22 +827,71 @@ mod tests {
     }
 
     #[test]
-    fn player_bar_scales_with_window_and_keeps_bar_ratios() {
-        let narrow = PlayerBarMetrics::new(640.0, 1000.0);
-        let wide = PlayerBarMetrics::new(1600.0, 1000.0);
-        assert!(wide.volume_bar > narrow.volume_bar);
-        assert!(wide.transport_unit > narrow.transport_unit);
-        assert!(wide.title_size >= narrow.title_size);
-        assert!(wide.time_size >= narrow.time_size);
-        assert!(wide.cover_side >= narrow.cover_side);
-        assert!((narrow.width_scale - 0.7).abs() < 0.001);
-        assert!((wide.width_scale - 1.0).abs() < 0.001);
-        assert!(narrow.transport_unit >= 18.0);
-        assert!(narrow.title_size >= 16.0);
-        // The transport grows with the bar, not with a fixed 200 px box.
-        let short = PlayerBarMetrics::new(1600.0, 700.0);
-        assert!(short.transport_unit < wide.transport_unit);
-        assert!(short.play_size > short.transport_unit);
+    fn player_bar_children_share_the_bar_scale() {
+        let reference = PlayerBarMetrics::new(REFERENCE_HEIGHT);
+        assert_close(reference.bar_h, PLAYER_BAR_REFERENCE_HEIGHT);
+        assert_close(reference.scale, 1.0);
+        assert_close(reference.title_size, 16.0);
+        assert_close(reference.time_size, 10.0);
+        assert_close(reference.cover_side, 41.0688);
+        assert_close(reference.transport_unit, 30.4704);
+        assert_close(reference.volume_bar, 84.0);
+        assert_close(reference.padding_x, 12.0);
+
+        // Halve the window height and every child halves with its parent.
+        let half = PlayerBarMetrics::new(REFERENCE_HEIGHT * 0.5);
+        assert_close(half.scale, 0.5);
+        assert_close(half.transport_unit, reference.transport_unit * 0.5);
+        assert_close(half.title_size, reference.title_size * 0.5);
+        assert_close(half.time_size, reference.time_size * 0.5);
+        assert_close(half.cover_side, reference.cover_side * 0.5);
+        assert_close(half.volume_bar, reference.volume_bar * 0.5);
+        assert_close(half.padding_x, reference.padding_x * 0.5);
+        assert_close(half.eq_icon, reference.eq_icon * 0.5);
+
+        // The transport has no fixed pixel floor: at the minimum window it is
+        // 40% of its reference size, like the bar that contains it.
+        let minimum = PlayerBarMetrics::new(MIN_WINDOW_HEIGHT);
+        assert_close(minimum.scale, MIN_WINDOW_FRACTION);
+        assert_close(
+            minimum.transport_unit,
+            reference.transport_unit * MIN_WINDOW_FRACTION,
+        );
+        assert!(minimum.transport_unit < 18.0);
+
+        let tall = PlayerBarMetrics::new(REFERENCE_HEIGHT * 2.0);
+        assert!(tall.transport_unit > reference.transport_unit);
+        assert!(tall.play_size > tall.transport_unit);
+    }
+
+    #[test]
+    fn top_bar_children_share_the_bar_scale() {
+        let reference = TopBarMetrics::new(REFERENCE_HEIGHT);
+        assert_close(reference.bar_h, TOP_BAR_REFERENCE_HEIGHT);
+        assert_close(reference.scale, 1.0);
+        assert_close(reference.title_size, 19.0);
+        assert_close(reference.body_size, 14.0);
+        assert_close(reference.icon_size, 18.0);
+        assert_close(reference.icon_pad, 3.0);
+        assert_close(reference.padding_x, 16.0);
+        assert_close(reference.gap, 8.0);
+        assert_close(reference.chip_label_size, 9.0);
+        assert_close(reference.chip_value_size, 12.0);
+        assert_close(reference.insight_slot, 18.0);
+        assert_close(reference.sync_bar_h, TOP_BAR_REFERENCE_HEIGHT * 0.16);
+
+        let half = TopBarMetrics::new(REFERENCE_HEIGHT * 0.5);
+        assert_close(half.scale, 0.5);
+        assert_close(half.title_size, reference.title_size * 0.5);
+        assert_close(half.icon_size, reference.icon_size * 0.5);
+        assert_close(half.padding_x, reference.padding_x * 0.5);
+        assert_close(half.chip_label_size, reference.chip_label_size * 0.5);
+        assert_close(half.chip_value_size, reference.chip_value_size * 0.5);
+
+        let minimum = TopBarMetrics::new(MIN_WINDOW_HEIGHT);
+        assert_close(minimum.scale, MIN_WINDOW_FRACTION);
+        assert_close(minimum.icon_size, 18.0 * MIN_WINDOW_FRACTION);
+        assert_close(minimum.title_size, 19.0 * MIN_WINDOW_FRACTION);
     }
 
     #[test]

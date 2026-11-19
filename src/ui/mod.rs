@@ -1002,6 +1002,9 @@ struct AppRoot {
     /// Horizontal viewport for the top-bar identity (auto marquee when the
     /// title/subtitle/meta row is wider than the bar).
     topbar_scroll: gpui::ScrollHandle,
+    /// Horizontal viewport for the compact metadata chips (file/rate) that
+    /// share the identity row but stay pinned at the bar's trailing edge.
+    topbar_info_scroll: gpui::ScrollHandle,
     topbar_marquee_started: std::time::Instant,
     /// Last manual horizontal-wheel interaction; the auto marquee pauses for
     /// a short grace period so it does not fight the user's scroll.
@@ -1324,6 +1327,7 @@ impl AppRoot {
             win_w: 1200.0,
             win_h: 800.0,
             topbar_scroll: gpui::ScrollHandle::new(),
+            topbar_info_scroll: gpui::ScrollHandle::new(),
             topbar_marquee_started: std::time::Instant::now(),
             topbar_manual_scroll: None,
             topbar_last_offset: 0.0,

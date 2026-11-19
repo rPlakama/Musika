@@ -256,7 +256,7 @@ pub struct PlayerBarMetrics {
 
 impl PlayerBarMetrics {
     pub fn new(window_height: f32) -> Self {
-        let bar_h = (window_height * PLAYER_BAR_FRACTION).max(1.0);
+        let bar_h = player_bar_height(window_height);
         let scale = bar_h / PLAYER_BAR_REFERENCE_HEIGHT;
         let title_size = 16.0 * scale;
         let time_size = 10.0 * scale;
@@ -286,9 +286,8 @@ impl PlayerBarMetrics {
 ///
 /// The same rule as [`PlayerBarMetrics`]: the bar height is the parent scale.
 /// Every label, glyph, slot, chip and inset is its 1200x800 reference value
-/// multiplied by that scale. The bar itself is still sized by
-/// [`TOP_BAR_FRACTION`], so its children can never outgrow it at a different
-/// window size.
+/// multiplied by that scale. The bar height itself is `TOP_BAR_FRACTION` with
+/// the shared [`MIN_BAR_SCALE`] clamp, so its children can never outgrow it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TopBarMetrics {
     pub bar_h: f32,
@@ -318,7 +317,7 @@ pub struct TopBarMetrics {
 
 impl TopBarMetrics {
     pub fn new(window_height: f32) -> Self {
-        let bar_h = (window_height * TOP_BAR_FRACTION).max(1.0);
+        let bar_h = top_bar_height(window_height);
         let scale = bar_h / TOP_BAR_REFERENCE_HEIGHT;
         Self {
             bar_h,
@@ -366,6 +365,22 @@ pub const REFERENCE_HEIGHT: f32 = 800.0;
 pub const TOP_BAR_REFERENCE_HEIGHT: f32 = REFERENCE_HEIGHT * TOP_BAR_FRACTION;
 /// Child-size calibration for the player bar at the reference window.
 pub const PLAYER_BAR_REFERENCE_HEIGHT: f32 = REFERENCE_HEIGHT * PLAYER_BAR_FRACTION;
+/// The chrome never gets thinner than this share of its reference height. Short
+/// windows keep legible bars and every child inherits the same scale; below
+/// this the body would be the part that shrinks.
+pub const MIN_BAR_SCALE: f32 = 0.9;
+
+/// Top-bar height for a client height: the usual fraction, clamped so a short
+/// window cannot make the bar (or its children) arbitrarily thin.
+pub fn top_bar_height(window_height: f32) -> f32 {
+    (window_height * TOP_BAR_FRACTION).max(TOP_BAR_REFERENCE_HEIGHT * MIN_BAR_SCALE)
+}
+
+/// Player-bar height for a client height, with the same minimum as the top bar.
+pub fn player_bar_height(window_height: f32) -> f32 {
+    (window_height * PLAYER_BAR_FRACTION).max(PLAYER_BAR_REFERENCE_HEIGHT * MIN_BAR_SCALE)
+}
+
 /// The window may not shrink below this share of the reference size. At
 /// 480x320 the page still has a split cover pane; below it the cover would be
 /// the first thing lost.
@@ -377,13 +392,11 @@ pub const MIN_WINDOW_HEIGHT: f32 = REFERENCE_HEIGHT * MIN_WINDOW_FRACTION;
 /// Below this body height the stacked page switches to the split layout.
 pub const SPLIT_BODY_RATIO: f32 = 0.72;
 /// Below this body height even the split row pane is discarded.
-pub const ROWS_ONLY_BODY_RATIO: f32 = 0.32;
-/// Wide windows split when the stacked cover would occupy less than this
-/// fraction of the client width.
-pub const WIDE_SPLIT_COVER_RATIO: f32 = 0.5;
-/// The wide split only applies once the window is at least this wide so the
-/// 1200x800 reference layout stays stacked.
-pub const WIDE_SPLIT_MIN_WIDTH: f32 = 1440.0;
+pub const ROWS_ONLY_BODY_RATIO: f32 = 0.30;
+/// Extra horizontal room, as a share of the stacked cover's own width, before
+/// the page stops stacking and puts the rows beside the cover. At 130% over
+/// the cover there is room for both without shrinking either.
+pub const WIDE_SPLIT_HEADROOM: f32 = 1.3;
 /// Cover pane share in the split layout.
 pub const SPLIT_COVER_FRACTION: f32 = 0.40;
 /// Never shrink the split cover below this share of the width.
@@ -410,8 +423,8 @@ impl WindowLayout {
     pub fn new(width: f32, height: f32) -> Self {
         let width = width.max(1.0);
         let height = height.max(1.0);
-        let top_bar_h = (height * TOP_BAR_FRACTION).max(1.0);
-        let player_bar_h = (height * PLAYER_BAR_FRACTION).max(1.0);
+        let top_bar_h = top_bar_height(height);
+        let player_bar_h = player_bar_height(height);
         let body_h = (height - top_bar_h - player_bar_h).max(1.0);
         Self {
             width,
@@ -489,10 +502,12 @@ impl PageLayout {
 
         let reference_body = WindowLayout::reference().body_h;
         let reference_hero = PageLayout::stacked_hero_art(WindowLayout::reference());
-        let cover_fraction = cover_side / width;
         let split_fits = split_list_w >= MIN_ROWS_WIDTH;
-        let wide_split =
-            width >= WIDE_SPLIT_MIN_WIDTH && cover_fraction < WIDE_SPLIT_COVER_RATIO && split_fits;
+        // Width-only decision: once the client has 130% more lateral room than
+        // the stacked cover needs, keep the cover and put the rows beside it.
+        // This replaces the old absolute breakpoint, so a wide-but-short window
+        // uses the same lateral layout as a narrow one.
+        let wide_split = split_fits && width > cover_side * (1.0 + WIDE_SPLIT_HEADROOM);
         let short_split = body_h < SPLIT_BODY_RATIO * reference_body
             || hero_art < 0.5 * reference_hero
             || stacked_list_h < 3.0 * MIN_ROW_HEIGHT;
@@ -590,21 +605,29 @@ mod tests {
     }
 
     #[test]
-    fn reference_page_matches_the_legacy_geometry() {
+    fn reference_page_uses_the_lateral_split() {
         let layout = PageLayout::reference();
-        assert_eq!(layout.mode, PageMode::Stacked);
+        assert_eq!(layout.mode, PageMode::Split);
         assert_close(layout.margin_x, 24.0);
         assert_close(layout.hero_art, 427.44);
         assert_close(layout.header_h, 451.44);
-        assert_close(layout.list_h, 230.48);
+        assert_close(layout.cover_w, 480.0);
+        assert_close(layout.list_w, 654.0);
+        assert_close(layout.list_h, 633.92);
         assert_close(layout.list_pad, 8.18304);
     }
 
     #[test]
-    fn minimum_window_still_has_a_cover_pane() {
+    fn minimum_window_still_has_a_cover_pane_and_clamped_bars() {
         assert_close(MIN_WINDOW_WIDTH, 480.0);
         assert_close(MIN_WINDOW_HEIGHT, 320.0);
-        let layout = WindowLayout::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT).page();
+        let window = WindowLayout::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT);
+        assert_close(window.top_bar_h, TOP_BAR_REFERENCE_HEIGHT * MIN_BAR_SCALE);
+        assert_close(
+            window.player_bar_h,
+            PLAYER_BAR_REFERENCE_HEIGHT * MIN_BAR_SCALE,
+        );
+        let layout = window.page();
         assert_ne!(layout.mode, PageMode::RowsOnly);
         assert!(layout.cover_art() > 0.0);
         assert!(layout.list_w > 0.0);
@@ -614,7 +637,7 @@ mod tests {
     fn page_modes_cover_short_and_wide_windows() {
         assert_eq!(
             WindowLayout::new(1200.0, 800.0).page().mode,
-            PageMode::Stacked
+            PageMode::Split
         );
         assert_eq!(WindowLayout::new(912.0, 506.0).page().mode, PageMode::Split);
         assert_eq!(WindowLayout::new(669.0, 332.0).page().mode, PageMode::Split);
@@ -626,6 +649,14 @@ mod tests {
         // demote the page to rows-only.
         assert_eq!(
             WindowLayout::new(505.0, 909.0).page().mode,
+            PageMode::Stacked
+        );
+        // The lateral split is width-relative now, not an absolute breakpoint:
+        // 800px leaves more than 130% headroom beside a 334px cover, 750px
+        // does not.
+        assert_eq!(WindowLayout::new(800.0, 600.0).page().mode, PageMode::Split);
+        assert_eq!(
+            WindowLayout::new(750.0, 600.0).page().mode,
             PageMode::Stacked
         );
         // A short window splits even when the row pane is under the optional
@@ -838,29 +869,31 @@ mod tests {
         assert_close(reference.volume_bar, 84.0);
         assert_close(reference.padding_x, 12.0);
 
-        // Halve the window height and every child halves with its parent.
-        let half = PlayerBarMetrics::new(REFERENCE_HEIGHT * 0.5);
-        assert_close(half.scale, 0.5);
-        assert_close(half.transport_unit, reference.transport_unit * 0.5);
-        assert_close(half.title_size, reference.title_size * 0.5);
-        assert_close(half.time_size, reference.time_size * 0.5);
-        assert_close(half.cover_side, reference.cover_side * 0.5);
-        assert_close(half.volume_bar, reference.volume_bar * 0.5);
-        assert_close(half.padding_x, reference.padding_x * 0.5);
-        assert_close(half.eq_icon, reference.eq_icon * 0.5);
+        // Above the clamp every child still tracks the parent bar exactly.
+        let tall = PlayerBarMetrics::new(REFERENCE_HEIGHT * 1.25);
+        assert_close(tall.scale, 1.25);
+        assert_close(tall.transport_unit, reference.transport_unit * 1.25);
+        assert_close(tall.title_size, reference.title_size * 1.25);
+        assert_close(tall.cover_side, reference.cover_side * 1.25);
+        assert_close(tall.volume_bar, reference.volume_bar * 1.25);
+        assert_close(tall.eq_icon, reference.eq_icon * 1.25);
 
-        // The transport has no fixed pixel floor: at the minimum window it is
-        // 40% of its reference size, like the bar that contains it.
+        // A short window stops shrinking the bar at 90% of its reference
+        // height, and every child inherits that clamp.
         let minimum = PlayerBarMetrics::new(MIN_WINDOW_HEIGHT);
-        assert_close(minimum.scale, MIN_WINDOW_FRACTION);
+        assert_close(minimum.scale, MIN_BAR_SCALE);
+        assert_close(minimum.bar_h, PLAYER_BAR_REFERENCE_HEIGHT * MIN_BAR_SCALE);
         assert_close(
             minimum.transport_unit,
-            reference.transport_unit * MIN_WINDOW_FRACTION,
+            reference.transport_unit * MIN_BAR_SCALE,
         );
-        assert!(minimum.transport_unit < 18.0);
-
-        let tall = PlayerBarMetrics::new(REFERENCE_HEIGHT * 2.0);
-        assert!(tall.transport_unit > reference.transport_unit);
+        assert_close(minimum.title_size, reference.title_size * MIN_BAR_SCALE);
+        assert_close(minimum.cover_side, reference.cover_side * MIN_BAR_SCALE);
+        assert_close(minimum.padding_x, reference.padding_x * MIN_BAR_SCALE);
+        assert_close(
+            PlayerBarMetrics::new(REFERENCE_HEIGHT * 0.5).scale,
+            MIN_BAR_SCALE,
+        );
         assert!(tall.play_size > tall.transport_unit);
     }
 
@@ -880,18 +913,19 @@ mod tests {
         assert_close(reference.insight_slot, 18.0);
         assert_close(reference.sync_bar_h, TOP_BAR_REFERENCE_HEIGHT * 0.16);
 
-        let half = TopBarMetrics::new(REFERENCE_HEIGHT * 0.5);
-        assert_close(half.scale, 0.5);
-        assert_close(half.title_size, reference.title_size * 0.5);
-        assert_close(half.icon_size, reference.icon_size * 0.5);
-        assert_close(half.padding_x, reference.padding_x * 0.5);
-        assert_close(half.chip_label_size, reference.chip_label_size * 0.5);
-        assert_close(half.chip_value_size, reference.chip_value_size * 0.5);
+        let tall = TopBarMetrics::new(REFERENCE_HEIGHT * 1.25);
+        assert_close(tall.scale, 1.25);
+        assert_close(tall.title_size, reference.title_size * 1.25);
+        assert_close(tall.icon_size, reference.icon_size * 1.25);
+        assert_close(tall.padding_x, reference.padding_x * 1.25);
+        assert_close(tall.chip_label_size, reference.chip_label_size * 1.25);
+        assert_close(tall.chip_value_size, reference.chip_value_size * 1.25);
 
         let minimum = TopBarMetrics::new(MIN_WINDOW_HEIGHT);
-        assert_close(minimum.scale, MIN_WINDOW_FRACTION);
-        assert_close(minimum.icon_size, 18.0 * MIN_WINDOW_FRACTION);
-        assert_close(minimum.title_size, 19.0 * MIN_WINDOW_FRACTION);
+        assert_close(minimum.scale, MIN_BAR_SCALE);
+        assert_close(minimum.bar_h, TOP_BAR_REFERENCE_HEIGHT * MIN_BAR_SCALE);
+        assert_close(minimum.icon_size, 18.0 * MIN_BAR_SCALE);
+        assert_close(minimum.title_size, 19.0 * MIN_BAR_SCALE);
     }
 
     #[test]

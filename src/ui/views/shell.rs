@@ -570,7 +570,14 @@ impl AppRoot {
                     .flex_none()
                     .max_w(px(self.win_w * 0.34))
                     .overflow_hidden()
-                    .child(info_view),
+                    .child(
+                        div()
+                            .id("topbar-info-scroll")
+                            .overflow_x_scroll()
+                            .scrollbar_width(px(0.0))
+                            .track_scroll(&self.topbar_info_scroll)
+                            .child(div().flex().flex_none().child(info_view)),
+                    ),
             );
         }
         row = row.child(self.topbar_action_chip(
@@ -669,10 +676,11 @@ impl AppRoot {
     /// One shell for both top bars. The page/home bar and the fullscreen
     /// metadata bar share the height, surface, padding and bottom rule.
     pub(in crate::ui) fn top_bar_shell(&self, content: impl IntoElement) -> impl IntoElement {
+        let m = self.top_bar_metrics();
         div()
             .relative()
             .w_full()
-            .h(relative(metrics::TOP_BAR_FRACTION))
+            .h(px(m.bar_h))
             .bg(rgb(palette::surface_container_low()))
             .flex()
             .items_center()
@@ -901,6 +909,9 @@ impl AppRoot {
             row = row.child(self.top_bar_info_chip(label, value));
             first = false;
         }
+        // The compact chips live in a horizontal viewport: keep their natural
+        // width so overflow scrolls instead of shrinking every value.
+        row = row.flex_none();
         row.into_any_element()
     }
 
@@ -1051,7 +1062,7 @@ impl AppRoot {
         div()
             .relative()
             .w_full()
-            .h(relative(metrics::PLAYER_BAR_FRACTION))
+            .h(px(m.bar_h))
             .bg(rgb(palette::surface_container()))
             .child(
                 div()

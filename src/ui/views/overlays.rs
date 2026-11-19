@@ -158,12 +158,11 @@ impl AppRoot {
         let (Some(menu), Some((ax, ay))) = (self.alt_menu.as_ref(), self.alt_anchor) else {
             return div().into_any_element();
         };
-        let page_h = (self.win_h - 120.0).max(1.0);
-        let option_scale =
-            (0.816 * ((self.win_w - 20.0) / 1280.0).min((page_h - 20.0) / 720.0)).clamp(0.5, 0.816);
-        let spawned = 0.72 + 0.28 * progress;
-        let box_side = page_h * 0.07 * option_scale * spawned;
-        let frame_side = (box_side * 8.0).min(self.win_w - 20.0).min(page_h - 20.0);
+        let board = metrics::alt_board_metrics(self.win_w, self.win_h, progress);
+        let page_h = board.page_h;
+        let option_scale = board.option_scale;
+        let box_side = board.tile_side;
+        let frame_side = board.frame_side;
         // The board is anchored at the focused item but may slide inside the
         // safe window area: topbar/status anchors often sit too close to an
         // edge for a full-size board to stay centred there.

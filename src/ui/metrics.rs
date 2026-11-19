@@ -347,6 +347,40 @@ impl TopBarMetrics {
     }
 }
 
+/// The Alt board never paints a tile smaller than this, even when both the
+/// window and its derived option ramp are tiny.
+pub const MIN_ALT_TILE: f32 = 36.0;
+
+/// Geometry for the Alt board's cross of action tiles.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AltBoardMetrics {
+    pub page_h: f32,
+    pub option_scale: f32,
+    pub tile_side: f32,
+    pub frame_side: f32,
+}
+
+/// Responsive Alt board geometry. The option ramp may shrink with the window,
+/// but the tile itself is clamped to [`MIN_ALT_TILE`] so the cross stays
+/// legible at the smallest supported sizes; the frame follows the clamped tile
+/// and is then bounded by the safe window area.
+pub fn alt_board_metrics(window_width: f32, window_height: f32, progress: f32) -> AltBoardMetrics {
+    let page_h = (window_height - 120.0).max(1.0);
+    let option_scale =
+        (0.816 * ((window_width - 20.0) / 1280.0).min((page_h - 20.0) / 720.0)).clamp(0.5, 0.816);
+    let spawned = 0.72 + 0.28 * progress;
+    let tile_side = (page_h * 0.07 * option_scale).max(MIN_ALT_TILE) * spawned;
+    let frame_side = (tile_side * 8.0)
+        .min((window_width - 20.0).max(1.0))
+        .min((page_h - 20.0).max(1.0));
+    AltBoardMetrics {
+        page_h,
+        option_scale,
+        tile_side,
+        frame_side,
+    }
+}
+
 /// The top chrome band as a fraction of the client height.
 pub const TOP_BAR_FRACTION: f32 = 0.0648;
 /// The inferior playback bar as a fraction of the client height.
@@ -855,6 +889,34 @@ mod tests {
 
         // Integers stay exact (no double rounding).
         assert_eq!(tiny.row_height(ScrollProfile::LIBRARY, 1000.0), 105.0);
+    }
+
+    #[test]
+    fn alt_board_keeps_a_visible_tile_on_small_windows() {
+        let reference = alt_board_metrics(REFERENCE_WIDTH, REFERENCE_HEIGHT, 1.0);
+        assert_close(reference.tile_side, MIN_ALT_TILE);
+        assert_close(reference.frame_side, MIN_ALT_TILE * 8.0);
+
+        // The reported 669x427 window previously produced ~10.7 px tiles.
+        let small = alt_board_metrics(669.0, 427.0, 1.0);
+        assert_close(small.tile_side, MIN_ALT_TILE);
+        assert!(small.frame_side >= 4.0 * MIN_ALT_TILE);
+
+        // Even at the minimum window the cross keeps the clamped tile and
+        // fills the safe height instead of vanishing.
+        let minimum = alt_board_metrics(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT, 1.0);
+        assert_close(minimum.tile_side, MIN_ALT_TILE);
+        assert!(minimum.frame_side >= 4.0 * MIN_ALT_TILE);
+        assert!(minimum.frame_side <= minimum.page_h - 20.0);
+
+        // Large windows still grow past the clamp.
+        let large = alt_board_metrics(1920.0, 1132.0, 1.0);
+        assert!(large.tile_side > MIN_ALT_TILE);
+        assert!(large.frame_side > reference.frame_side);
+
+        // The spawn animation still scales up to the clamp.
+        let spawning = alt_board_metrics(669.0, 427.0, 0.0);
+        assert!(spawning.tile_side < small.tile_side);
     }
 
     #[test]

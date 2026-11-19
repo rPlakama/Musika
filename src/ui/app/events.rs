@@ -910,6 +910,7 @@ impl AppRoot {
         self.status_focus = None;
         self.library_scroll = scroll_modal::ScrollModal::new(scroll_modal::LIBRARY);
         self.page_scroll_modal = scroll_modal::ScrollModal::new(scroll_modal::ALBUM);
+        self.page_layout_mode = None;
         self.queue_scroll_modal = scroll_modal::ScrollModal::new(scroll_modal::QUEUE);
         self.search_scroll = scroll_modal::ScrollModal::new(scroll_modal::SEARCH);
     }

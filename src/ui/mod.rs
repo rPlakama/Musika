@@ -865,6 +865,8 @@ struct AppRoot {
     generation: u64,
     library_scroll: scroll_modal::ScrollModal,
     page_scroll_modal: scroll_modal::ScrollModal,
+    /// Layout mode at the last page-row metric capture.
+    page_layout_mode: Option<metrics::PageMode>,
     queue_scroll_modal: scroll_modal::ScrollModal,
     search_scroll: scroll_modal::ScrollModal,
     page: Option<PageState>,
@@ -1205,6 +1207,7 @@ impl AppRoot {
             generation: 0,
             library_scroll: scroll_modal::ScrollModal::new(scroll_modal::LIBRARY),
             page_scroll_modal: scroll_modal::ScrollModal::new(scroll_modal::ALBUM),
+            page_layout_mode: None,
             queue_scroll_modal: scroll_modal::ScrollModal::new(scroll_modal::QUEUE),
             search_scroll: scroll_modal::ScrollModal::new(scroll_modal::SEARCH),
             page: None,

@@ -657,7 +657,7 @@ impl AppRoot {
         div()
             .relative()
             .w_full()
-            .h(relative(0.0648))
+            .h(relative(metrics::TOP_BAR_FRACTION))
             .bg(rgb(palette::surface_container_low()))
             .flex()
             .items_center()
@@ -1023,7 +1023,7 @@ impl AppRoot {
         div()
             .relative()
             .w_full()
-            .h(relative(0.0828))
+            .h(relative(metrics::PLAYER_BAR_FRACTION))
             .bg(rgb(palette::surface_container()))
             .child(
                 div()

@@ -226,6 +226,13 @@ impl ScrollModal {
         self.ensure_metrics_ref(viewport)
     }
 
+    /// Drops the captured baseline so a layout-mode change can recapture the
+    /// row height against the new viewport instead of keeping the old floor.
+    pub fn reset_metrics(&mut self) {
+        self.row_ref = None;
+        self.row_h = self.profile.nominal_row_h;
+    }
+
     pub fn ensure_metrics_ref(&mut self, reference: f32) -> bool {
         if reference <= 0.0 || !self.profile.adaptive {
             return false;

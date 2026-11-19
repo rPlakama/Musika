@@ -247,7 +247,7 @@ pub struct PlayerBarMetrics {
 
 impl PlayerBarMetrics {
     pub fn new(window_width: f32, window_height: f32) -> Self {
-        let bar_h = (window_height * 0.0828).max(1.0);
+        let bar_h = (window_height * PLAYER_BAR_FRACTION).max(1.0);
         let width_scale = width_scale(window_width);
         let title_full = font_size("label", bar_h) * 1.6;
         let title_size = clamp(title_full * width_scale, 16.0, title_full);
@@ -270,6 +270,202 @@ impl PlayerBarMetrics {
     }
 }
 
+/// The top chrome band as a fraction of the client height.
+pub const TOP_BAR_FRACTION: f32 = 0.0648;
+/// The inferior playback bar as a fraction of the client height.
+pub const PLAYER_BAR_FRACTION: f32 = 0.0828;
+/// Page side margins as a fraction of the client width.
+pub const PAGE_MARGIN_FRACTION: f32 = 0.02;
+/// The stacked hero may use at most this fraction of the page body height.
+pub const PAGE_HERO_MAX_FRACTION: f32 = 0.75;
+/// Page list padding as a fraction of the body height.
+pub const PAGE_LIST_PAD_FRACTION: f32 = 0.012;
+/// Width of the reference window used to calibrate the page table.
+pub const REFERENCE_WIDTH: f32 = 1200.0;
+/// Height of the reference window used to calibrate the page table.
+pub const REFERENCE_HEIGHT: f32 = 800.0;
+/// Below this body height the stacked page switches to the split layout.
+pub const SPLIT_BODY_RATIO: f32 = 0.72;
+/// Below this body height even the split row pane is discarded.
+pub const ROWS_ONLY_BODY_RATIO: f32 = 0.32;
+/// Wide windows split when the stacked cover would occupy less than this
+/// fraction of the client width.
+pub const WIDE_SPLIT_COVER_RATIO: f32 = 0.5;
+/// The wide split only applies once the window is at least this wide so the
+/// 1200x800 reference layout stays stacked.
+pub const WIDE_SPLIT_MIN_WIDTH: f32 = 1440.0;
+/// Cover pane share in the split layout.
+pub const SPLIT_COVER_FRACTION: f32 = 0.40;
+/// Never shrink the split cover below this share of the width.
+pub const SPLIT_MIN_COVER_FRACTION: f32 = 0.28;
+/// Gap between the cover and list panes in the split layout.
+pub const SPLIT_GAP_FRACTION: f32 = 0.015;
+/// Minimum row-pane width that still reads as a list.
+pub const MIN_ROWS_WIDTH: f32 = 280.0;
+
+/// The three vertical bands every shell surface shares: top bar, body and
+/// player bar. The body is the remainder, never a separately guessed reserve.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowLayout {
+    pub width: f32,
+    pub height: f32,
+    pub top_bar_h: f32,
+    pub player_bar_h: f32,
+    pub body_h: f32,
+}
+
+impl WindowLayout {
+    pub fn new(width: f32, height: f32) -> Self {
+        let width = width.max(1.0);
+        let height = height.max(1.0);
+        let top_bar_h = (height * TOP_BAR_FRACTION).max(1.0);
+        let player_bar_h = (height * PLAYER_BAR_FRACTION).max(1.0);
+        let body_h = (height - top_bar_h - player_bar_h).max(1.0);
+        Self {
+            width,
+            height,
+            top_bar_h,
+            player_bar_h,
+            body_h,
+        }
+    }
+
+    pub fn reference() -> Self {
+        Self::new(REFERENCE_WIDTH, REFERENCE_HEIGHT)
+    }
+
+    pub fn page(&self) -> PageLayout {
+        PageLayout::new(*self)
+    }
+}
+
+/// How the page shares its body between the hero and the row list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PageMode {
+    Stacked,
+    Split,
+    RowsOnly,
+}
+
+/// One page geometry snapshot. Every value is derived from the window and the
+/// shared fractions above; views paint this, they do not re-derive pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PageLayout {
+    pub mode: PageMode,
+    pub width: f32,
+    pub body_h: f32,
+    pub margin_x: f32,
+    pub margin_y: f32,
+    pub gap: f32,
+    /// Stacked hero art side.
+    pub hero_art: f32,
+    /// Stacked cover + bottom margin; also the row-list start.
+    pub header_h: f32,
+    /// Split cover pane width.
+    pub cover_w: f32,
+    pub list_w: f32,
+    pub list_h: f32,
+    pub list_pad: f32,
+}
+
+impl PageLayout {
+    pub fn reference() -> Self {
+        WindowLayout::reference().page()
+    }
+
+    pub fn new(window: WindowLayout) -> Self {
+        let width = window.width;
+        let body_h = window.body_h;
+        let margin_x = (width * PAGE_MARGIN_FRACTION).max(1.0);
+        let margin_y = margin_x;
+        let gap = (width * SPLIT_GAP_FRACTION).max(1.0);
+        let list_pad = (body_h * PAGE_LIST_PAD_FRACTION).clamp(4.0, 12.0);
+
+        let max_cover = ((body_h - 2.0 * margin_x) * PAGE_HERO_MAX_FRACTION).max(1.0);
+        let cover_side = width.min(body_h).min(max_cover).max(1.0);
+        let hero_art = (cover_side - 2.0 * margin_x).max(1.0);
+        let header_h = (hero_art + margin_y).max(1.0);
+        let stacked_list_h = (body_h - header_h).max(1.0);
+
+        let split_cover_w = (width * SPLIT_COVER_FRACTION)
+            .min((body_h - 2.0 * margin_y).max(1.0))
+            .max(width * SPLIT_MIN_COVER_FRACTION)
+            .min((body_h - 2.0 * margin_y).max(1.0))
+            .max(1.0);
+        let split_list_w = (width - split_cover_w - 2.0 * margin_x - gap).max(1.0);
+        let split_list_h = (body_h - 2.0 * margin_y).max(1.0);
+
+        let reference_body = WindowLayout::reference().body_h;
+        let reference_hero = PageLayout::stacked_hero_art(WindowLayout::reference());
+        let cover_fraction = cover_side / width;
+        let wide_split = width >= WIDE_SPLIT_MIN_WIDTH
+            && cover_fraction < WIDE_SPLIT_COVER_RATIO
+            && split_list_w >= MIN_ROWS_WIDTH;
+        let short_split = body_h < SPLIT_BODY_RATIO * reference_body
+            || hero_art < 0.5 * reference_hero
+            || stacked_list_h < 3.0 * MIN_ROW_HEIGHT;
+        let rows_only =
+            body_h < ROWS_ONLY_BODY_RATIO * reference_body || split_list_w < MIN_ROWS_WIDTH;
+
+        let mode = if rows_only {
+            PageMode::RowsOnly
+        } else if wide_split || short_split {
+            PageMode::Split
+        } else {
+            PageMode::Stacked
+        };
+
+        let list_h = match mode {
+            PageMode::Stacked => stacked_list_h,
+            PageMode::Split => split_list_h,
+            PageMode::RowsOnly => body_h,
+        };
+        let list_w = match mode {
+            PageMode::Stacked | PageMode::RowsOnly => width,
+            PageMode::Split => split_list_w,
+        };
+
+        Self {
+            mode,
+            width,
+            body_h,
+            margin_x,
+            margin_y,
+            gap,
+            hero_art,
+            header_h,
+            cover_w: split_cover_w,
+            list_w,
+            list_h,
+            list_pad,
+        }
+    }
+
+    fn stacked_hero_art(window: WindowLayout) -> f32 {
+        let width = window.width;
+        let body_h = window.body_h;
+        let margin_x = (width * PAGE_MARGIN_FRACTION).max(1.0);
+        let max_cover = ((body_h - 2.0 * margin_x) * PAGE_HERO_MAX_FRACTION).max(1.0);
+        let cover_side = width.min(body_h).min(max_cover).max(1.0);
+        (cover_side - 2.0 * margin_x).max(1.0)
+    }
+
+    /// The art side actually painted: square in stacked, bounded by the pane in
+    /// split, zero when the list owns the body.
+    pub fn cover_art(&self) -> f32 {
+        match self.mode {
+            PageMode::Stacked => self.hero_art,
+            PageMode::Split => self.cover_w.min(self.list_h).max(1.0),
+            PageMode::RowsOnly => 0.0,
+        }
+    }
+
+    /// Height reference for adaptive page-row sizing.
+    pub fn row_reference(&self) -> f32 {
+        (self.list_h - 2.0 * self.list_pad).max(1.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,6 +475,80 @@ mod tests {
             (actual - expected).abs() < 1e-4,
             "expected {expected}, got {actual}"
         );
+    }
+
+    #[test]
+    fn window_layout_sums_the_three_bands() {
+        let layout = WindowLayout::reference();
+        assert_close(
+            layout.top_bar_h + layout.player_bar_h + layout.body_h,
+            layout.height,
+        );
+        assert_close(layout.top_bar_h, 51.84);
+        assert_close(layout.player_bar_h, 66.24);
+        assert_close(layout.body_h, 681.92);
+    }
+
+    #[test]
+    fn reference_page_matches_the_legacy_geometry() {
+        let layout = PageLayout::reference();
+        assert_eq!(layout.mode, PageMode::Stacked);
+        assert_close(layout.margin_x, 24.0);
+        assert_close(layout.hero_art, 427.44);
+        assert_close(layout.header_h, 451.44);
+        assert_close(layout.list_h, 230.48);
+        assert_close(layout.list_pad, 8.18304);
+    }
+
+    #[test]
+    fn page_modes_cover_short_and_wide_windows() {
+        assert_eq!(
+            WindowLayout::new(1200.0, 800.0).page().mode,
+            PageMode::Stacked
+        );
+        assert_eq!(WindowLayout::new(912.0, 506.0).page().mode, PageMode::Split);
+        assert_eq!(WindowLayout::new(669.0, 332.0).page().mode, PageMode::Split);
+        assert_eq!(
+            WindowLayout::new(1920.0, 1132.0).page().mode,
+            PageMode::Split
+        );
+        assert_eq!(
+            WindowLayout::new(480.0, 320.0).page().mode,
+            PageMode::RowsOnly
+        );
+        assert_eq!(
+            WindowLayout::new(320.0, 240.0).page().mode,
+            PageMode::RowsOnly
+        );
+    }
+
+    #[test]
+    fn split_geometry_shares_the_row_and_keeps_a_usable_list() {
+        for (width, height) in [
+            (669.0, 332.0),
+            (912.0, 506.0),
+            (1440.0, 900.0),
+            (1920.0, 1132.0),
+        ] {
+            let layout = WindowLayout::new(width, height).page();
+            assert_eq!(layout.mode, PageMode::Split, "{width}x{height}");
+            assert!(layout.cover_w < width * 0.5, "{width}x{height}");
+            assert!(layout.list_w >= MIN_ROWS_WIDTH, "{width}x{height}");
+            assert!(layout.list_h > 0.0, "{width}x{height}");
+            assert!(layout.row_reference() > 0.0, "{width}x{height}");
+        }
+    }
+
+    #[test]
+    fn tiny_windows_do_not_produce_negative_segments() {
+        for (width, height) in [(320.0, 240.0), (480.0, 320.0), (900.0, 600.0)] {
+            let window = WindowLayout::new(width, height);
+            let layout = window.page();
+            assert!(window.body_h > 0.0);
+            assert!(layout.list_w > 0.0);
+            assert!(layout.list_h > 0.0);
+            assert!(layout.list_pad >= 4.0);
+        }
     }
 
     #[test]

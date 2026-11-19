@@ -214,8 +214,13 @@ impl AppRoot {
             (height > 0.0).then_some(height)
         };
         let Some(_viewport) = measured else { return };
-        let reference = (self.win_h - 100.0).max(1.0);
-        if self.page_scroll_modal.ensure_metrics_ref(reference) {
+        let layout = metrics::WindowLayout::new(self.win_w, self.win_h).page();
+        if self.page_layout_mode != Some(layout.mode) {
+            self.page_layout_mode = Some(layout.mode);
+            self.page_scroll_modal.reset_metrics();
+            self.marks.signature = None;
+        }
+        if self.page_scroll_modal.ensure_metrics_ref(layout.row_reference()) {
             self.marks.signature = None;
             self.follow_page(false);
         }

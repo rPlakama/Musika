@@ -408,9 +408,11 @@ impl PageLayout {
             || hero_art < 0.5 * reference_hero
             || stacked_list_h < 3.0 * MIN_ROW_HEIGHT;
         // Width never suppresses the cover on its own. A tall, narrow window
-        // stacks the cover and accepts fewer visible rows; only a body that is
-        // too short for any cover falls back to rows-only.
-        let rows_only = body_h < ROWS_ONLY_BODY_RATIO * reference_body;
+        // stacks the cover and accepts fewer visible rows. A short window still
+        // splits whenever the row pane has room, because the cover can sit in
+        // the otherwise idle horizontal space; only a window that is both short
+        // and too narrow for two panes falls back to rows-only.
+        let rows_only = body_h < ROWS_ONLY_BODY_RATIO * reference_body && !split_fits;
 
         let mode = if rows_only {
             PageMode::RowsOnly
@@ -530,10 +532,22 @@ mod tests {
         // A short window splits even when the row pane is under the optional
         // wide-split width, preserving the cover instead of hiding it.
         assert_eq!(WindowLayout::new(480.0, 320.0).page().mode, PageMode::Split);
+        // A very short window is still wide enough for a cover pane; rows-only
+        // is for the corner case where both axes are cramped.
+        assert_eq!(WindowLayout::new(737.0, 190.0).page().mode, PageMode::Split);
         assert_eq!(
             WindowLayout::new(320.0, 240.0).page().mode,
             PageMode::RowsOnly
         );
+    }
+
+    #[test]
+    fn short_wide_page_keeps_a_cover_pane() {
+        let layout = WindowLayout::new(737.0, 190.0).page();
+        assert_eq!(layout.mode, PageMode::Split);
+        assert!(layout.cover_art() > 0.0);
+        assert!(layout.list_w >= MIN_ROWS_WIDTH);
+        assert!(layout.list_h > 0.0);
     }
 
     #[test]

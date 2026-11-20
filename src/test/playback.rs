@@ -1020,9 +1020,13 @@ fn seek_clamps_and_rebases_the_anchor() {
 
     let outcome = core.apply_at(CoreCommand::Seek(30.0), t0);
     assert_eq!(outcome.audio, vec![AudioCommand::Seek(30.0)]);
+    assert!(core.snapshot(2, t0).loading(), "a seek buffers until first PCM");
     assert!((core.position_at(t0) - 30.0).abs() < 1e-6);
     core.snapshot(1, t0);
-    assert!((core.position_at(t0 + SECOND) - 31.0).abs() < 1e-6);
+    assert!(
+        (core.position_at(t0 + SECOND) - 30.0).abs() < 1e-6,
+        "the playhead waits at the seek target while the buffer refills"
+    );
 
     let outcome = core.apply_at(CoreCommand::Seek(-10.0), t0);
     assert_eq!(outcome.audio, vec![AudioCommand::Seek(0.0)]);
@@ -1076,6 +1080,36 @@ fn seek_is_clamped_to_a_known_duration() {
     core.snapshot(0, SECOND);
     let outcome = core.apply_at(CoreCommand::Seek(1_000.0), SECOND);
     assert_eq!(outcome.audio, vec![AudioCommand::Seek(60.0)]);
+}
+
+#[test]
+fn a_failed_seek_reopens_instead_of_skipping_the_row() {
+    let mut core = playing_core(3);
+    core.on_engine(
+        EngineEvent::Loaded {
+            duration: 60.0,
+            stream_size: 0,
+            seekable: true,
+        },
+        SECOND,
+    );
+    core.snapshot(0, SECOND);
+    let before = core.index();
+    let outcome = core.on_engine(
+        EngineEvent::Failed {
+            error: crate::player::PlaybackError::classify(
+                crate::player::ErrorStage::Seek,
+                "decoder: stream is not seekable",
+            ),
+        },
+        SECOND,
+    );
+    assert_eq!(core.index(), before, "a seek failure must not advance");
+    assert!(outcome.failure.is_some());
+    assert!(
+        core.snapshot(1, SECOND).flags & crate::ipc_protocol::STATE_FLAG_RETRYING != 0,
+        "the transport retries from the target position"
+    );
 }
 
 #[test]
@@ -1804,6 +1838,13 @@ fn failure_classification_distinguishes_retryable_causes() {
     );
     assert_eq!(codec.kind, ErrorKind::Decode);
     assert!(!codec.retryable());
+
+    // A seek that needs a new connection/buffer is recoverable, not a bad row.
+    let seek = PlaybackError::classify(
+        crate::player::ErrorStage::Seek,
+        "decoder: stream is not seekable",
+    );
+    assert!(seek.retryable());
 }
 
 #[test]

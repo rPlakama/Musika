@@ -106,8 +106,15 @@ impl PlaybackError {
     }
 
     /// Only the kind determines retry: a 404 or a decoder error must never be
-    /// retried, while a reset connection should be.
+    /// retried, while a reset connection should be. A seek that needs a fresh
+    /// buffer is always recoverable by reopening the row at the target; it must
+    /// never advance the queue just because the current connection cannot jump.
     pub fn retryable(&self) -> bool {
+        if self.stage == ErrorStage::Seek
+            && !matches!(self.kind, ErrorKind::Auth | ErrorKind::Canceled)
+        {
+            return true;
+        }
         self.kind.retryable()
     }
 

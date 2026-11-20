@@ -701,6 +701,11 @@ impl PlaybackCore {
         // A stopped transport has no decoder to seek (and must not be started
         // by a seek); only the displayed clock moves until the next play.
         if self.state != State::Stopped {
+            // Seeking past the buffered range re-opens the decoder; show the
+            // loading spinner until the engine reports the first new PCM.
+            if self.state == State::Playing {
+                self.loading = true;
+            }
             outcome.audio.push(AudioCommand::Seek(self.anchor_position));
         }
         outcome.changed = true;

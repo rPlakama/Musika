@@ -164,7 +164,9 @@ impl AppRoot {
                         .w(px(layout.cover_w))
                         .h_full()
                         .flex()
-                        .items_center()
+                        // The cover is a page anchor, not a floating tile: it
+                        // starts on the same top edge as the row list.
+                        .items_start()
                         .justify_center()
                         .overflow_hidden()
                         .child(render_cover(layout.cover_art())),

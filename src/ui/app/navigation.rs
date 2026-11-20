@@ -139,8 +139,11 @@ impl AppRoot {
             let height = f32::from(state.base_handle.bounds().size.height);
             (top, (height > 0.0).then_some(height))
         };
+        let row_count = self.view.rows.count;
         if let Some(viewport) = measured
-            && self.library_scroll.ensure_metrics(viewport)
+            && self
+                .library_scroll
+                .ensure_metrics_for_rows(viewport, row_count)
         {
             self.view.rows.requested = None;
             self.follow_library(false);
@@ -194,7 +197,10 @@ impl AppRoot {
             (height > 0.0).then_some(height)
         };
         let Some(viewport) = measured else { return };
-        if self.queue_scroll_modal.ensure_metrics(viewport) {
+        if self
+            .queue_scroll_modal
+            .ensure_metrics_for_rows(viewport, self.player.len())
+        {
             self.follow_queue(false);
         }
     }
@@ -220,7 +226,11 @@ impl AppRoot {
             self.page_scroll_modal.reset_metrics();
             self.marks.signature = None;
         }
-        if self.page_scroll_modal.ensure_metrics_ref(layout.row_reference()) {
+        let count = self.page.as_ref().map_or(0, |page| page.rows.len());
+        if self
+            .page_scroll_modal
+            .ensure_metrics_for_rows(layout.row_reference(), count)
+        {
             self.marks.signature = None;
             self.follow_page(false);
         }

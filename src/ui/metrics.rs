@@ -33,8 +33,8 @@ pub const COMPACT_WIDTH: f32 = 900.0;
 /// `Theme.widthScale` default floor (UI-57).
 pub const WIDTH_SCALE_FLOOR: f32 = 0.7;
 /// `ScrollContent.minRowHeight`: the smallest whole row the lists ever get.
-/// Raised from the original 18 px floor to 27 px.
-pub const MIN_ROW_HEIGHT: f32 = 27.0;
+/// Raised from the original 18 px floor to 30 px.
+pub const MIN_ROW_HEIGHT: f32 = 30.0;
 /// A row may lose at most 18% of its captured baseline (UI-58).
 pub const BASELINE_FLOOR: f32 = 0.82;
 
@@ -214,7 +214,7 @@ impl SurfaceMetrics {
 
     /// `ScrollContent.adaptiveRowHeight`: the adaptive row scaled by the
     /// profile, rounded to a whole pixel (Qt's content coordinate is
-    /// integer-based) and never below the raised 27 px floor.
+    /// integer-based) and never below the raised 30 px floor.
     ///
     /// The first call captures the baseline; later calls ignore the reference
     /// for the floor and only use it for the nominal height.
@@ -438,8 +438,6 @@ pub const ROWS_ONLY_BODY_RATIO: f32 = 0.30;
 pub const WIDE_SPLIT_HEADROOM: f32 = 1.3;
 /// Cover pane share in the split layout.
 pub const SPLIT_COVER_FRACTION: f32 = 0.40;
-/// Never shrink the split cover below this share of the width.
-pub const SPLIT_MIN_COVER_FRACTION: f32 = 0.28;
 /// Gap between the cover and list panes in the split layout.
 pub const SPLIT_GAP_FRACTION: f32 = 0.015;
 /// Minimum row-pane width for the optional wide split. A short window always
@@ -531,9 +529,9 @@ impl PageLayout {
         let header_h = (hero_art + margin_y).max(1.0);
         let stacked_list_h = (body_h - header_h).max(1.0);
 
+        // Scale the cover with the space the body actually leaves for the
+        // rows; a hard minimum fraction used to make it jump when short.
         let split_cover_w = (width * SPLIT_COVER_FRACTION)
-            .min((body_h - 2.0 * margin_y).max(1.0))
-            .max(width * SPLIT_MIN_COVER_FRACTION)
             .min((body_h - 2.0 * margin_y).max(1.0))
             .max(1.0);
         let split_list_w = (width - split_cover_w - 2.0 * margin_x - gap).max(1.0);
@@ -873,7 +871,7 @@ mod tests {
 
     #[test]
     fn row_height_rounds_to_whole_pixels() {
-        assert_close(MIN_ROW_HEIGHT, 27.0);
+        assert_close(MIN_ROW_HEIGHT, 30.0);
         // 641 * 0.055 = 35.255 -> 35.
         let mut page = SurfaceMetrics::new();
         assert_eq!(page.row_height(ScrollProfile::PAGE, 641.0), 35.0);
@@ -884,7 +882,7 @@ mod tests {
         // 500 px: max(60, 0.82*120) * 1.04 = 102.336 -> 102.
         assert_eq!(search.row_height(ScrollProfile::SEARCH, 500.0), 102.0);
 
-        // The raised 27 px minimum applies after rounding:
+        // The raised 30 px minimum applies after rounding:
         // 100 * 0.12 * 1.04 = 12.48.
         let mut tiny = SurfaceMetrics::new();
         assert_eq!(
@@ -906,11 +904,12 @@ mod tests {
         assert!(board.frame_side >= 3.0 * board.slot_side);
         assert_close(board.tile_side, board.slot_side);
 
-        // The 27 px row floor still yields a visible tile.
+        // The 30 px row floor still yields a visible tile.
         let minimum = alt_board_metrics(MIN_ROW_HEIGHT, 1.0);
         assert_close(minimum.frame_side, MIN_ROW_HEIGHT * ALT_ARM_ROWS);
-        assert_close(minimum.slot_side, MIN_ALT_TILE);
-        assert_close(minimum.tile_side, MIN_ALT_TILE);
+        assert_close(minimum.slot_side, MIN_ROW_HEIGHT * ALT_ARM_ROWS / 8.0);
+        assert!(minimum.slot_side >= MIN_ALT_TILE);
+        assert_close(minimum.tile_side, minimum.slot_side);
 
         // Tall rows grow the cross, but both tile and frame stay soft-clamped.
         let large = alt_board_metrics(100.0, 1.0);

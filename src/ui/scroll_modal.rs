@@ -226,6 +226,37 @@ impl ScrollModal {
         self.ensure_metrics_ref(viewport)
     }
 
+    /// Like [`Self::ensure_metrics_ref`], but also lets a short list grow into
+    /// the free space below its last row: the rows share the full measured
+    /// viewport, so a short list leaves no dead space under its last row.
+    pub fn ensure_metrics_for_rows(&mut self, reference: f32, count: usize) -> bool {
+        if reference <= 0.0 || !self.profile.adaptive {
+            return false;
+        }
+        self.row_ref.get_or_insert(reference);
+        let base = metrics::adaptive_row(
+            reference,
+            self.profile.row_ratio,
+            self.profile.nominal_row_h,
+        )
+        .round()
+        .max(self.profile.min_row_h);
+        let next = if count > 0 {
+            // Reserve a little vertical padding so a filled list does not
+            // immediately overflow its own scroll surface.
+            let usable = (self.viewport_height() - 24.0).max(1.0);
+            base.max(usable / count as f32).ceil()
+        } else {
+            base
+        };
+        if (next - self.row_h).abs() >= 0.5 {
+            self.row_h = next;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Drops the captured baseline so a layout-mode change can recapture the
     /// row height against the new viewport instead of keeping the old floor.
     pub fn reset_metrics(&mut self) {
@@ -234,23 +265,7 @@ impl ScrollModal {
     }
 
     pub fn ensure_metrics_ref(&mut self, reference: f32) -> bool {
-        if reference <= 0.0 || !self.profile.adaptive {
-            return false;
-        }
-        self.row_ref.get_or_insert(reference);
-        let next = metrics::adaptive_row(
-            reference,
-            self.profile.row_ratio,
-            self.profile.nominal_row_h,
-        )
-        .round()
-        .max(self.profile.min_row_h);
-        if (next - self.row_h).abs() >= 0.5 {
-            self.row_h = next;
-            true
-        } else {
-            false
-        }
+        self.ensure_metrics_for_rows(reference, 0)
     }
 
     pub fn on_wheel(&mut self) {
@@ -330,7 +345,7 @@ mod tests {
     #[test]
     fn row_floor_is_the_raised_shared_minimum() {
         // A profile whose adaptive target and 82% floor both fall below the
-        // absolute floor must still land on the shared 27 px minimum.
+        // absolute floor must still land on the shared 30 px minimum.
         let profile = ScrollProfile {
             row_ratio: 0.001,
             nominal_row_h: 1.0,
@@ -343,6 +358,30 @@ mod tests {
         assert_eq!(modal.row_h, 1.0);
         assert!(modal.ensure_metrics(10.0));
         assert_eq!(modal.row_h, metrics::MIN_ROW_HEIGHT);
+    }
+
+    #[test]
+    fn short_lists_fill_the_free_space_below_the_last_row() {
+        // Five page rows share the whole viewport instead of leaving a gap.
+        let mut page = ScrollModal::new(ALBUM);
+        assert!(page.ensure_metrics_for_rows(400.0, 5));
+        assert_eq!(page.row_h, ((600.0_f32 - 24.0) / 5.0).ceil());
+        assert!(page.row_h * 5.0 >= 600.0 - 24.0);
+
+        // Many rows keep the adaptive base.
+        let mut crowded = ScrollModal::new(ALBUM);
+        crowded.ensure_metrics_for_rows(400.0, 100);
+        // The 82% baseline floor still wins over the tiny per-row share.
+        assert_eq!(crowded.row_h, (ALBUM.nominal_row_h * 0.82).round());
+
+        // Library and queue use the same fill rule.
+        let mut library = ScrollModal::new(LIBRARY);
+        library.ensure_metrics_for_rows(800.0, 3);
+        assert_eq!(library.row_h, ((600.0_f32 - 24.0) / 3.0).ceil());
+
+        let mut queue = ScrollModal::new(QUEUE);
+        queue.ensure_metrics_for_rows(800.0, 1);
+        assert_eq!(queue.row_h, 600.0 - 24.0);
     }
 
     #[test]

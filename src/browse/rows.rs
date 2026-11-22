@@ -32,19 +32,29 @@ pub(crate) fn format_duration(seconds: Option<i32>) -> String {
 }
 
 /// The album row subtitle: `artist · year`, dropping the parts it lacks.
+///
+/// N-21: an empty artist must not leave a leading `" · "` separator.
 pub(crate) fn album_subtitle(album: &crate::library::AlbumRow) -> String {
-    let artist = album.artist.as_deref().unwrap_or("");
-    match album.year {
-        Some(year) => format!("{artist} · {year}"),
-        None => artist.to_string(),
+    let artist = album.artist.as_deref().unwrap_or("").trim();
+    match (artist.is_empty(), album.year) {
+        (true, Some(year)) => year.to_string(),
+        (true, None) => String::new(),
+        (false, Some(year)) => format!("{artist} · {year}"),
+        (false, None) => artist.to_string(),
     }
 }
 
 /// The song row subtitle: `artist · album`, dropping the parts it lacks.
+///
+/// N-21: whichever part is missing (or blank) is dropped together with its
+/// separator, so untagged songs render no dangling `" · "`.
 pub(crate) fn song_subtitle_from_parts(artist: Option<&str>, album: Option<&str>) -> String {
-    let artist = artist.unwrap_or("");
-    match album {
-        Some(album) if !album.is_empty() => format!("{artist} · {album}"),
-        _ => artist.to_string(),
+    let artist = artist.unwrap_or("").trim();
+    let album = album.unwrap_or("").trim();
+    match (artist.is_empty(), album.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => album.to_string(),
+        (false, true) => artist.to_string(),
+        (false, false) => format!("{artist} · {album}"),
     }
 }

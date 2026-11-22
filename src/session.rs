@@ -16,8 +16,8 @@
 
 //! The live server session: online flag + one credential-keyed client.
 //!
-//! Kept out of the Qt bridge so cache and payload modules can use the client
-//! without depending on `legacy`.
+//! Kept out of the bridge module so cache and payload modules can use the
+//! client without depending on bridge state.
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -48,12 +48,14 @@ struct CachedClient {
 }
 
 pub(crate) fn online() -> bool {
-    ONLINE.load(Ordering::Relaxed)
+    ONLINE.load(Ordering::Acquire)
 }
 
 pub(crate) fn set_online(online: bool) -> bool {
-    let was = ONLINE.swap(online, Ordering::Relaxed);
+    let mut was = online;
     let _ = online_watch().send_if_modified(|value| {
+        was = *value;
+        ONLINE.store(online, Ordering::Release);
         if *value == online {
             false
         } else {
@@ -72,48 +74,62 @@ pub(crate) fn watch_online() -> watch::Receiver<bool> {
 
 fn online_watch() -> &'static watch::Sender<bool> {
     ONLINE_WATCH.get_or_init(|| {
-        let (tx, _rx) = watch::channel(ONLINE.load(Ordering::Relaxed));
+        let (tx, _rx) = watch::channel(ONLINE.load(Ordering::Acquire));
         tx
     })
+}
+
+#[cfg(not(test))]
+fn client_cache() -> &'static tokio::sync::Mutex<Option<CachedClient>> {
+    CLIENT_CACHE.get_or_init(|| tokio::sync::Mutex::new(None))
+}
+
+#[cfg(not(test))]
+fn install_locked(
+    guard: &mut Option<CachedClient>,
+    server_url: &str,
+    username: &str,
+    password: &str,
+) -> SubsonicClient {
+    if let Some(cached) = guard.as_ref()
+        && cached.server_url == server_url
+        && cached.username == username
+        && cached.password == password
+    {
+        return cached.client.clone();
+    }
+    let client = SubsonicClient::new(server_url, username, password);
+    *guard = Some(CachedClient {
+        server_url: server_url.to_string(),
+        username: username.to_string(),
+        password: password.to_string(),
+        client: client.clone(),
+    });
+    client
 }
 
 /// Installs the credentials just used to authenticate, so the first [`client`]
 /// call on any action does not re-read and decrypt them from the database.
 #[cfg(not(test))]
 pub(crate) async fn install(server_url: &str, username: &str, password: &str) {
-    let cache = CLIENT_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
-    let mut guard = cache.lock().await;
-    if let Some(cached) = guard.as_ref()
-        && cached.server_url == server_url
-        && cached.username == username
-        && cached.password == password
-    {
-        return;
-    }
-    *guard = Some(CachedClient {
-        server_url: server_url.to_string(),
-        username: username.to_string(),
-        password: password.to_string(),
-        client: SubsonicClient::new(server_url, username, password),
-    });
+    let mut guard = client_cache().lock().await;
+    let _ = install_locked(&mut guard, server_url, username, password);
 }
 
 #[cfg(not(test))]
 pub(crate) async fn client(_dbs: &crate::db::Dbs) -> anyhow::Result<SubsonicClient> {
-    let cache = CLIENT_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
-    if let Some(cached) = cache.lock().await.as_ref() {
+    let mut guard = client_cache().lock().await;
+    if let Some(cached) = guard.as_ref() {
         return Ok(cached.client.clone());
     }
     let account =
         crate::accounts::active_account().ok_or_else(|| anyhow::anyhow!("no active account"))?;
-    install(&account.server_url, &account.username, &account.password).await;
-    let client = cache
-        .lock()
-        .await
-        .as_ref()
-        .map(|cached| cached.client.clone())
-        .ok_or_else(|| anyhow::anyhow!("session client was not installed"))?;
-    Ok(client)
+    Ok(install_locked(
+        &mut guard,
+        &account.server_url,
+        &account.username,
+        &account.password,
+    ))
 }
 
 #[cfg(test)]
@@ -140,9 +156,7 @@ pub(crate) async fn client(dbs: &crate::db::Dbs) -> anyhow::Result<SubsonicClien
 /// Drops the cached client (account switch, logout or a full wipe).
 #[cfg(not(test))]
 pub(crate) async fn invalidate() {
-    if let Some(cache) = CLIENT_CACHE.get() {
-        *cache.lock().await = None;
-    }
+    *client_cache().lock().await = None;
 }
 
 #[cfg(test)]
@@ -151,3 +165,18 @@ pub(crate) async fn invalidate() {
     reason = "the test stub mirrors the async non-test signature used by shared call sites"
 )]
 pub(crate) async fn invalidate() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_online_keeps_atomic_and_watch_consistent() {
+        let rx = watch_online();
+        for state in [true, false, true, true, false] {
+            let _ = set_online(state);
+            assert_eq!(online(), state);
+            assert_eq!(*rx.borrow(), state);
+        }
+    }
+}

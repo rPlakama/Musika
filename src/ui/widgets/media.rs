@@ -3,12 +3,7 @@
 use super::super::*;
 use gpui::SharedString;
 
-fn transport_button(
-    icon_name: &str,
-    base: f32,
-    color: u32,
-    scale: f32,
-) -> gpui::AnyElement {
+fn transport_button(icon_name: &str, base: f32, color: u32, scale: f32) -> gpui::AnyElement {
     div()
         .size(px(base * 1.3))
         .flex()
@@ -154,13 +149,6 @@ impl CoverSource {
         }
     }
 
-    fn image(&self) -> gpui::ImageSource {
-        match self {
-            Self::Path(path) | Self::Fallback { path, .. } => path.clone().into(),
-            Self::Remote(url) => url.clone().into(),
-        }
-    }
-
     pub(crate) fn resource(&self) -> gpui::Resource {
         match self {
             Self::Path(path) | Self::Fallback { path, .. } => path.clone().into(),
@@ -202,16 +190,13 @@ pub(crate) enum CoverRole {
     Row,
     Hero,
     Collage,
-    Fullscreen,
 }
 
 impl CoverRole {
     pub(crate) fn source(self, url: &str, remote: &str) -> Option<CoverSource> {
         match self {
             Self::Row => cover_source_with_remote(url, remote),
-            Self::Hero | Self::Collage | Self::Fullscreen => {
-                full_cover_source_with_remote(url, remote)
-            }
+            Self::Hero | Self::Collage => full_cover_source_with_remote(url, remote),
         }
     }
 }
@@ -221,9 +206,7 @@ impl CoverRole {
 /// Used by the UI memory harness to separate cover cost from row/list cost.
 fn covers_disabled() -> bool {
     static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *DISABLED.get_or_init(|| {
-        std::env::var("MUSIKA_UI_NO_COVERS").is_ok_and(|value| value == "1")
-    })
+    *DISABLED.get_or_init(|| std::env::var("MUSIKA_UI_NO_COVERS").is_ok_and(|value| value == "1"))
 }
 
 pub(crate) fn remote_cover(url: &str) -> Option<String> {
@@ -251,22 +234,6 @@ pub(crate) fn cover_source_with_remote(url: &str, remote: &str) -> Option<CoverS
         Some(source) => Some(source.with_remote_fallback(remote)),
         None => remote_cover(remote).map(CoverSource::Remote),
     }
-}
-
-/// Resolves the untouched provider file for a cover URL.
-///
-/// Hero surfaces (album/artist page, fullscreen cover) paint at hundreds of
-/// pixels, so a thumbnail or a resized display copy would visibly soften the
-/// image. This resolves the original file itself, never a derivative. The
-/// shared image cache still bounds decoded pixels; it is not this module's
-/// concern.
-pub(crate) fn full_cover_source(url: &str) -> Option<CoverSource> {
-    if covers_disabled() {
-        return None;
-    }
-    cover_path_full(url)
-        .map(CoverSource::Path)
-        .or_else(|| remote_cover(url).map(CoverSource::Remote))
 }
 
 /// [`full_cover_source`] with the provider URL as the fallback when the local
@@ -465,11 +432,6 @@ pub(crate) fn collage_art_from_sources(
 
 pub(crate) fn page_key(descriptor: &PageDescriptor) -> String {
     format!("{}:{}", descriptor.kind.api_kind(), descriptor.id)
-}
-
-pub(crate) fn trace_scroll() -> bool {
-    static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *TRACE.get_or_init(|| std::env::var_os("MUSIKA_GPUUI_TRACE").is_some())
 }
 
 pub(crate) fn format_time(seconds: f64) -> String {

@@ -440,6 +440,10 @@ pub async fn search_artists_albums(
 }
 
 /// Maps song ids to their `coverArt` id (album art when the song has none).
+///
+/// Ids are bound in [`crate::cache::IN_BATCH`] chunks: a queue snapshot or
+/// search page can be large enough to exceed SQLite's bind limit in one
+/// statement (N-06).
 pub async fn song_cover_ids(
     pool: &SqlitePool,
     ids: &[String],
@@ -448,22 +452,27 @@ pub async fn song_cover_ids(
         return Ok(std::collections::HashMap::new());
     }
 
-    let mut builder = sqlx::QueryBuilder::new(
-        "SELECT s.id, COALESCE(al.cover_art, s.cover_art) AS cover_art
-         FROM songs s LEFT JOIN albums al ON al.id = s.album_id
-         WHERE s.id IN (",
-    );
-    crate::cache::push_in_list(&mut builder, ids);
+    let mut covers = std::collections::HashMap::with_capacity(ids.len());
+    for chunk in ids.chunks(crate::cache::IN_BATCH) {
+        let mut builder = sqlx::QueryBuilder::new(
+            "SELECT s.id, COALESCE(al.cover_art, s.cover_art) AS cover_art
+             FROM songs s LEFT JOIN albums al ON al.id = s.album_id
+             WHERE s.id IN (",
+        );
+        crate::cache::push_in_list(&mut builder, chunk);
 
-    let rows: Vec<(String, Option<String>)> = builder.build_query_as().fetch_all(pool).await?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|(id, cover_art)| cover_art.map(|cover_art| (id, cover_art)))
-        .collect())
+        let rows: Vec<(String, Option<String>)> = builder.build_query_as().fetch_all(pool).await?;
+        covers.extend(
+            rows.into_iter()
+                .filter_map(|(id, cover_art)| cover_art.map(|cover_art| (id, cover_art))),
+        );
+    }
+    Ok(covers)
 }
 
 /// Maps song ids to their album ids (ARC-I: the search hits' Go to Artist
-/// jump needs the album the search index does not carry).
+/// jump needs the album the search index does not carry). Chunked like
+/// [`song_cover_ids`].
 pub async fn song_album_ids(
     pool: &SqlitePool,
     ids: &[String],
@@ -472,19 +481,23 @@ pub async fn song_album_ids(
         return Ok(std::collections::HashMap::new());
     }
 
-    let mut builder = sqlx::QueryBuilder::new("SELECT id, album_id FROM songs WHERE id IN (");
-    crate::cache::push_in_list(&mut builder, ids);
+    let mut albums = std::collections::HashMap::with_capacity(ids.len());
+    for chunk in ids.chunks(crate::cache::IN_BATCH) {
+        let mut builder = sqlx::QueryBuilder::new("SELECT id, album_id FROM songs WHERE id IN (");
+        crate::cache::push_in_list(&mut builder, chunk);
 
-    let rows: Vec<(String, Option<String>)> = builder.build_query_as().fetch_all(pool).await?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|(id, album_id)| album_id.map(|album_id| (id, album_id)))
-        .collect())
+        let rows: Vec<(String, Option<String>)> = builder.build_query_as().fetch_all(pool).await?;
+        albums.extend(
+            rows.into_iter()
+                .filter_map(|(id, album_id)| album_id.map(|album_id| (id, album_id))),
+        );
+    }
+    Ok(albums)
 }
 
 /// The subset of `ids` the server marks as favourites (UI-56): the search
 /// index carries no `starred`, so the search payload joins it back in from
-/// the library.
+/// the library. Chunked like [`song_cover_ids`].
 pub async fn song_starred_ids(
     pool: &SqlitePool,
     ids: &[String],
@@ -493,12 +506,16 @@ pub async fn song_starred_ids(
         return Ok(std::collections::HashSet::new());
     }
 
-    let mut builder =
-        sqlx::QueryBuilder::new("SELECT id FROM songs WHERE starred IS NOT NULL AND id IN (");
-    crate::cache::push_in_list(&mut builder, ids);
+    let mut starred = std::collections::HashSet::with_capacity(ids.len());
+    for chunk in ids.chunks(crate::cache::IN_BATCH) {
+        let mut builder =
+            sqlx::QueryBuilder::new("SELECT id FROM songs WHERE starred IS NOT NULL AND id IN (");
+        crate::cache::push_in_list(&mut builder, chunk);
 
-    let rows: Vec<String> = builder.build_query_scalar().fetch_all(pool).await?;
-    Ok(rows.into_iter().collect())
+        let rows: Vec<String> = builder.build_query_scalar().fetch_all(pool).await?;
+        starred.extend(rows);
+    }
+    Ok(starred)
 }
 
 /// Every `coverArt` id referenced by the library, used to drive the cover
@@ -508,9 +525,7 @@ pub async fn song_starred_ids(
 /// cover, which keeps the cache bounded (per-song ids exploded it).
 /// Every non-empty artist portrait URL, used by the post-sync background
 /// cache pass.
-pub async fn artist_image_urls(
-    pool: &SqlitePool,
-) -> Result<Vec<(String, String)>> {
+pub async fn artist_image_urls(pool: &SqlitePool) -> Result<Vec<(String, String)>> {
     Ok(sqlx::query_as::<_, (String, String)>(
         "SELECT id, image_url FROM artists
          WHERE image_url IS NOT NULL AND image_url != ''",
@@ -986,18 +1001,29 @@ pub async fn songs_by_ids(pool: &SqlitePool, ids: &[String]) -> Result<Vec<SongR
 
 /// Borrowed twin of [`songs_by_ids`] (queue refresh against a COW snapshot):
 /// binding `&str` ids directly avoids a `String` clone per track.
+///
+/// The returned list mirrors `ids` element-for-element, so a queue that
+/// contains the same track twice keeps both entries (N-06) — the lookup map
+/// is only read, never drained. The `IN (...)` binds are chunked so a long
+/// queue cannot exceed SQLite's parameter limit.
 pub async fn songs_by_ids_refs(pool: &SqlitePool, ids: &[&str]) -> Result<Vec<SongRow>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
 
-    let mut builder = sqlx::QueryBuilder::new(format!("{SONG_SELECT} WHERE s.id IN ("));
-    crate::cache::push_in_list(&mut builder, ids);
-
-    let rows: Vec<SongRow> = builder.build_query_as().fetch_all(pool).await?;
     let mut by_id: std::collections::HashMap<String, SongRow> =
-        rows.into_iter().map(|row| (row.id.clone(), row)).collect();
-    Ok(ids.iter().filter_map(|id| by_id.remove(*id)).collect())
+        std::collections::HashMap::with_capacity(ids.len());
+    for chunk in ids.chunks(crate::cache::IN_BATCH) {
+        let mut builder = sqlx::QueryBuilder::new(format!("{SONG_SELECT} WHERE s.id IN ("));
+        crate::cache::push_in_list(&mut builder, chunk);
+
+        let rows: Vec<SongRow> = builder.build_query_as().fetch_all(pool).await?;
+        by_id.extend(rows.into_iter().map(|row| (row.id.clone(), row)));
+    }
+    Ok(ids
+        .iter()
+        .filter_map(|id| by_id.get(*id).cloned())
+        .collect())
 }
 
 /// Songs of one album, in disc/track order. Covers come from the album.
@@ -1056,7 +1082,8 @@ pub async fn artist_song_ids(pool: &SqlitePool, artist_id: &str) -> Result<Vec<S
 }
 
 /// `(artist_id, album_id)` per song id — the scope inputs for the CACHE-5
-/// coverage check (empty map for an empty `ids` list).
+/// coverage check (empty map for an empty `ids` list). Chunked like
+/// [`song_cover_ids`].
 pub async fn song_scopes(
     pool: &SqlitePool,
     ids: &[String],
@@ -1064,13 +1091,17 @@ pub async fn song_scopes(
     if ids.is_empty() {
         return Ok(std::collections::HashMap::new());
     }
-    let mut builder =
-        sqlx::QueryBuilder::new("SELECT id, artist_id, album_id FROM songs WHERE id IN (");
-    crate::cache::push_in_list(&mut builder, ids);
-    let rows: Vec<(String, Option<String>, Option<String>)> =
-        builder.build_query_as().fetch_all(pool).await?;
-    Ok(rows
-        .into_iter()
-        .map(|(id, artist, album)| (id, (artist, album)))
-        .collect())
+    let mut scopes = std::collections::HashMap::with_capacity(ids.len());
+    for chunk in ids.chunks(crate::cache::IN_BATCH) {
+        let mut builder =
+            sqlx::QueryBuilder::new("SELECT id, artist_id, album_id FROM songs WHERE id IN (");
+        crate::cache::push_in_list(&mut builder, chunk);
+        let rows: Vec<(String, Option<String>, Option<String>)> =
+            builder.build_query_as().fetch_all(pool).await?;
+        scopes.extend(
+            rows.into_iter()
+                .map(|(id, artist, album)| (id, (artist, album))),
+        );
+    }
+    Ok(scopes)
 }

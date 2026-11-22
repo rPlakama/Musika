@@ -22,10 +22,6 @@ pub struct Stats {
 }
 
 /// The debug HUD is on in debug builds unless `MUSIKA_FRAME_HUD=0`.
-#[expect(
-    dead_code,
-    reason = "the HUD helper is only instantiated by the debug GPUI build"
-)]
 pub fn hud_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("MUSIKA_FRAME_HUD").map_or(true, |value| value != "0"))

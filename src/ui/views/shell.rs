@@ -1,5 +1,6 @@
 //! Top bar, status bar, player bar and login view.
 
+use super::super::widgets::marquee::marquee_next_change;
 use super::super::*;
 use gpui::StatefulInteractiveElement;
 
@@ -62,28 +63,31 @@ fn grouped_integer(value: i64) -> String {
         }
         out.push(ch);
     }
-    if value < 0 {
-        format!("-{out}")
-    } else {
-        out
-    }
+    if value < 0 { format!("-{out}") } else { out }
 }
 
 /// File rate in the unit that keeps the number readable: kbps below 10 Mbit/s,
 /// MB/s above it. `None` when the provider omitted both bitrate and size.
 fn bitrate_label(bit_rate: Option<i64>, size: Option<i64>, duration: f64) -> String {
-    let kbps = bit_rate.filter(|value| *value > 0).map(|value| value as f64).or_else(|| {
-        (duration > 0.0)
-            .then_some(size?)
-            .filter(|value| *value > 0)
-            .map(|bytes| bytes as f64 * 8.0 / duration / 1000.0)
-    });
+    let kbps = bit_rate
+        .filter(|value| *value > 0)
+        .map(|value| value as f64)
+        .or_else(|| {
+            (duration > 0.0)
+                .then_some(size?)
+                .filter(|value| *value > 0)
+                .map(|bytes| bytes as f64 * 8.0 / duration / 1000.0)
+        });
     match kbps {
         None => String::new(),
         Some(kbps) if kbps >= 10_000.0 => format!("{:.1} MB/s", kbps / 8000.0),
         Some(kbps) => format!("{} kbps", grouped_integer(kbps.round() as i64)),
     }
 }
+
+/// How long the cover crossfade plays when the identity changes. A same-album
+/// track change never starts it (the sources are reused).
+const COVER_FADE_MS: u64 = 120;
 
 #[derive(Default)]
 pub(in crate::ui) struct CurrentCover {
@@ -94,6 +98,10 @@ pub(in crate::ui) struct CurrentCover {
     /// the identity that carries one.
     cover_art: String,
     changed: bool,
+    /// Explicit start of the one-shot cover fade. `changed()` is only true on
+    /// the frame the identity changed, so the fade window needs its own stamp
+    /// to keep painting until the 120 ms crossfade completes.
+    fade_started: Option<std::time::Instant>,
 }
 
 impl CurrentCover {
@@ -122,6 +130,7 @@ impl CurrentCover {
         self.key = Some(key);
         self.cover_art = cover_art.to_string();
         self.changed = true;
+        self.fade_started = Some(std::time::Instant::now());
         true
     }
 
@@ -137,8 +146,36 @@ impl CurrentCover {
         &self.cover_art
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub(in crate::ui) fn changed(&self) -> bool {
         self.changed
+    }
+
+    /// Whether the one-shot cover crossfade is still inside its 120 ms window.
+    /// This is what keeps the fade painting after `changed()` resets: the
+    /// identity resolves once per frame, but the animation outlives that frame.
+    pub(in crate::ui) fn fade_active(&self) -> bool {
+        self.fade_started.is_some_and(|started| {
+            started.elapsed() < std::time::Duration::from_millis(COVER_FADE_MS)
+        })
+    }
+
+    /// Stable animation id for `surface` while the fade window is live; `None`
+    /// paints the cover without replaying an entrance animation.
+    pub(in crate::ui) fn fade_id(
+        &self,
+        surface: &str,
+        source: Option<&CoverSource>,
+    ) -> Option<gpui::SharedString> {
+        self.fade_active().then(|| {
+            gpui::SharedString::from(format!(
+                "cover-fade:{surface}:{}",
+                source.map_or_else(|| "none".to_string(), CoverSource::key)
+            ))
+        })
     }
 
     pub(in crate::ui) fn clear(&mut self) {
@@ -147,6 +184,7 @@ impl CurrentCover {
         self.full = None;
         self.cover_art.clear();
         self.changed = false;
+        self.fade_started = None;
     }
 }
 
@@ -610,18 +648,42 @@ impl AppRoot {
 
     /// Drives the top-bar identity viewport. Short identities stay at offset
     /// zero; an overflowing one slides exactly like the bottom-bar marquee.
-    pub(in crate::ui) fn refresh_topbar_marquee(&mut self, window: &gpui::Window) {
+    ///
+    /// Returns the delay until the next visible motion when the marquee is
+    /// holding at an end of its ping-pong; the caller arms a timer for that
+    /// instead of spinning on vsync through the pause. `None` means the frame
+    /// chain was already requested here, or nothing animates at all.
+    pub(in crate::ui) fn refresh_topbar_marquee(
+        &mut self,
+        window: &gpui::Window,
+    ) -> Option<std::time::Duration> {
+        // Home has no identity viewport: the page scroll handle is detached
+        // there, so its stale `max_offset` would otherwise look like a
+        // permanently overflowing title and spin the render loop on idle Home.
+        if self.page_bar().is_none() {
+            let signature = self.topbar_identity_signature();
+            self.topbar_identity_signature = signature;
+            self.topbar_marquee_started = std::time::Instant::now();
+            self.topbar_manual_scroll = None;
+            self.topbar_last_offset = 0.0;
+            self.topbar_scroll.set_offset(gpui::point(px(0.0), px(0.0)));
+            return None;
+        }
+        // An unfocused window has no visible motion; activation notifies the
+        // root, which re-enters this path and resumes from wall-clock phase.
+        if !window.is_window_active() {
+            return None;
+        }
         let signature = self.topbar_identity_signature();
         if signature != self.topbar_identity_signature {
             self.topbar_identity_signature = signature;
             self.topbar_marquee_started = std::time::Instant::now();
             self.topbar_manual_scroll = None;
             self.topbar_last_offset = 0.0;
-            self.topbar_scroll
-                .set_offset(gpui::point(px(0.0), px(0.0)));
+            self.topbar_scroll.set_offset(gpui::point(px(0.0), px(0.0)));
             // The content width is only known after this frame's layout.
             perf::request_frame(window, "topbar-marquee");
-            return;
+            return None;
         }
         // GPUI's x-overflow listener already maps wheel/trackpad deltas to the
         // horizontal viewport; the marquee is what used to overwrite them.
@@ -632,38 +694,53 @@ impl AppRoot {
             self.topbar_manual_scroll = Some(std::time::Instant::now());
             self.topbar_last_offset = current;
         }
-        if self
-            .topbar_manual_scroll
-            .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(2))
-        {
-            perf::request_frame(window, "topbar-scroll");
-            return;
+        if let Some(at) = self.topbar_manual_scroll {
+            // The user's own offset stays put; only wake when the grace ends
+            // so the automatic marquee can take the viewport back.
+            const GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+            let elapsed = at.elapsed();
+            if elapsed < GRACE {
+                return Some(GRACE - elapsed);
+            }
         }
         self.topbar_manual_scroll = None;
         let overflow = f32::from(self.topbar_scroll.max_offset().width);
         if overflow <= 0.5 {
-            self.topbar_scroll
-                .set_offset(gpui::point(px(0.0), px(0.0)));
+            self.topbar_scroll.set_offset(gpui::point(px(0.0), px(0.0)));
             self.topbar_last_offset = 0.0;
-            return;
+            return None;
         }
         let elapsed = self.topbar_marquee_started.elapsed().as_secs_f32();
         let offset = marquee_offset(overflow, elapsed);
         self.topbar_scroll
             .set_offset(gpui::point(px(-offset), px(0.0)));
         self.topbar_last_offset = -offset;
-        perf::request_frame(window, "topbar-marquee");
+        match marquee_next_change(overflow, elapsed) {
+            // Travelling: the offset changes on every frame.
+            None => {
+                perf::request_frame(window, "topbar-marquee");
+                None
+            }
+            // Held at an end: the caller arms one timer for the next leg.
+            Some(delay) => Some(std::time::Duration::from_secs_f32(delay.max(0.001))),
+        }
     }
 
     /// Keeps the source-file snapshot in sync with the queue row without
     /// re-querying on every transport tick.
+    ///
+    /// The request is deduplicated by the song id: while the app runs it is
+    /// called after every `UiUpdate`, and the bridge replies with a
+    /// `TrackInfo` event even when the row has no file metadata, so a second
+    /// request for the same id would only be spam. A new song (or an emptied
+    /// queue) is the only thing that triggers a fresh request.
     pub(in crate::ui) fn refresh_track_info(&mut self) {
         let current = self
             .player
             .current()
             .map(|track| track.id.clone())
             .unwrap_or_default();
-        if current == self.track_info_song && (current.is_empty() || self.track_info.is_some()) {
+        if current == self.track_info_song {
             return;
         }
         self.track_info_song = current.clone();
@@ -1047,13 +1124,14 @@ impl AppRoot {
         let position = self.player.position_now();
         let duration = self.player.duration();
         let volume = self.player.volume();
+        let muted = self.player.muted();
         let progress = if duration > 0.0 {
             (position / duration).clamp(0.0, 1.0) as f32
         } else {
             0.0
         };
         let cover = self.current_cover.thumb();
-        let cover_changed = self.current_cover.changed();
+        let cover_fade = self.current_cover.fade_id("player", cover.as_ref());
         let (title, artist) = match &track {
             Some(track) => (track.title.clone(), track.artist.clone()),
             None => ("Nothing playing".to_string(), String::new()),
@@ -1101,15 +1179,7 @@ impl AppRoot {
                                 m.cover_side,
                                 gpui::ObjectFit::Contain,
                                 m.cover_radius,
-                                cover_changed.then(|| {
-                                    gpui::SharedString::from(format!(
-                                        "cover-fade:player:{}",
-                                        self.current_cover
-                                            .thumb()
-                                            .as_ref()
-                                            .map_or_else(|| "none".to_string(), |source| source.key())
-                                    ))
-                                }),
+                                cover_fade,
                             ))
                             .child(
                                 div()
@@ -1207,62 +1277,15 @@ impl AppRoot {
                                 )
                             })
                             .child(
-                                div()
+                                // Same muted-aware meter as the fullscreen
+                                // transport: the fill greys out while the
+                                // output is muted (U-28).
+                                volume_meter(volume, muted)
                                     .w(px(m.volume_bar))
-                                    .h(px(m.volume_h))
-                                    .rounded_full()
-                                    .bg(rgb(palette::surface_container_high()))
-                                    .child(
-                                        div()
-                                            .h_full()
-                                            .w(relative((volume / 100.0) as f32))
-                                            .rounded_full()
-                                            .bg(rgb(palette::primary())),
-                                    ),
+                                    .h(px(m.volume_h)),
                             ),
                     ),
             )
-    }
-
-    pub(in crate::ui) fn status_bar(&self) -> impl IntoElement {
-        let counts = self
-            .header
-            .as_ref()
-            .map(|header| header.counts)
-            .unwrap_or((0, 0, 0));
-        div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .h(px(66.0))
-            .bg(rgb(palette::surface_container()))
-            .text_size(px(11.0))
-            .text_color(rgb(palette::on_surface_variant()))
-            .child({
-                let visual = if let Some(page) = self.page.as_ref() {
-                    page.list.selection.count(page.list.cursor)
-                } else {
-                    self.view.list.selection.count(self.view.list.cursor)
-                };
-                if visual > 0 {
-                    format!(
-                        "VISUAL {visual} · {} · {} · {}/{}",
-                        self.view.scope.label(),
-                        self.view.order_label(),
-                        counts.0,
-                        counts.1
-                    )
-                } else {
-                    format!(
-                        "{} · {} · {} artists / {} albums / {} songs",
-                        self.view.scope.label(),
-                        self.view.order_label(),
-                        counts.0,
-                        counts.1,
-                        counts.2
-                    )
-                }
-            })
     }
 }
 
@@ -1331,8 +1354,14 @@ mod cover_cache_tests {
             },
         ));
         assert!(cache.changed());
-        assert_eq!(cache.thumb().as_ref().map(CoverSource::key), Some("/a.thumb.jpg".into()));
-        assert_eq!(cache.full().as_ref().map(CoverSource::key), Some("/a.jpg".into()));
+        assert_eq!(
+            cache.thumb().as_ref().map(CoverSource::key),
+            Some("/a.thumb.jpg".into())
+        );
+        assert_eq!(
+            cache.full().as_ref().map(CoverSource::key),
+            Some("/a.jpg".into())
+        );
 
         // A different track of the same album has a different per-song URL:
         // neither source may be re-resolved.
@@ -1349,8 +1378,14 @@ mod cover_cache_tests {
             },
         ));
         assert!(!cache.changed());
-        assert_eq!(cache.thumb().as_ref().map(CoverSource::key), Some("/a.thumb.jpg".into()));
-        assert_eq!(cache.full().as_ref().map(CoverSource::key), Some("/a.jpg".into()));
+        assert_eq!(
+            cache.thumb().as_ref().map(CoverSource::key),
+            Some("/a.thumb.jpg".into())
+        );
+        assert_eq!(
+            cache.full().as_ref().map(CoverSource::key),
+            Some("/a.jpg".into())
+        );
         assert_eq!((thumb_calls, full_calls), (1, 1));
     }
 
@@ -1370,11 +1405,51 @@ mod cover_cache_tests {
             || Some(source("/b.jpg")),
         ));
         assert!(cache.changed());
-        assert_eq!(cache.thumb().as_ref().map(CoverSource::key), Some("/b.thumb.jpg".into()));
-        assert_eq!(cache.full().as_ref().map(CoverSource::key), Some("/b.jpg".into()));
+        assert_eq!(
+            cache.thumb().as_ref().map(CoverSource::key),
+            Some("/b.thumb.jpg".into())
+        );
+        assert_eq!(
+            cache.full().as_ref().map(CoverSource::key),
+            Some("/b.jpg".into())
+        );
         cache.clear();
         assert!(!cache.changed());
         assert!(cache.thumb().is_none() && cache.full().is_none());
+    }
+
+    #[test]
+    fn cover_fade_outlives_the_one_frame_changed_signal() {
+        let mut cache = CurrentCover::default();
+        let _ = cache.resolve(
+            "album:a".into(),
+            "art-a",
+            || Some(source("/a.thumb.jpg")),
+            || Some(source("/a.jpg")),
+        );
+        assert!(cache.changed());
+        assert!(cache.fade_active());
+        assert!(cache.fade_id("player", cache.thumb().as_ref()).is_some());
+
+        // The next identity resolution clears the one-frame `changed` signal...
+        assert!(!cache.resolve("album:a".into(), "", || None, || None));
+        assert!(!cache.changed());
+        // ...but the explicit fade window keeps the animation id stable.
+        assert!(cache.fade_active());
+        assert_eq!(
+            cache.fade_id("fullscreen", cache.full().as_ref()),
+            Some("cover-fade:fullscreen:/a.jpg".into())
+        );
+
+        // Once the window elapses the cover paints without an entrance
+        // animation and no frame chain is requested for it.
+        cache.fade_started =
+            Some(std::time::Instant::now() - std::time::Duration::from_millis(COVER_FADE_MS + 20));
+        assert!(!cache.fade_active());
+        assert!(cache.fade_id("player", cache.thumb().as_ref()).is_none());
+
+        cache.clear();
+        assert!(!cache.fade_active());
     }
 
     #[test]
@@ -1396,7 +1471,6 @@ mod cover_cache_tests {
         assert_eq!(cache.cover_art(), "art-a");
         assert!(!cache.changed());
     }
-
 }
 
 #[cfg(test)]
@@ -1433,12 +1507,30 @@ mod topbar_info_tests {
         assert!(info.output.is_empty() && info.codec.is_empty() && info.bitrate.is_empty());
         assert!(!info.has_insights());
         for info in [
-            TopBarInfo { crossfade: true, ..TopBarInfo::default() },
-            TopBarInfo { normalization: true, ..TopBarInfo::default() },
-            TopBarInfo { equalizer: true, ..TopBarInfo::default() },
-            TopBarInfo { favorite: true, ..TopBarInfo::default() },
-            TopBarInfo { downloaded: true, ..TopBarInfo::default() },
-            TopBarInfo { pending_download: true, ..TopBarInfo::default() },
+            TopBarInfo {
+                crossfade: true,
+                ..TopBarInfo::default()
+            },
+            TopBarInfo {
+                normalization: true,
+                ..TopBarInfo::default()
+            },
+            TopBarInfo {
+                equalizer: true,
+                ..TopBarInfo::default()
+            },
+            TopBarInfo {
+                favorite: true,
+                ..TopBarInfo::default()
+            },
+            TopBarInfo {
+                downloaded: true,
+                ..TopBarInfo::default()
+            },
+            TopBarInfo {
+                pending_download: true,
+                ..TopBarInfo::default()
+            },
         ] {
             assert!(info.has_insights());
         }

@@ -68,12 +68,153 @@ impl LyricsLayout {
     }
 }
 
+/// Per-line row heights: the wrapped line count measured at the emphasis size,
+/// scaled by the line height. The active emphasis is reserved on every row, so
+/// moving the highlight can never change the column's total height (QML
+/// reserves `emphasisPad` likewise).
+fn row_heights<F>(lines: &[(Option<i64>, String)], base: f32, mut measure: F) -> Vec<f32>
+where
+    F: FnMut(&str, f32) -> usize,
+{
+    let text_height = base * LINE_HEIGHT_SCALE;
+    lines
+        .iter()
+        .map(|(_, text)| {
+            let wrapped = measure(text, base * EMPHASIS).max(1) as f32;
+            (wrapped * text_height * EMPHASIS).max(text_height)
+        })
+        .collect()
+}
+
+/// Exact revision of the lyrics text content. It is the memoization identity of
+/// one lyrics document: a reloaded or re-parsed document always changes it, so
+/// the wrapped-line cache cannot serve stale heights. Cheap enough to recompute
+/// on every frame that lays lyrics out (a few KiB of hashing versus shaping
+/// every line).
+pub fn lines_revision(lines: &[(Option<i64>, String)]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    lines.len().hash(&mut hasher);
+    for (start, text) in lines {
+        start.hash(&mut hasher);
+        text.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct MeasureKey {
+    track: String,
+    revision: u64,
+    width: u32,
+}
+
+/// Memoizes the wrapped-line heights of one lyrics document.
+///
+/// The expensive part of a lyrics layout is measuring (shaping and wrapping)
+/// every line; the window geometry arithmetic that follows is trivial. This
+/// cache is keyed by `(track_id, lyrics_rev, width_px)` and holds one height
+/// vector per requested font size, because the host steps the type size down
+/// until a too-tall line fits. A same-key frame reuses the measured heights and
+/// never calls the text system again.
+#[derive(Default)]
+pub struct LyricsMeasureCache {
+    key: Option<MeasureKey>,
+    /// `(font size bits, row heights)` for the sizes the stepping loop asked
+    /// for under the current key. The number of sizes is tiny (the host only
+    /// steps down from the nominal size).
+    sizes: Vec<(u32, Vec<f32>)>,
+}
+
+impl LyricsMeasureCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Row heights for every line, wrapped at `size` in a `width` pane.
+    ///
+    /// `track`/`revision` identify the lyrics document (see [`lines_revision`]),
+    /// `measure` is the host's real text measurement and is only called on a
+    /// miss. `lines` must stay the document identified by `revision`.
+    pub fn heights<F>(
+        &mut self,
+        track: &str,
+        revision: u64,
+        width: f32,
+        size: f32,
+        lines: &[(Option<i64>, String)],
+        mut measure: F,
+    ) -> &[f32]
+    where
+        F: FnMut(&str, f32) -> usize,
+    {
+        let width = width.max(0.0).to_bits();
+        let same_document = self.key.as_ref().is_some_and(|key| {
+            key.track == track && key.revision == revision && key.width == width
+        });
+        if !same_document {
+            self.key = Some(MeasureKey {
+                track: track.to_string(),
+                revision,
+                width,
+            });
+            self.sizes.clear();
+        }
+        let size = size.max(1.0);
+        let size_bits = size.to_bits();
+        if let Some(index) = self.sizes.iter().position(|(bits, _)| *bits == size_bits) {
+            return &self.sizes[index].1;
+        }
+        let heights = row_heights(lines, size, &mut measure);
+        self.sizes.push((size_bits, heights));
+        match self.sizes.last() {
+            Some((_, heights)) => heights.as_slice(),
+            None => &[],
+        }
+    }
+}
+
+/// [`layout_windowed`] with the wrapped-line measurements memoized in a
+/// process-local cache keyed by `(track_id, lyrics_rev, width_px, font_size)`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors layout_windowed plus the cache identity; a parameter struct would only add indirection at the one call site"
+)]
+pub fn layout_windowed_memoized<F>(
+    track: &str,
+    revision: u64,
+    lines: &[(Option<i64>, String)],
+    active: usize,
+    center: usize,
+    width: f32,
+    height: f32,
+    base_size: f32,
+    measure: F,
+) -> LyricsLayout
+where
+    F: FnMut(&str, f32) -> usize,
+{
+    thread_local! {
+        static CACHE: std::cell::RefCell<LyricsMeasureCache> =
+            std::cell::RefCell::new(LyricsMeasureCache::new());
+    }
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let heights = cache.heights(track, revision, width, base_size, lines, measure);
+        layout_windowed_with_heights(lines, active, center, width, height, base_size, heights)
+    })
+}
+
 /// Measure the number of wrapped lines for one lyric at `size` and `width`.
 /// The callback is the host's real text measurement (tests pass a cheap stub).
 ///
 /// `active` is the line the playback highlight sits on; `center` is the line
 /// the pane is centred on (the follow target). They differ while a manual
 /// scroll holds the pane away from the played line.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+)]
 pub fn layout_windowed<F>(
     lines: &[(Option<i64>, String)],
     active: usize,
@@ -84,26 +225,35 @@ pub fn layout_windowed<F>(
     measure: F,
 ) -> LyricsLayout
 where
-    F: Fn(&str, f32) -> usize,
+    F: FnMut(&str, f32) -> usize,
 {
+    let base = base_size.max(1.0);
+    if lines.is_empty() || width <= 0.0 || height <= 0.0 {
+        return LyricsLayout::empty(base);
+    }
+    let heights = row_heights(lines, base, measure);
+    layout_windowed_with_heights(lines, active, center, width, height, base, &heights)
+}
+
+/// [`layout_windowed`] over row heights the caller already measured (the cached
+/// path). `heights` must have one entry per line.
+pub fn layout_windowed_with_heights(
+    lines: &[(Option<i64>, String)],
+    active: usize,
+    center: usize,
+    width: f32,
+    height: f32,
+    base_size: f32,
+    heights: &[f32],
+) -> LyricsLayout {
     let base = base_size.max(1.0);
     let gap = base * 1.2;
     let text_height = base * LINE_HEIGHT_SCALE;
-    if lines.is_empty() || width <= 0.0 || height <= 0.0 {
+    if lines.is_empty() || width <= 0.0 || height <= 0.0 || heights.len() != lines.len() {
         return LyricsLayout::empty(base);
     }
     let active = active.min(lines.len() - 1);
     let center = center.min(lines.len() - 1);
-
-    // Reserve the active emphasis on every row: moving the highlight can never
-    // change the column's total height (QML reserves `emphasisPad` likewise).
-    let heights: Vec<f32> = lines
-        .iter()
-        .map(|(_, text)| {
-            let wrapped = measure(text, base * EMPHASIS).max(1) as f32;
-            (wrapped * text_height * EMPHASIS).max(text_height)
-        })
-        .collect();
 
     if heights[center] > height {
         // A single line cannot fit even at the minimum size; the host shrinks
@@ -179,6 +329,10 @@ where
 }
 
 /// The follow layout: centre the played line (the ordinary synced-lyrics mode).
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+)]
 pub fn layout<F>(
     lines: &[(Option<i64>, String)],
     active: usize,
@@ -341,5 +495,89 @@ mod tests {
         let old = layout(&lines, 10, 500.0, 300.0, 18.0, char_lines);
         let far = layout(&lines, 80, 500.0, 300.0, 18.0, char_lines);
         assert!(far.glide_shift(&old, old.center).is_none());
+    }
+
+    #[test]
+    fn cache_reuses_wrapped_lines_for_same_width() {
+        let lines = lines(12);
+        let mut cache = LyricsMeasureCache::new();
+        let calls = std::cell::Cell::new(0usize);
+        let measure = |text: &str, size: f32| {
+            calls.set(calls.get() + 1);
+            char_lines(text, size)
+        };
+        let first = cache
+            .heights("song-1", 7, 500.0, 18.0, &lines, measure)
+            .to_vec();
+        assert_eq!(
+            calls.get(),
+            lines.len(),
+            "the whole document is measured once"
+        );
+        let second = cache
+            .heights("song-1", 7, 500.0, 18.0, &lines, measure)
+            .to_vec();
+        assert_eq!(first, second);
+        assert_eq!(
+            calls.get(),
+            lines.len(),
+            "a same-width frame must reuse the wrapped lines"
+        );
+
+        // A different pane width re-measures: wrapping depends on it.
+        let _ = cache
+            .heights("song-1", 7, 360.0, 18.0, &lines, measure)
+            .to_vec();
+        assert_eq!(calls.get(), lines.len() * 2);
+
+        // A new lyrics document (revision) invalidates even at the same width.
+        let _ = cache
+            .heights("song-1", 8, 360.0, 18.0, &lines, measure)
+            .to_vec();
+        assert_eq!(calls.get(), lines.len() * 3);
+    }
+
+    #[test]
+    fn cached_heights_layout_matches_the_measured_layout() {
+        let lines = lines(30);
+        let mut cache = LyricsMeasureCache::new();
+        let heights = cache
+            .heights("song", 1, 500.0, 18.0, &lines, char_lines)
+            .to_vec();
+        let cached = layout_windowed_with_heights(&lines, 10, 10, 500.0, 300.0, 18.0, &heights);
+        let direct = layout_windowed(&lines, 10, 10, 500.0, 300.0, 18.0, char_lines);
+        assert_eq!(cached, direct);
+    }
+
+    #[test]
+    fn memoized_layout_reuses_heights_across_panes() {
+        let lines = lines(20);
+        let calls = std::cell::Cell::new(0usize);
+        let measure = |text: &str, size: f32| {
+            calls.set(calls.get() + 1);
+            char_lines(text, size)
+        };
+        // Same document and width, different playback windows: only the window
+        // arithmetic reruns, the wrapped heights come from the cache.
+        let first =
+            layout_windowed_memoized("memo-track", 5, &lines, 8, 8, 500.0, 300.0, 18.0, measure);
+        assert_eq!(calls.get(), lines.len());
+        let second =
+            layout_windowed_memoized("memo-track", 5, &lines, 9, 9, 500.0, 300.0, 18.0, measure);
+        assert_eq!(calls.get(), lines.len(), "second pane reuses the heights");
+        let direct = layout_windowed(&lines, 9, 9, 500.0, 300.0, 18.0, char_lines);
+        assert_eq!(second, direct);
+        assert_ne!(first.center, second.center);
+    }
+
+    #[test]
+    fn lines_revision_tracks_text_changes() {
+        let document = lines(4);
+        let revision = lines_revision(&document);
+        assert_eq!(revision, lines_revision(&document));
+        let mut changed = document;
+        changed[2].1.push('!');
+        assert_ne!(revision, lines_revision(&changed));
+        assert_ne!(revision, lines_revision(&lines(5)));
     }
 }

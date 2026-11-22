@@ -329,14 +329,25 @@ impl TextModal {
         let size = px(style.text_size);
 
         if display.text.is_empty() {
-            return div()
+            let mut row = div()
                 .w(px(style.max_width))
                 .min_w(px(style.max_width))
                 .overflow_hidden()
                 .flex()
                 .items_center()
                 .text_size(size)
-                .text_color(rgb(palette::on_surface_variant()))
+                .text_color(rgb(palette::on_surface_variant()));
+            // The caret is the "input is focused/live" cue: paint it before
+            // the placeholder instead of returning early with only text.
+            if style.caret {
+                row = row.child(
+                    div()
+                        .w(px(CARET_WIDTH))
+                        .h(px(style.caret_h))
+                        .bg(rgb(palette::primary())),
+                );
+            }
+            return row
                 .child(
                     div()
                         .whitespace_nowrap()

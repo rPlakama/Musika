@@ -1,5 +1,6 @@
 use super::common::*;
 use crate::playlists::*;
+use std::io::{Read, Write};
 
 /// `create_local`/`add_to_playlist` resolve the process-wide data root. The two
 /// folder-writing tests must not race each other's root.
@@ -7,6 +8,110 @@ static PLAYLIST_FOLDER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_
 
 async fn playlist_pool() -> SqlitePool {
     crate::test::memory_pool(None).await
+}
+
+/// What the fake playlist server saw and ended with.
+struct PlaylistServerLog {
+    requests: Vec<String>,
+    ids: Vec<String>,
+}
+
+/// A loopback Subsonic stand-in for the playlist write paths. It serves the
+/// current entry order and applies `updatePlaylist` removals/additions, so a
+/// test can assert the final server order and inspect every request (N-03:
+/// appends must add instead of removing/re-adding the whole playlist).
+///
+/// The thread serves `max_requests` connections, then returns the request log
+/// and the order the server ended with.
+fn spawn_playlist_server(
+    initial_ids: &[&str],
+    max_requests: usize,
+) -> (String, std::thread::JoinHandle<PlaylistServerLog>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+    listener.set_nonblocking(true).expect("nonblocking");
+    let ids: Vec<String> = initial_ids.iter().map(|id| (*id).to_string()).collect();
+    let handle = std::thread::spawn(move || {
+        let mut ids = ids;
+        let mut requests: Vec<String> = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while requests.len() < max_requests && std::time::Instant::now() < deadline {
+            let (mut socket, _) = match listener.accept() {
+                Ok(pair) => pair,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    continue;
+                }
+                Err(_) => break,
+            };
+            _ = socket.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+            let mut buffer = [0u8; 16384];
+            let read = socket.read(&mut buffer).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let target = request
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .unwrap_or_default()
+                .to_string();
+            let body = if target.contains("getPlaylist.view") {
+                let entries = ids
+                    .iter()
+                    .map(|id| format!(r#"{{"id":"{id}","title":"{id}"}}"#))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!(
+                    r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1","playlist":{{"entry":[{entries}]}}}}}}"#
+                )
+            } else if target.contains("getPlaylists.view") {
+                format!(
+                    r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1","playlists":{{"playlist":[{{"id":"pl1","name":"Mix","songCount":{},"duration":100}}]}}}}}}"#,
+                    ids.len()
+                )
+            } else if target.contains("updatePlaylist.view") {
+                apply_playlist_update(&mut ids, &target);
+                r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#.to_string()
+            } else {
+                r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#.to_string()
+            };
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(head.as_bytes()).expect("head");
+            socket.write_all(body.as_bytes()).expect("body");
+            socket.flush().expect("flush");
+            requests.push(request);
+        }
+        PlaylistServerLog { requests, ids }
+    });
+    (format!("http://{addr}"), handle)
+}
+
+/// Applies one `updatePlaylist` request to the server stand-in's order: remove
+/// the listed indexes (the client sends the highest first) and append the add
+/// ids, exactly like the Subsonic API.
+fn apply_playlist_update(ids: &mut Vec<String>, target: &str) {
+    let Some((_, query)) = target.split_once('?') else {
+        return;
+    };
+    let mut removals: Vec<usize> = Vec::new();
+    let mut adds: Vec<String> = Vec::new();
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        match key {
+            "songIndexToRemove" => removals.push(value.parse::<usize>().unwrap_or(usize::MAX)),
+            "songIdToAdd" => adds.push(value.to_string()),
+            _ => {}
+        }
+    }
+    removals.sort_unstable();
+    for index in removals.into_iter().rev() {
+        if index < ids.len() {
+            ids.remove(index);
+        }
+    }
+    ids.extend(adds);
 }
 
 #[tokio::test]
@@ -835,14 +940,17 @@ async fn page_json_refreshes_a_stale_subsonic_cache() {
 
     let requests = server.join().expect("server thread");
     assert!(
-        requests.iter().any(|request| request.contains("getPlaylist.view")),
+        requests
+            .iter()
+            .any(|request| request.contains("getPlaylist.view")),
         "the stale page refetches getPlaylist: {requests:?}"
     );
 }
 
 /// A successful server add must reload the ordered `playlist_song` rows (not
 /// just the list count) so an already-open page cannot keep showing the old
-/// entries.
+/// entries. N-03: adding a song that is already on the server removes only the
+/// copies of that id and appends it again — never a remove-all/re-add pass.
 #[tokio::test]
 async fn add_to_playlist_refreshes_the_server_entries() {
     use std::io::{Read, Write};
@@ -938,25 +1046,143 @@ async fn add_to_playlist_refreshes_the_server_entries() {
         ],
         "the cached entries are reloaded after the update"
     );
-    let count: i64 =
-        sqlx::query_scalar("SELECT song_count FROM playlist WHERE id = 'pl1'")
-            .fetch_one(&playlist)
-            .await
-            .unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT song_count FROM playlist WHERE id = 'pl1'")
+        .fetch_one(&playlist)
+        .await
+        .unwrap();
     assert_eq!(count, 2, "the list count is refreshed too");
 
     let requests = server.join().expect("server thread");
     assert!(
-        requests.iter().any(|request| request.contains("updatePlaylist.view")),
+        requests
+            .iter()
+            .any(|request| request.contains("updatePlaylist.view")),
         "updatePlaylist is posted: {requests:?}"
     );
     assert!(
-        requests.iter().any(|request| request.contains("getPlaylist.view")),
+        requests
+            .iter()
+            .any(|request| request.contains("getPlaylist.view")),
         "entries are reloaded: {requests:?}"
     );
     assert!(
-        requests.iter().any(|request| request.contains("getPlaylists.view")),
+        requests
+            .iter()
+            .any(|request| request.contains("getPlaylists.view")),
         "the list is refreshed: {requests:?}"
+    );
+    let updates: Vec<&String> = requests
+        .iter()
+        .filter(|request| request.contains("updatePlaylist.view"))
+        .collect();
+    assert_eq!(updates.len(), 2, "one removal + one add: {requests:?}");
+    assert_eq!(
+        updates[0].matches("songIndexToRemove=").count(),
+        1,
+        "only the existing copy is removed: {updates:?}"
+    );
+    assert!(updates[0].contains("songIndexToRemove=1"), "{updates:?}");
+    assert!(updates[1].contains("songIdToAdd=s2"), "{updates:?}");
+}
+
+/// N-03: appending a new song must reach the server as an add-only edit;
+/// appending a song already in the playlist removes just that entry and
+/// re-appends it (the "add moves the song to the tail" rule) without touching
+/// the rest of the playlist.
+#[tokio::test]
+async fn append_to_a_server_playlist_adds_without_rewriting_the_rest() {
+    let credentials = playlist_pool().await;
+    sqlx::migrate!("./migrations")
+        .run(&credentials)
+        .await
+        .unwrap();
+    crate::crypto::use_test_key();
+
+    // add s3 (new): getPlaylist, add, getPlaylist, getPlaylists = 4 requests.
+    // add s1 (existing at index 0): getPlaylist, remove, add, getPlaylist,
+    // getPlaylists = 5 more.
+    let (server_url, server) = spawn_playlist_server(&["s1", "s2"], 9);
+    crate::sqlite::save_credentials(&credentials, "alice", "secret", &server_url, "navidrome")
+        .await
+        .unwrap();
+
+    let library = playlist_pool().await;
+    let playlist = playlist_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO playlist (id, source, name, song_count, duration, fetched_at)
+         VALUES ('pl1', 'subsonic', 'Mix', 2, 200, 0)",
+    )
+    .execute(&playlist)
+    .await
+    .unwrap();
+    let dbs = dbs_with_credentials(&credentials, &library, &playlist);
+
+    add_to_playlist(&dbs, &["current".into()], "Mix", Some("s3"))
+        .await
+        .unwrap();
+    add_to_playlist(&dbs, &["current".into()], "Mix", Some("s1"))
+        .await
+        .unwrap();
+
+    let rows: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT song_id FROM playlist_song WHERE playlist_id = 'pl1' ORDER BY position",
+    )
+    .fetch_all(&playlist)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            Some("s2".to_string()),
+            Some("s3".to_string()),
+            Some("s1".to_string())
+        ],
+        "the cached order follows the server: s1 moved to the tail"
+    );
+    let count: i64 = sqlx::query_scalar("SELECT song_count FROM playlist WHERE id = 'pl1'")
+        .fetch_one(&playlist)
+        .await
+        .unwrap();
+    assert_eq!(count, 3);
+
+    let log = server.join().expect("server thread");
+    let requests = log.requests;
+    let updates: Vec<&String> = requests
+        .iter()
+        .filter(|request| request.contains("updatePlaylist.view"))
+        .collect();
+    assert_eq!(
+        updates.len(),
+        3,
+        "one add, one remove, one add: {requests:?}"
+    );
+    assert!(
+        updates[0].contains("songIdToAdd=s3"),
+        "a new song is appended: {updates:?}"
+    );
+    assert!(
+        !updates[0].contains("songIndexToRemove="),
+        "a pure append removes nothing: {updates:?}"
+    );
+    assert_eq!(
+        updates[1].matches("songIndexToRemove=").count(),
+        1,
+        "only the moved copy is removed: {updates:?}"
+    );
+    assert!(updates[1].contains("songIndexToRemove=0"), "{updates:?}");
+    assert!(!updates[1].contains("songIdToAdd="), "{updates:?}");
+    assert!(
+        updates[2].contains("songIdToAdd=s1"),
+        "the moved song is appended: {updates:?}"
+    );
+    assert_eq!(
+        log.ids,
+        vec!["s2".to_string(), "s3".to_string(), "s1".to_string()],
+        "the server order matches the cached rows"
     );
 }
 
@@ -994,7 +1220,9 @@ async fn add_song_ids_and_remove_positions_edit_a_local_m3u() {
     std::fs::create_dir_all(&root).unwrap();
     crate::db::set_data_root(root.clone());
 
-    let path = create_local(&dbs, "Clip Mix", &["s1".into()]).await.unwrap();
+    let path = create_local(&dbs, "Clip Mix", &["s1".into()])
+        .await
+        .unwrap();
     let name = add_song_ids_to_playlist(&dbs, "Clip Mix", &["s2".into(), "s1".into()])
         .await
         .unwrap();
@@ -1166,7 +1394,9 @@ async fn remove_playlist_positions_updates_a_server_playlist() {
                 playlist_hits += 1;
                 // First fetch is the raw pre-edit order; the later one is the
                 // reloaded post-edit order.
-                format!(r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1","playlist":{{"entry":{entry}}}}}}}"#)
+                format!(
+                    r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1","playlist":{{"entry":{entry}}}}}}}"#
+                )
             } else if request.contains("getPlaylists.view") {
                 r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlists":{"playlist":[{"id":"pl1","name":"Mix","songCount":2,"duration":300}]}}}"#.to_string()
             } else {
@@ -1239,8 +1469,16 @@ async fn remove_playlist_positions_updates_a_server_playlist() {
         .find(|request| request.contains("updatePlaylist.view"))
         .expect("updatePlaylist request");
     assert!(remove.contains("songIndexToRemove=1"), "{remove}");
-    assert!(requests.iter().any(|request| request.contains("getPlaylist.view")));
-    assert!(requests.iter().any(|request| request.contains("getPlaylists.view")));
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains("getPlaylist.view"))
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains("getPlaylists.view"))
+    );
 }
 
 /// Playlist-page paste/reorder backend on a local M3U: inserting an existing
@@ -1301,11 +1539,7 @@ async fn insert_and_move_local_playlist_entries() {
         vec!["Music/first.flac", "Music/second.flac"]
     );
     assert!(move_playlist_entry(&dbs, "Move Mix", 0, 9).await.is_err());
-    assert!(
-        insert_song_ids_at(&dbs, "Move Mix", 0, &[])
-            .await
-            .is_err()
-    );
+    assert!(insert_song_ids_at(&dbs, "Move Mix", 0, &[]).await.is_err());
 
     // A visual block moves as one bundle, preserving internal order.
     move_playlist_block(&dbs, "Move Mix", 0, 1, 1)
@@ -1438,7 +1672,11 @@ async fn insert_song_ids_at_rebuilds_a_server_playlist_order() {
     let s3 = added.find("songIdToAdd=s3").expect("s3 add");
     let s2 = added.find("songIdToAdd=s2").expect("s2 add");
     assert!(s1 < s3 && s3 < s2, "new order: {added}");
-    assert!(requests.iter().any(|request| request.contains("getPlaylist.view")));
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains("getPlaylist.view"))
+    );
 }
 
 /// `playlist rm <name>` deletes a local M3U file and purges its row.
@@ -1558,11 +1796,15 @@ async fn delete_playlist_removes_a_server_playlist() {
 
     let requests = server.join().expect("server thread");
     assert!(
-        requests.iter().any(|request| request.contains("deletePlaylist.view")),
+        requests
+            .iter()
+            .any(|request| request.contains("deletePlaylist.view")),
         "{requests:?}"
     );
     assert!(
-        requests.iter().any(|request| request.contains("getPlaylists.view")),
+        requests
+            .iter()
+            .any(|request| request.contains("getPlaylists.view")),
         "{requests:?}"
     );
 }
@@ -1603,7 +1845,9 @@ async fn add_queue_appends_in_order_and_collapses_duplicates() {
     std::fs::create_dir_all(&root).unwrap();
     crate::db::set_data_root(root.clone());
 
-    let path = create_local(&dbs, "Queue Mix", &["s1".into()]).await.unwrap();
+    let path = create_local(&dbs, "Queue Mix", &["s1".into()])
+        .await
+        .unwrap();
     let paths = |text: &str| {
         parse_m3u(text)
             .into_iter()
@@ -1637,11 +1881,7 @@ async fn add_queue_appends_in_order_and_collapses_duplicates() {
     );
 
     // An empty queue and an unknown destination are reported, not written.
-    assert!(
-        add_queue_to_playlist(&dbs, "Queue Mix", &[])
-            .await
-            .is_err()
-    );
+    assert!(add_queue_to_playlist(&dbs, "Queue Mix", &[]).await.is_err());
     assert!(
         add_queue_to_playlist(&dbs, "Queue Mix", &[String::new(), "  ".into()])
             .await
@@ -1661,12 +1901,12 @@ async fn add_queue_appends_in_order_and_collapses_duplicates() {
     _ = std::fs::remove_dir_all(root);
 }
 
-/// The no-duplicates invariant is physical for local playlists: a rescan
-/// removes duplicate entries from the file itself (first occurrence wins),
-/// keeping unresolved path lines deduplicated by normalized path, and the
-/// stored rows/counts match the rewritten file.
+/// A scan never rewrites the user's `.m3u` (N-15). Duplicate entries are
+/// deduplicated for the stored rows only (first occurrence wins, unresolved
+/// path lines deduplicated by normalized path) and the file keeps whatever the
+/// user wrote; an explicit playlist edit is what cleans it.
 #[tokio::test]
-async fn scan_removes_duplicate_m3u_entries_and_rewrites_the_file() {
+async fn scan_dedupes_rows_without_rewriting_the_user_file() {
     let library = playlist_pool().await;
     sqlx::migrate!("./migrations_library")
         .run(&library)
@@ -1691,17 +1931,14 @@ async fn scan_removes_duplicate_m3u_entries_and_rewrites_the_file() {
     _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("mix.m3u");
-    std::fs::write(
-        &path,
-        "#EXTM3U\n\
+    let user_text = "#EXTM3U\n\
          #EXTINF:100,Artist - First\nMusic/first.flac\n\
          #EXTINF:200,Artist - Second\nMusic/second.flac\n\
          musika:song:s1\n\
          #EXTINF:100,Artist - First\n/elsewhere/first.flac\n\
          ghost.flac\n\
-         ./ghost.flac\n",
-    )
-    .unwrap();
+         ./ghost.flac\n";
+    std::fs::write(&path, user_text).unwrap();
 
     let lists = scan_dir(&dbs, &dir).await.unwrap();
     assert_eq!(lists.len(), 1);
@@ -1710,23 +1947,10 @@ async fn scan_removes_duplicate_m3u_entries_and_rewrites_the_file() {
         "duplicates must not be counted"
     );
 
-    let paths = |text: &str| {
-        parse_m3u(text)
-            .into_iter()
-            .map(|entry| entry.path)
-            .collect::<Vec<_>>()
-    };
     assert_eq!(
-        paths(&std::fs::read_to_string(&path).unwrap()),
-        vec!["Music/first.flac", "Music/second.flac", "ghost.flac"],
-        "the file itself is rewritten without the later duplicates"
-    );
-    let text = std::fs::read_to_string(&path).unwrap();
-    assert!(!text.contains("elsewhere"), "resolved duplicate removed");
-    assert_eq!(
-        text.matches("ghost.flac").count(),
-        1,
-        "unresolved duplicate path removed"
+        std::fs::read_to_string(&path).unwrap(),
+        user_text,
+        "a scan is read-only: it must not rewrite the user's playlist file"
     );
 
     let rows: Vec<(i64, Option<String>)> = sqlx::query_as(
@@ -1912,11 +2136,7 @@ async fn local_move_insert_and_delete_clean_stale_duplicates() {
         .unwrap();
     assert_eq!(
         written(),
-        vec![
-            "Music/third.flac",
-            "Music/first.flac",
-            "Music/second.flac"
-        ]
+        vec!["Music/third.flac", "Music/first.flac", "Music/second.flac"]
     );
 
     let rows: Vec<Option<String>> = sqlx::query_scalar(
@@ -1949,14 +2169,12 @@ async fn local_move_insert_and_delete_clean_stale_duplicates() {
     _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Server playlists with existing duplicates are cleaned physically: the page
-/// loads the entries, keeps the first copy of each id, rewrites the server
-/// order through remove-all/re-add and refreshes the list counts.
+/// N-03: opening a page with duplicate server entries may rewrite the cached
+/// rows, but it must never write the server copy. The explicit
+/// `dedupe_playlist` action then removes only the later duplicate indexes
+/// (never a remove-all/re-add pass), and a second run is a no-op.
 #[tokio::test]
-async fn server_duplicate_cleanup_rebuilds_order_and_counts() {
-    use std::io::{Read, Write};
-    use std::time::{Duration, Instant};
-
+async fn page_read_does_not_clean_server_duplicates_and_explicit_dedupe_is_minimal() {
     let credentials = playlist_pool().await;
     sqlx::migrate!("./migrations")
         .run(&credentials)
@@ -1964,45 +2182,7 @@ async fn server_duplicate_cleanup_rebuilds_order_and_counts() {
         .unwrap();
     crate::crypto::use_test_key();
 
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-    let addr = listener.local_addr().expect("local addr");
-    listener.set_nonblocking(true).unwrap();
-    let server = std::thread::spawn(move || {
-        let mut requests: Vec<String> = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while requests.len() < 4 && Instant::now() < deadline {
-            let (mut socket, _) = match listener.accept() {
-                Ok(pair) => pair,
-                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(10));
-                    continue;
-                }
-                Err(_) => break,
-            };
-            _ = socket.set_read_timeout(Some(Duration::from_secs(5)));
-            let mut buffer = [0u8; 8192];
-            let read = socket.read(&mut buffer).unwrap_or(0);
-            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
-            let body = if request.contains("getPlaylist.view") {
-                r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlist":{"entry":[{"id":"s1","title":"First","duration":100},{"id":"s2","title":"Second","duration":200},{"id":"s1","title":"First","duration":100},{"id":"s3","title":"Third","duration":300}]}}}"#
-            } else if request.contains("getPlaylists.view") {
-                r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlists":{"playlist":[{"id":"pl1","name":"Mix","songCount":3,"duration":600}]}}}"#
-            } else {
-                r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#
-            };
-            let head = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
-            socket.write_all(head.as_bytes()).expect("head");
-            socket.write_all(body.as_bytes()).expect("body");
-            socket.flush().expect("flush");
-            requests.push(request);
-        }
-        requests
-    });
-
-    let server_url = format!("http://{addr}");
+    let (server_url, server) = spawn_playlist_server(&["s1", "s2", "s1", "s3"], 6);
     crate::sqlite::save_credentials(&credentials, "alice", "secret", &server_url, "navidrome")
         .await
         .unwrap();
@@ -2021,10 +2201,7 @@ async fn server_duplicate_cleanup_rebuilds_order_and_counts() {
          VALUES
              ('s1', 'al1', 'ar1', 'First', 'Artist', 'Album', 1, 1, 100, 'Music/a.flac'),
              ('s2', 'al1', 'ar1', 'Second', 'Artist', 'Album', 2, 1, 200, 'Music/b.flac'),
-             ('s3', 'al1', 'ar1', 'Third', 'Artist', 'Album', 3, 1, 300, 'Music/c.flac');
-         CREATE TABLE covers (
-             id TEXT PRIMARY KEY, file TEXT NOT NULL, hash TEXT, content_type TEXT,
-             size INTEGER, etag TEXT, last_modified TEXT, fetched_at TEXT NOT NULL);",
+             ('s3', 'al1', 'ar1', 'Third', 'Artist', 'Album', 3, 1, 300, 'Music/c.flac');",
     )
     .execute(&library)
     .await
@@ -2044,10 +2221,16 @@ async fn server_duplicate_cleanup_rebuilds_order_and_counts() {
     .unwrap();
     let dbs = dbs_with_credentials(&credentials, &library, &playlist);
 
+    // The page sees the duplicate server order and stores the deduplicated
+    // rows, but the first request is a plain read.
     let (header, rows) = page(&dbs, "pl1", false).await.unwrap();
     assert_eq!(header.subtitle, "Playlist · 3 songs");
     let ids: Vec<&str> = rows.iter().map(|row| row.item.id.as_str()).collect();
-    assert_eq!(ids, vec!["s1", "s2", "s3"], "keep first, drop the later copy");
+    assert_eq!(
+        ids,
+        vec!["s1", "s2", "s3"],
+        "keep first, drop the later copy"
+    );
 
     let cached: Vec<(i64, Option<String>)> = sqlx::query_as(
         "SELECT position, song_id FROM playlist_song WHERE playlist_id = 'pl1' ORDER BY position",
@@ -2063,41 +2246,52 @@ async fn server_duplicate_cleanup_rebuilds_order_and_counts() {
             (2, Some("s3".to_string())),
         ]
     );
-    let count: i64 = sqlx::query_scalar("SELECT song_count FROM playlist WHERE id = 'pl1'")
-        .fetch_one(&playlist)
-        .await
-        .unwrap();
-    assert_eq!(count, 3);
 
-    let requests = server.join().expect("server thread");
-    assert!(
-        requests.iter().any(|request| request.contains("getPlaylist.view")),
-        "the entries are loaded: {requests:?}"
-    );
-    let remove = requests
-        .iter()
-        .find(|request| request.contains("songIndexToRemove="))
-        .unwrap_or_else(|| panic!("remove request missing: {requests:?}"));
+    // Explicit user action: one removal (raw index 2), no add.
+    let removed = dedupe_playlist(&dbs, "pl1").await.unwrap();
+    assert_eq!(removed, 1, "only the later duplicate copy is removed");
     assert_eq!(
-        remove.matches("songIndexToRemove=").count(),
-        4,
-        "every raw entry is removed: {remove}"
+        dedupe_playlist(&dbs, "pl1").await.unwrap(),
+        0,
+        "the cleaned server has no duplicates left"
     );
-    for index in 0..4 {
-        assert!(
-            remove.contains(&format!("songIndexToRemove={index}")),
-            "{remove}"
-        );
-    }
-    let add = requests
+
+    let requests = server.join().expect("server thread").requests;
+    assert!(
+        requests[0].contains("getPlaylist.view"),
+        "the page only reads the playlist: {requests:?}"
+    );
+    assert!(
+        requests[1].contains("getPlaylist.view"),
+        "the explicit dedupe fetches the raw order: {requests:?}"
+    );
+    let updates: Vec<&String> = requests
         .iter()
-        .find(|request| request.contains("songIdToAdd="))
-        .expect("add request");
-    assert_eq!(add.matches("songIdToAdd=s1").count(), 1, "{add}");
-    let first = add.find("songIdToAdd=s1").expect("s1 add");
-    let second = add.find("songIdToAdd=s2").expect("s2 add");
-    let third = add.find("songIdToAdd=s3").expect("s3 add");
-    assert!(first < second && second < third, "deduped order: {add}");
+        .filter(|request| request.contains("updatePlaylist.view"))
+        .collect();
+    assert_eq!(updates.len(), 1, "one minimal removal pass: {requests:?}");
+    assert_eq!(
+        updates[0].matches("songIndexToRemove=").count(),
+        1,
+        "not a remove-all pass: {updates:?}"
+    );
+    assert!(updates[0].contains("songIndexToRemove=2"), "{updates:?}");
+    assert!(
+        !updates[0].contains("songIdToAdd="),
+        "dedupe removes entries, it never re-adds them: {updates:?}"
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.contains("songIdToAdd="))
+            .count(),
+        0,
+        "no request in the page/dedupe flow re-adds songs: {requests:?}"
+    );
+    assert!(
+        !requests[0].contains("updatePlaylist.view"),
+        "the page request itself must not write the server copy: {requests:?}"
+    );
     assert!(
         requests
             .iter()
@@ -2147,7 +2341,9 @@ async fn server_move_with_a_duplicated_cache_writes_no_duplicates() {
                     r#"[{"id":"s1","title":"First"},{"id":"s2","title":"Second"},{"id":"s3","title":"Third"}]"#
                 };
                 playlist_hits += 1;
-                format!(r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1","playlist":{{"entry":{entry}}}}}}}"#)
+                format!(
+                    r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1","playlist":{{"entry":{entry}}}}}}}"#
+                )
             } else if request.contains("getPlaylists.view") {
                 r#"{"subsonic-response":{"status":"ok","version":"1.16.1","playlists":{"playlist":[{"id":"pl1","name":"Mix","songCount":3,"duration":500}]}}}"#.to_string()
             } else {
@@ -2323,7 +2519,10 @@ async fn page_fallback_collage_does_not_depend_on_cover_cache_warming() {
     let (first, _) = page(&dbs, "pl1", false).await.unwrap();
     let (second, _) = page(&dbs, "pl1", false).await.unwrap();
     assert_eq!(first.collage.len(), 2, "one pane per unique album");
-    assert_eq!(first.collage_art, vec!["dc-1".to_string(), "dc-2".to_string()]);
+    assert_eq!(
+        first.collage_art,
+        vec!["dc-1".to_string(), "dc-2".to_string()]
+    );
     assert_eq!(first.collage, second.collage);
     assert_eq!(first.collage_remote, second.collage_remote);
 }
@@ -2437,10 +2636,7 @@ fn playlist_rows_fall_back_to_a_resolvable_library_cover() {
         ),
         Some(&entry)
     );
-    assert_eq!(
-        playlist_row_cover(None, None, &covers, &remotes),
-        None
-    );
+    assert_eq!(playlist_row_cover(None, None, &covers, &remotes), None);
 }
 
 /// A long server playlist is rewritten in bounded `updatePlaylist` batches:
@@ -2559,7 +2755,9 @@ async fn server_edits_batch_a_long_playlist() {
     assert_eq!((removes.len(), adds.len()), (3, 3), "{updates:?}");
     assert!(removes[0].contains("songIndexToRemove=129"), "{removes:?}");
     assert!(
-        removes.last().is_some_and(|request| request.contains("songIndexToRemove=0")),
+        removes
+            .last()
+            .is_some_and(|request| request.contains("songIndexToRemove=0")),
         "{removes:?}"
     );
     for request in &removes {
@@ -2655,4 +2853,269 @@ async fn search_rows_include_playlist_cover_fallbacks() {
         "playlist cover id: {}",
         hits[0].cover_remote
     );
+}
+
+/// N-03: the server cleanup addresses exactly the later duplicate copies,
+/// keep-first — the other entries keep their positions.
+#[test]
+fn duplicate_entry_indexes_are_minimal_and_keep_the_first_copy() {
+    let raw = ["s1", "s2", "s1", "s3", "s1", "s2"]
+        .map(String::from)
+        .to_vec();
+    assert_eq!(
+        duplicate_entry_indexes(&raw),
+        vec![2, 4, 5],
+        "only the later copies are removed"
+    );
+    assert!(duplicate_entry_indexes(&["s1".into(), "s2".into()]).is_empty());
+    assert!(duplicate_entry_indexes(&[]).is_empty());
+}
+
+/// N-15: LIKE wildcards in a search query match themselves; only the SQL
+/// pattern wrapping adds `%`.
+#[test]
+fn like_contains_escapes_wildcards() {
+    assert_eq!(like_contains("mix"), "%mix%");
+    assert_eq!(like_contains("  mix  "), "%mix%");
+    assert_eq!(like_contains("100%"), "%100\\%%");
+    assert_eq!(like_contains("a_b"), "%a\\_b%");
+    // A backslash in the query is escaped too, so the pattern stays valid.
+    assert_eq!(like_contains("a\\b"), "%a\\\\b%");
+}
+
+/// The escaped pattern is what `search_rows` binds, so a playlist named
+/// `100%` only matches a literal percent sign and `_` is not "any character".
+#[tokio::test]
+async fn search_rows_treats_like_wildcards_as_literals() {
+    let library = playlist_pool().await;
+    let playlist = playlist_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO playlist (id, source, name, song_count, fetched_at) VALUES
+             ('p1', 'subsonic', '100% Pure', 1, 0),
+             ('p2', 'subsonic', '100x Pure', 1, 0),
+             ('p3', 'subsonic', 'under_score', 1, 0),
+             ('p4', 'subsonic', 'underXscore', 1, 0);",
+    )
+    .execute(&playlist)
+    .await
+    .unwrap();
+    let dbs = playlist_dbs(&library, &playlist);
+    let names =
+        |hits: Vec<PlaylistHit>| -> Vec<String> { hits.into_iter().map(|hit| hit.name).collect() };
+
+    assert_eq!(
+        names(search_rows(&dbs, "100%", 10).await.unwrap()),
+        vec!["100% Pure".to_string()],
+        "the percent sign is literal, not a wildcard"
+    );
+    assert_eq!(
+        names(search_rows(&dbs, "under_", 10).await.unwrap()),
+        vec!["under_score".to_string()],
+        "the underscore is literal, not 'any character'"
+    );
+    assert_eq!(
+        names(search_rows(&dbs, "%", 10).await.unwrap()),
+        vec!["100% Pure".to_string()]
+    );
+}
+
+/// N-21: the sanitizer is many-to-one, so names that both map to `A-B` must
+/// get distinct file names while a plain name keeps its readable file name and
+/// re-saving the same name still targets the same file.
+#[test]
+fn m3u_filenames_do_not_collide_after_sanitizing() {
+    assert_eq!(m3u_filename("Road Trip"), "Road Trip.m3u");
+    assert_eq!(m3u_filename("Road Trip"), m3u_filename("Road Trip"));
+
+    let slash = m3u_filename("A/B");
+    let colon = m3u_filename("A:B");
+    assert_ne!(
+        slash, colon,
+        "colliding slugs must not overwrite each other"
+    );
+    assert!(slash.starts_with("A-B-"), "{slash}");
+    assert!(colon.starts_with("A-B-"), "{colon}");
+    assert!(slash.ends_with(".m3u"), "{slash}");
+    assert_eq!(m3u_filename("A/B"), slash, "the file name is stable");
+    // An all-unsafe name still gets a deterministic, unique file.
+    let dots = m3u_filename("...");
+    assert!(dots.starts_with("Playlist-"), "{dots}");
+    assert_ne!(dots, m3u_filename("///"));
+}
+
+/// End to end for N-21: creating playlists whose names sanitize alike leaves
+/// both files (and both playlist rows) intact instead of overwriting one.
+#[tokio::test]
+async fn colliding_playlist_names_write_separate_files() {
+    let _guard = PLAYLIST_FOLDER_LOCK.lock().await;
+    let library = playlist_pool().await;
+    sqlx::migrate!("./migrations_library")
+        .run(&library)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO songs (id, title, artist, album, duration, path) VALUES
+             ('s1', 'First', 'Artist', 'Album', 100, 'Music/first.flac'),
+             ('s2', 'Second', 'Artist', 'Album', 200, 'Music/second.flac')",
+    )
+    .execute(&library)
+    .await
+    .unwrap();
+    let playlist = playlist_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    let dbs = playlist_dbs(&library, &playlist);
+    let root = std::env::temp_dir().join(format!("musika-name-collision-{}", std::process::id()));
+    _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    crate::db::set_data_root(root.clone());
+
+    let slash = create_local(&dbs, "A/B", &["s1".into()]).await.unwrap();
+    let colon = create_local(&dbs, "A:B", &["s2".into()]).await.unwrap();
+    assert_ne!(slash, colon, "the two playlists must own separate files");
+    assert!(slash.is_file() && colon.is_file());
+    let first = std::fs::read_to_string(&slash).unwrap();
+    let second = std::fs::read_to_string(&colon).unwrap();
+    assert!(first.contains("Music/first.flac"), "{first}");
+    assert!(!first.contains("Music/second.flac"), "{first}");
+    assert!(second.contains("Music/second.flac"), "{second}");
+
+    // Re-saving the first name targets (and overwrites) its own file again.
+    let again = create_local(&dbs, "A/B", &["s1".into()]).await.unwrap();
+    assert_eq!(again, slash);
+    let lists = list(&dbs).await.unwrap();
+    assert_eq!(lists.len(), 2, "both playlists stay listed");
+
+    _ = std::fs::remove_dir_all(root);
+}
+
+/// N-15: playlist writes go through temp+rename, so the directory never keeps
+/// a temp file behind and an overwrite replaces the body in one step.
+#[tokio::test]
+async fn playlist_writes_are_atomic_and_leave_no_temp_files() {
+    let dir = std::env::temp_dir().join(format!("musika-m3u-atomic-{}", std::process::id()));
+    _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("mix.m3u");
+    let entries = parse_m3u("#EXTM3U\n#EXTINF:100,Artist - First\nMusic/first.flac\n");
+
+    write_m3u_entries(&path, &entries).await.unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.starts_with("#EXTM3U\n"));
+    assert!(text.contains("Music/first.flac"), "{text}");
+    let names: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["mix.m3u".to_string()],
+        "the temp file is renamed away, never left in the folder"
+    );
+
+    write_m3u_entries(&path, &[]).await.unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "#EXTM3U\n");
+
+    _ = std::fs::remove_dir_all(&dir);
+}
+
+/// N-15: `remove_local_m3u` matches app-owned `musika:song:<id>` lines by id
+/// even when the song is not in the local library (a server-only track saved
+/// from a radio), which path/name resolution alone cannot see.
+#[tokio::test]
+async fn remove_local_m3u_drops_app_owned_song_ids() {
+    let library = playlist_pool().await;
+    sqlx::migrate!("./migrations_library")
+        .run(&library)
+        .await
+        .unwrap();
+    let playlist = playlist_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    let dbs = playlist_dbs(&library, &playlist);
+
+    let dir = std::env::temp_dir().join(format!("musika-musika-song-rm-{}", std::process::id()));
+    _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("mix.m3u");
+    std::fs::write(
+        &path,
+        "#EXTM3U\nmusika:song:server-only\nMusic/unknown.flac\n",
+    )
+    .unwrap();
+
+    remove_local_m3u(&dbs, &path, &["server-only".into()], "mix.m3u")
+        .await
+        .unwrap();
+    let paths: Vec<String> = parse_m3u(&std::fs::read_to_string(&path).unwrap())
+        .into_iter()
+        .map(|entry| entry.path)
+        .collect();
+    assert_eq!(paths, vec!["Music/unknown.flac".to_string()]);
+    // A second removal finds nothing and reports it instead of rewriting.
+    assert!(
+        remove_local_m3u(&dbs, &path, &["server-only".into()], "mix.m3u")
+            .await
+            .is_err()
+    );
+
+    _ = std::fs::remove_dir_all(&dir);
+}
+
+/// N-03: the local half of the explicit dedupe action rewrites a duplicated
+/// M3U keep-first, and only when the user asks for it.
+#[tokio::test]
+async fn dedupe_playlist_cleans_a_duplicated_local_m3u_on_request() {
+    let library = playlist_pool().await;
+    sqlx::migrate!("./migrations_library")
+        .run(&library)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO songs (id, title, artist, album, duration, path) VALUES
+             ('s1', 'First', 'Artist', 'Album', 100, 'Music/first.flac'),
+             ('s2', 'Second', 'Artist', 'Album', 200, 'Music/second.flac')",
+    )
+    .execute(&library)
+    .await
+    .unwrap();
+    let playlist = playlist_pool().await;
+    sqlx::migrate!("./migrations_playlist")
+        .run(&playlist)
+        .await
+        .unwrap();
+    let dbs = playlist_dbs(&library, &playlist);
+    let dir = std::env::temp_dir().join(format!("musika-m3u-explicit-{}", std::process::id()));
+    _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("mix.m3u");
+    let user_text = "#EXTM3U\nMusic/first.flac\nMusic/second.flac\nMusic/first.flac\n";
+    std::fs::write(&path, user_text).unwrap();
+    scan_dir(&dbs, &dir).await.unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), user_text);
+
+    assert_eq!(dedupe_playlist(&dbs, "mix.m3u").await.unwrap(), 1);
+    let paths: Vec<String> = parse_m3u(&std::fs::read_to_string(&path).unwrap())
+        .into_iter()
+        .map(|entry| entry.path)
+        .collect();
+    assert_eq!(
+        paths,
+        vec![
+            "Music/first.flac".to_string(),
+            "Music/second.flac".to_string()
+        ]
+    );
+    assert_eq!(dedupe_playlist(&dbs, "mix.m3u").await.unwrap(), 0);
+
+    _ = std::fs::remove_dir_all(&dir);
 }

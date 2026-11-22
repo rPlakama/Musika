@@ -44,6 +44,21 @@ pub struct TrackInfo {
     pub size: Option<i64>,
 }
 
+/// Which catalog entity an [`Event::Notes`] payload describes.
+///
+/// Album descriptions and artist biographies live in separate cache tables
+/// (`album_info` / `artist_info`) and carry unrelated provider ids, so the
+/// payload must say which id it names instead of passing an artist id through
+/// the album field (D-27).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum NotesKind {
+    /// `album_info` description for an album id.
+    #[default]
+    Album,
+    /// `artist_info` biography for an artist id.
+    Artist,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Event {
     LoginRequired {
@@ -129,7 +144,13 @@ pub enum Event {
         rows: Vec<crate::model::Row>,
     },
     Notes {
-        album_id: String,
+        /// Album or artist id the payload belongs to.
+        id: String,
+        /// Which catalog entity [`Event::Notes::id`] names (D-27). Defaulted
+        /// so a payload serialized before the discriminator existed still
+        /// reads back as album notes, the only kind that shipped then.
+        #[serde(default)]
+        kind: NotesKind,
         notes: String,
     },
     Marks {
@@ -357,10 +378,7 @@ impl Bridge {
         bridge
     }
 
-    pub(crate) fn attach_playback(
-        &self,
-        playback: crate::daemon::playback::PlaybackControl,
-    ) {
+    pub(crate) fn attach_playback(&self, playback: crate::daemon::playback::PlaybackControl) {
         if self.playback.set(playback).is_err() {
             crate::debug_log!("bridge: playback control was already attached");
         }
@@ -418,10 +436,7 @@ mod serde_tests {
     fn bridge_events_round_trip_json() {
         for event in [
             Event::OpenPage {
-                descriptor: crate::model::PageDescriptor::new(
-                    crate::model::PageKind::Album,
-                    "al1",
-                ),
+                descriptor: crate::model::PageDescriptor::new(crate::model::PageKind::Album, "al1"),
             },
             Event::IpcRan("playlist add selected; \"Mix\"".to_string()),
             Event::Connection { online: false },

@@ -1,9 +1,3 @@
-// Transitional: legacy backend helpers remain compiled until they are
-// cleaned up or reused by the GPUI front end.
-#![expect(
-    dead_code,
-    reason = "legacy backend helpers remain compiled until they are cleaned up or reused by the GPUI front end"
-)]
 #![cfg_attr(
     test,
     allow(
@@ -33,11 +27,10 @@ mod accounts;
 mod api;
 mod app;
 mod artist_user;
-mod bridge_rpc;
 mod assets;
-#[cfg(feature = "gpuui")]
 mod auth;
 mod bridge;
+mod bridge_rpc;
 mod browse;
 mod cache;
 mod colors;
@@ -52,13 +45,19 @@ mod debug;
 mod debug_info;
 mod digest;
 mod download;
-#[cfg(feature = "gpuui")]
 mod download_command;
 mod fanout;
 mod hex;
 mod http_client;
 mod index;
 #[cfg(feature = "io-uring")]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the io_uring reader is exercised only by its own tests"
+    )
+)]
 mod io_uring_read;
 mod ipc;
 mod ipc_command;
@@ -71,15 +70,22 @@ mod media_actions;
 mod model;
 mod mpris;
 mod offline;
-mod player;
 mod playback_settings;
+mod player;
 mod playlists;
 mod queue;
 mod radio;
 mod recommend;
 mod rows;
-mod scroll_memory;
 mod scrobble;
+#[cfg_attr(
+    not(any(test, feature = "gpuui")),
+    expect(
+        dead_code,
+        reason = "scroll memory is consumed by the GPUI front end and its tests"
+    )
+)]
+mod scroll_memory;
 mod search;
 mod session;
 mod sqlite;
@@ -207,5 +213,5 @@ pub(crate) mod test_alloc {
 static TEST_ALLOCATOR: test_alloc::TrackingAllocator = test_alloc::TrackingAllocator;
 
 pub mod entry;
-mod inhibit;
 mod eq;
+mod inhibit;

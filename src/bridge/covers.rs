@@ -2,6 +2,23 @@
 
 use super::*;
 
+struct PaletteInflightGuard {
+    slot: Arc<Mutex<Option<String>>>,
+    cover_art: String,
+}
+
+impl Drop for PaletteInflightGuard {
+    fn drop(&mut self) {
+        let mut inflight = self
+            .slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if inflight.as_deref() == Some(self.cover_art.as_str()) {
+            *inflight = None;
+        }
+    }
+}
+
 impl Bridge {
     pub fn request_colors(&self, cover_art: String) {
         if cover_art.is_empty() {
@@ -18,8 +35,12 @@ impl Bridge {
             *inflight = Some(cover_art.clone());
         }
         let tx = self.tx.clone();
-        let inflight_shared = Arc::clone(&self.palette_inflight);
+        let guard = PaletteInflightGuard {
+            slot: Arc::clone(&self.palette_inflight),
+            cover_art: cover_art.clone(),
+        };
         crate::app::runtime().spawn(async move {
+            let _guard = guard;
             let Some(dbs) = crate::app::dbs() else { return };
             let event = match crate::colors::fetch(&dbs, &cover_art).await {
                 Ok(Some(scheme)) => Event::Palette {
@@ -31,12 +52,6 @@ impl Bridge {
                 },
             };
             _ = tx.send(event);
-            let mut inflight = inflight_shared
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if inflight.as_deref() == Some(cover_art.as_str()) {
-                *inflight = None;
-            }
         });
     }
 }

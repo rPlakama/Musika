@@ -56,6 +56,10 @@ pub struct Document {
     pub source: String,
     pub synced: bool,
     pub lang: Option<String>,
+    /// The document time offset in milliseconds. It is already baked into
+    /// `lines[*].start_ms` when the document is built (N-14), so consumers
+    /// must not apply it a second time; the raw value is kept for the payload
+    /// and cache round-trip.
     pub offset_ms: i64,
     pub text: String,
     pub lines: Vec<Line>,
@@ -100,24 +104,6 @@ impl Document {
         }
     }
 
-    /// The payload sent to legacy UI over the `lyrics` dataReady channel.
-    pub fn to_json(&self) -> String {
-        let lines: Vec<serde_json::Value> = self
-            .lines
-            .iter()
-            .map(|line| serde_json::json!({ "t": line.start_ms, "text": line.value }))
-            .collect();
-        serde_json::json!({
-            "song_id": self.song_id,
-            "source": self.source,
-            "synced": self.synced,
-            "lang": self.lang,
-            "offset_ms": self.offset_ms,
-            "lines": lines,
-        })
-        .to_string()
-    }
-
     pub(crate) fn plain(song_id: &str, source: &str, text: &str) -> Self {
         let lines = text_to_lines(text);
         Self {
@@ -136,7 +122,7 @@ impl Document {
 /// plain otherwise. Servers frequently answer the legacy endpoint with the
 /// raw `.lrc` file, and dropping those tags would render it unsynced.
 pub(crate) fn legacy_document(song_id: &str, value: &str) -> Document {
-    let (synced, lines) = parse_lrc(value);
+    let (synced, lines, offset) = parse_lrc(value);
     if !synced {
         return Document::plain(song_id, "legacy", value);
     }
@@ -147,7 +133,7 @@ pub(crate) fn legacy_document(song_id: &str, value: &str) -> Document {
         source: "legacy".to_string(),
         synced,
         lang: None,
-        offset_ms: 0,
+        offset_ms: offset,
         text,
         lines,
     }
@@ -310,6 +296,10 @@ pub async fn purge(dbs: &Dbs) -> Result<usize> {
 
 /// Drops the cached document for one song, forcing the next fetch to hit the
 /// server again (manual `lyrics_refresh`; LYR-5).
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the model tests exercise this vocabulary")
+)]
 pub async fn invalidate(lyrics: &SqlitePool, song_id: &str) -> Result<()> {
     crate::cache::delete_by(lyrics, "DELETE FROM lyrics WHERE song_id = ?1", song_id).await
 }
@@ -537,14 +527,14 @@ fn override_document(song_id: &str) -> Option<Document> {
         }
 
         if extension == "lrc" {
-            let (synced, lines) = parse_lrc(&text);
+            let (synced, lines, offset) = parse_lrc(&text);
             let plain = lines_to_text(&lines);
             return Some(Document {
                 song_id: song_id.to_string(),
                 source: "lrc".to_string(),
                 synced,
                 lang: None,
-                offset_ms: 0,
+                offset_ms: offset,
                 text: plain,
                 lines,
             });
@@ -572,11 +562,19 @@ fn sanitize_id(song_id: &str) -> Option<String> {
     (safe.len() == song_id.len()).then_some(safe)
 }
 
-/// Parses LRC text into `(synced, lines)`. Metadata tags (`[ar:…]`) are
-/// skipped; a line may carry several timestamps.
-pub(crate) fn parse_lrc(text: &str) -> (bool, Vec<Line>) {
+/// Parses LRC text into `(synced, lines, offset_ms)`.
+///
+/// Metadata tags (`[ar:…]`) are skipped; a line may carry several timestamps
+/// (`[00:10][00:05]text`), and the resulting lines are sorted by start time
+/// (stable, so equal timestamps keep file order; untimed lines go last). The
+/// document `[offset:]` tag is parsed and applied to every timestamp here, so
+/// the returned `lines` already carry playable absolute times (N-14). A
+/// positive offset delays the line, matching the retired QML player's
+/// `position - offset` comparison.
+pub(crate) fn parse_lrc(text: &str) -> (bool, Vec<Line>, i64) {
     let mut lines = Vec::new();
     let mut synced = false;
+    let mut offset_ms = 0;
 
     for raw in text.lines() {
         let mut rest = raw.trim_end();
@@ -584,9 +582,12 @@ pub(crate) fn parse_lrc(text: &str) -> (bool, Vec<Line>) {
 
         while rest.starts_with('[') {
             let Some(end) = rest.find(']') else { break };
-            if let Some(start) = parse_timestamp(&rest[1..end]) {
+            let tag = &rest[1..end];
+            if let Some(start) = parse_timestamp(tag) {
                 starts.push(start);
                 synced = true;
+            } else if let Some(offset) = parse_offset(tag) {
+                offset_ms = offset;
             }
             rest = &rest[end + 1..];
         }
@@ -611,23 +612,69 @@ pub(crate) fn parse_lrc(text: &str) -> (bool, Vec<Line>) {
         }
     }
 
-    (synced, lines)
+    if offset_ms != 0 {
+        for line in &mut lines {
+            if let Some(start) = line.start_ms {
+                line.start_ms = Some(offset_timestamp(start, offset_ms));
+            }
+        }
+    }
+
+    // Multi-tag lines and shuffled files must not produce out-of-order times:
+    // the UI matches the active line by position. `i64::MAX` keeps the
+    // untimed (plain credit) lines after every timed one.
+    lines.sort_by_key(|line| line.start_ms.unwrap_or(i64::MAX));
+
+    (synced, lines, offset_ms)
+}
+
+/// Applies a document offset to one timestamp. Negative results clamp to the
+/// start of the track; only a timestamp beyond `i64::MAX` would saturate,
+/// which no real track reaches.
+fn offset_timestamp(start_ms: i64, offset_ms: i64) -> i64 {
+    start_ms.saturating_add(offset_ms).max(0)
+}
+
+/// Parses the LRC `[offset:<milliseconds>]` tag. Values outside ±1 h are
+/// treated as corruption (a sync hint never needs to be larger).
+fn parse_offset(tag: &str) -> Option<i64> {
+    const MAX_OFFSET_MS: i64 = 60 * 60 * 1_000;
+    let (key, value) = tag.split_once(':')?;
+    if !key.trim().eq_ignore_ascii_case("offset") {
+        return None;
+    }
+    let offset: i64 = value.trim().parse().ok()?;
+    (-MAX_OFFSET_MS..=MAX_OFFSET_MS)
+        .contains(&offset)
+        .then_some(offset)
 }
 
 /// `mm:ss`, `mm:ss.x`, `mm:ss.xx` or `mm:ss.xxx` to milliseconds.
-fn parse_timestamp(tag: &str) -> Option<i64> {
+///
+/// Every component must be non-negative and the arithmetic is checked: a
+/// corrupt/oversized tag returns `None` instead of wrapping (N-14).
+pub(crate) fn parse_timestamp(tag: &str) -> Option<i64> {
     let (minutes, rest) = tag.split_once(':')?;
     let minutes: i64 = minutes.trim().parse().ok()?;
+    if minutes < 0 {
+        return None;
+    }
 
     let (seconds, fraction) = match rest.split_once('.') {
         Some((seconds, fraction)) => (seconds, Some(fraction)),
         None => (rest, None),
     };
     let seconds: i64 = seconds.trim().parse().ok()?;
+    if seconds < 0 {
+        return None;
+    }
 
     let millis = match fraction {
         Some(fraction) => {
             let digits: String = fraction.chars().take(3).collect();
+            if digits.is_empty() || !digits.chars().all(|digit| digit.is_ascii_digit()) {
+                return None;
+            }
             let value: i64 = digits.parse().ok()?;
             match digits.len() {
                 1 => value * 100,
@@ -638,7 +685,9 @@ fn parse_timestamp(tag: &str) -> Option<i64> {
         None => 0,
     };
 
-    Some(minutes * 60_000 + seconds * 1_000 + millis)
+    let minutes_ms = minutes.checked_mul(60_000)?;
+    let seconds_ms = seconds.checked_mul(1_000)?;
+    minutes_ms.checked_add(seconds_ms)?.checked_add(millis)
 }
 
 // ---------------------------------------------------------------------------
@@ -685,12 +734,24 @@ pub(crate) fn structured_document(song_id: &str, list: &LyricsList) -> Option<Do
 
     let text = lines_to_text(&lines);
 
+    // N-14: the provider's document offset used to be recorded but never
+    // applied, so a server-side delay shift was silently ignored. Apply it to
+    // the timed lines once, here, exactly like the LRC `[offset:]` tag.
+    let offset_ms = entry.offset.unwrap_or(0);
+    if synced && offset_ms != 0 {
+        for line in &mut lines {
+            if let Some(start) = line.start_ms {
+                line.start_ms = Some(offset_timestamp(start, offset_ms));
+            }
+        }
+    }
+
     Some(Document {
         song_id: song_id.to_string(),
         source: "subsonic".to_string(),
         synced,
         lang: entry.lang.clone(),
-        offset_ms: entry.offset.unwrap_or(0),
+        offset_ms,
         text,
         lines,
     })

@@ -232,7 +232,11 @@ impl PaletteMotion {
         if t >= 1.0 {
             return self.to;
         }
-        Palette::lerp(self.from, self.to, anim::Curve::Standard.sample(t.clamp(0.0, 1.0)))
+        Palette::lerp(
+            self.from,
+            self.to,
+            anim::Curve::Standard.sample(t.clamp(0.0, 1.0)),
+        )
     }
 
     pub fn settled(&self, clock: &anim::Clock) -> bool {
@@ -243,7 +247,10 @@ impl PaletteMotion {
 static CURRENT: OnceLock<RwLock<Palette>> = OnceLock::new();
 
 pub fn publish(palette: Palette) {
-    if let Ok(mut current) = CURRENT.get_or_init(|| RwLock::new(Palette::default())).write() {
+    if let Ok(mut current) = CURRENT
+        .get_or_init(|| RwLock::new(Palette::default()))
+        .write()
+    {
         *current = palette;
     }
 }
@@ -261,14 +268,28 @@ macro_rules! roles {
     };
 }
 roles!(
-    background, on_background, surface, surface_dim, surface_bright,
-    surface_container_lowest, surface_container_low, surface_container,
-    surface_container_high, surface_container_highest, on_surface,
-    surface_variant, on_surface_variant, primary, on_primary,
-    primary_container, on_primary_container, secondary, secondary_container,
-    on_secondary_container, tertiary, tertiary_container, on_tertiary_container,
-    error, error_container, on_error_container, inverse_surface,
-    on_inverse_surface, surface_tint, outline, outline_variant, scrim,
+    background,
+    surface,
+    surface_container_lowest,
+    surface_container_low,
+    surface_container,
+    surface_container_high,
+    surface_container_highest,
+    on_surface,
+    on_surface_variant,
+    primary,
+    on_primary,
+    primary_container,
+    on_primary_container,
+    secondary_container,
+    tertiary,
+    tertiary_container,
+    on_tertiary_container,
+    error,
+    error_container,
+    on_error_container,
+    outline,
+    outline_variant,
 );
 
 #[cfg(test)]
@@ -304,11 +325,17 @@ mod tests {
         let mut clock = anim::Clock::new();
         clock.now = 0.0;
         let mut motion = PaletteMotion::new(Palette::default());
-        let first = Palette { primary: 0xFF0000, ..Palette::default() };
+        let first = Palette {
+            primary: 0xFF0000,
+            ..Palette::default()
+        };
         motion.set(first, &clock, true);
         assert_eq!(motion.value(&clock), first);
         clock.now = 1.0;
-        let second = Palette { primary: 0x00FF00, ..Palette::default() };
+        let second = Palette {
+            primary: 0x00FF00,
+            ..Palette::default()
+        };
         motion.set(second, &clock, true);
         assert!(!motion.settled(&clock));
         assert_eq!(motion.value(&clock), first);
@@ -323,7 +350,14 @@ mod tests {
     fn reset_snaps() {
         let clock = anim::Clock::new();
         let mut motion = PaletteMotion::new(Palette::default());
-        motion.set(Palette { primary: 0x123456, ..Palette::default() }, &clock, false);
+        motion.set(
+            Palette {
+                primary: 0x123456,
+                ..Palette::default()
+            },
+            &clock,
+            false,
+        );
         motion.reset(&clock);
         assert_eq!(motion.value(&clock), Palette::default());
     }

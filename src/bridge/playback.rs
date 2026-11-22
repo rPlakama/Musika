@@ -22,7 +22,7 @@ impl Bridge {
                 .map(|resume| resume.position)
                 .unwrap_or(status.position);
             crate::debug_log!(
-                "GPUI: restore {} tracks start {} position {:.1}",
+                "bridge: restore {} tracks start {} position {:.1}",
                 tracks.len(),
                 start,
                 position
@@ -42,7 +42,7 @@ impl Bridge {
     }
 
     pub fn request_lyrics(&self, song_id: String) {
-        crate::debug_log!("GPUI: lyrics request {song_id}");
+        crate::debug_log!("bridge: lyrics request {song_id}");
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
@@ -50,7 +50,7 @@ impl Bridge {
             let document = match crate::lyrics::fetch(&dbs, client.as_ref(), &song_id).await {
                 Ok(document) => document,
                 Err(err) => {
-                    crate::debug_log!("GPUI: lyrics fetch failed for {song_id}: {err:#}");
+                    crate::debug_log!("bridge: lyrics fetch failed for {song_id}: {err:#}");
                     crate::lyrics::Document::missing(&song_id)
                 }
             };
@@ -83,7 +83,9 @@ impl Bridge {
             let id = match crate::library::random_album_id(&dbs.library).await {
                 Ok(Some(id)) => id,
                 Ok(None) => {
-                    _ = tx.send(Event::Error("The library has no albums to pick.".to_string()));
+                    _ = tx.send(Event::Error(
+                        "The library has no albums to pick.".to_string(),
+                    ));
                     return;
                 }
                 Err(err) => {
@@ -160,7 +162,7 @@ impl Bridge {
         crate::app::runtime().spawn(async move {
             let event = match queue_for_song(&song_id, &order, offline).await {
                 Ok((tracks, start)) => {
-                    crate::debug_log!("GPUI: queue {} tracks start {}", tracks.len(), start);
+                    crate::debug_log!("bridge: queue {} tracks start {}", tracks.len(), start);
                     Event::Queue { tracks, start }
                 }
                 Err(err) => Event::Error(format!("Playback failed: {err:#}")),

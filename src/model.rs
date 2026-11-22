@@ -7,6 +7,10 @@
 use serde::{Deserialize, Serialize};
 
 /// Number of search results a scope can paint; also the backend query cap.
+#[cfg_attr(
+    not(feature = "gpuui"),
+    expect(dead_code, reason = "consumed by the GPUI front end")
+)]
 pub const SEARCH_VISIBLE_ROWS: usize = 5;
 /// Rows requested from the backend; the overlay scrolls beyond the visible 5.
 pub const SEARCH_FETCH_ROWS: usize = 100;
@@ -20,6 +24,10 @@ pub enum Scope {
 }
 
 impl Scope {
+    #[cfg_attr(
+        not(feature = "gpuui"),
+        expect(dead_code, reason = "consumed by the GPUI front end")
+    )]
     pub const ALL: [Scope; 4] = [
         Scope::Albums,
         Scope::Songs,
@@ -45,6 +53,10 @@ impl Scope {
         }
     }
 
+    #[cfg_attr(
+        not(feature = "gpuui"),
+        expect(dead_code, reason = "consumed by the GPUI front end")
+    )]
     pub fn next(self) -> Self {
         match self {
             Scope::Albums => Scope::Songs,
@@ -54,6 +66,10 @@ impl Scope {
         }
     }
 
+    #[cfg_attr(
+        not(feature = "gpuui"),
+        expect(dead_code, reason = "consumed by the GPUI front end")
+    )]
     pub fn prev(self) -> Self {
         match self {
             Scope::Albums => Scope::Playlists,
@@ -114,6 +130,10 @@ impl ItemKind {
     }
 
     /// The command-suggestion vocabulary (`track` instead of `song`).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the model tests exercise this vocabulary")
+    )]
     pub fn suggestion_kind(self) -> &'static str {
         match self {
             Self::Song => "track",
@@ -165,11 +185,19 @@ impl RowKind {
     }
 
     /// The row-clipboard kind; playlists are not yankable/queueable.
+    #[cfg_attr(
+        not(any(test, feature = "gpuui")),
+        expect(dead_code, reason = "consumed by the GPUI front end and its tests")
+    )]
     pub fn clipboard_kind(self) -> Option<&'static str> {
         (self != Self::Playlist).then(|| self.api_kind())
     }
 
     /// The command-suggestion vocabulary (`track` instead of `song`).
+    #[cfg_attr(
+        not(any(test, feature = "gpuui")),
+        expect(dead_code, reason = "consumed by the GPUI front end and its tests")
+    )]
     pub fn suggestion_kind(self) -> &'static str {
         match self {
             Self::Song => "track",

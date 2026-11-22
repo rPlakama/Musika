@@ -9,6 +9,20 @@ version = "0.7.6"
 edition = "2024"
 license = "GPL-2.0-or-later"
 
+[[bin]]
+name = "musika"
+path = "src/bin/musika.rs"
+
+[[bin]]
+name = "musika-ui"
+path = "src/bin/musika-ui.rs"
+required-features = ["gpuui"]
+
+[[example]]
+name = "list_bench"
+path = "examples/list_bench.rs"
+required-features = ["gpuui"]
+
 [lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
 
@@ -58,7 +72,7 @@ serde = { version = "1.0", features = [ "derive" ] }
 serde_json = "1.0"
 smallvec = "1"
 sqlx = { version = "0.9", features = [ "sqlite", "runtime-tokio" ] }
-tokio = { version = "1.53.2", features = [ "rt", "macros", "rt-multi-thread", "fs", "io-util", "net", "sync", "time" ] }
+tokio = { version = "1.53.2", features = [ "rt", "macros", "rt-multi-thread", "fs", "io-util", "net", "sync", "time", "signal" ] }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 # Rust-owned audio engine (system PipeWire/FFmpeg libraries via Rust bindings).
@@ -84,6 +98,9 @@ zune-jpeg = { version = "0.5", optional = true }
 [dev-dependencies]
 # Test-only: gzip the loopback HTTP fixture bodies and the compression bench.
 flate2 = "1"
+# Test-only: `#[tokio::test(start_paused = true)]` virtual time (D-04 regression
+# test must distinguish "idle for 10 s" from "stalled" without a wall-clock wait).
+tokio = { version = "1.53.2", features = ["test-util"] }
 
 [features]
 default = ["gpuui", "alsa-backend"]

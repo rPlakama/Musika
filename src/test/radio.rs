@@ -85,7 +85,10 @@ async fn local_radio_rows_do_not_need_credentials_or_network() {
         .unwrap();
     assert_eq!(
         first.iter().map(|song| song.id.clone()).collect::<Vec<_>>(),
-        second.iter().map(|song| song.id.clone()).collect::<Vec<_>>(),
+        second
+            .iter()
+            .map(|song| song.id.clone())
+            .collect::<Vec<_>>(),
         "the cached page order is reused"
     );
     crate::radio::clear_cache();
@@ -147,6 +150,42 @@ async fn offline_queue_matches_the_page_filter() {
             .all(|track| track.url.starts_with("http://127.0.0.1:9/")),
         "offline radio rows resolve without any network call"
     );
+    crate::offline::clear_cache();
+    crate::radio::clear_cache();
+}
+
+/// N-08: the shuffle action must report "no playable songs" when the offline
+/// filter leaves nothing, instead of returning a silent empty queue (the old
+/// code checked emptiness before applying the filter).
+#[tokio::test]
+async fn offline_shuffle_without_downloads_is_an_error() {
+    let _offline = lock_offline_catalog().await;
+    let dbs = mini_dbs().await;
+    crate::offline::clear_cache();
+    crate::radio::clear_cache();
+    let result = crate::radio::shuffled_tracks(&dbs, "album", "ral1", true).await;
+    assert!(
+        result.is_err(),
+        "an offline radio with no downloaded rows has nothing to shuffle"
+    );
+    crate::offline::clear_cache();
+    crate::radio::clear_cache();
+}
+
+/// N-08: an offline expansion with no downloaded candidates stays empty but
+/// keeps the seed identity (it must not fall back to server-only rows).
+#[tokio::test]
+async fn offline_page_without_downloads_keeps_the_seed_identity() {
+    let _offline = lock_offline_catalog().await;
+    let dbs = mini_dbs().await;
+    crate::offline::clear_cache();
+    crate::radio::clear_cache();
+    let (header, rows) = crate::radio::page(&dbs, "album", "ral1", true)
+        .await
+        .unwrap();
+    assert_eq!(header.title, "Kid A");
+    assert_eq!(header.subtitle, "Radio (offline) · Radiohead");
+    assert!(rows.is_empty());
     crate::offline::clear_cache();
     crate::radio::clear_cache();
 }

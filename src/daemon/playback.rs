@@ -41,6 +41,9 @@ const RETRY_DELAYS: [Duration; 3] = [
 ];
 /// Sleep timer's final fade before pausing.
 const SLEEP_FADE: Duration = Duration::from_secs(5);
+/// How long the sleep timer keeps the output muted after pausing so the sink's
+/// 20-30 ms fade-out tail is silent before the user volume is restored (P-10).
+const SLEEP_UNMUTE_GRACE: Duration = Duration::from_millis(150);
 
 pub(crate) fn retry_delay(attempt: u32) -> Duration {
     RETRY_DELAYS[(attempt as usize).min(RETRY_DELAYS.len() - 1)]
@@ -103,9 +106,15 @@ pub(crate) fn cancels_retry(command: &CoreCommand) -> bool {
 /// Inputs accepted by the playback thread.
 pub(crate) enum PlaybackInput {
     /// A UI client's typed transport/queue request.
-    Ui { conn: u64, req: u32, op: PlayerOp },
+    Ui {
+        conn: u64,
+        req: u32,
+        op: PlayerOp,
+    },
     /// A request from the core itself (text `ipc.sock`, MPRIS, tray).
-    Control { op: CoreCommand },
+    Control {
+        op: CoreCommand,
+    },
     /// Replace the queue from a bridge event/restore.
     Load {
         tracks: Vec<crate::player::Track>,
@@ -116,7 +125,10 @@ pub(crate) enum PlaybackInput {
         muted: Option<bool>,
     },
     /// Re-send the full playback state and queue to every UI client.
-    Resync { conn: u64, req: u32 },
+    Resync {
+        conn: u64,
+        req: u32,
+    },
     /// Connectivity verdict from the daemon's health probe.
     SetOffline(bool),
     /// Persisted playback preferences loaded at startup.
@@ -198,7 +210,10 @@ impl std::fmt::Debug for PlaybackInput {
                 "SetOutputMode {{ exclusive: {exclusive:?}, bit_perfect: {bit_perfect:?} }}"
             ),
             Self::SetOutputBackend { backend, device } => {
-                write!(formatter, "SetOutputBackend {{ backend: {backend:?}, device: {device:?} }}")
+                write!(
+                    formatter,
+                    "SetOutputBackend {{ backend: {backend:?}, device: {device:?} }}"
+                )
             }
             Self::Shutdown => write!(formatter, "Shutdown"),
         }
@@ -227,6 +242,7 @@ pub(crate) enum PlaybackOutput {
         queue: Arc<Vec<crate::player::Track>>,
     },
     Error(String),
+    Notice(String),
     EngineUnavailable(String),
     /// A remote row could not be opened because the server is unreachable.
     /// The daemon switches the whole app to the downloaded catalog and shows
@@ -281,19 +297,6 @@ impl PlaybackService {
             snapshot,
             join: Some(join),
         }
-    }
-
-    pub(crate) fn send(&self, input: PlaybackInput) -> bool {
-        self.tx.send(ServiceInput::Command(input)).is_ok()
-    }
-
-    pub(crate) fn snapshot(&self) -> Arc<Snapshot> {
-        Arc::clone(
-            &self
-                .snapshot
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
     }
 
     /// Stops the thread. Bounded: the thread exits on `Shutdown` immediately.
@@ -370,10 +373,20 @@ struct SleepFade {
 /// Playback-time accounting for one scrobble.
 struct ScrobbleState {
     song_id: String,
+    index: usize,
     accumulated: Duration,
     threshold: Duration,
     last_tick: Instant,
     submitted: bool,
+}
+
+/// Hardware clock anchor for reconciling extrapolated playhead position against
+/// actual rendered audio frames (`EngineClock::played_frames`).
+#[derive(Debug, Clone, Copy)]
+struct ClockAnchor {
+    played_frames: u64,
+    sample_rate: u32,
+    track_pos: f64,
 }
 
 struct ServiceState {
@@ -389,7 +402,12 @@ struct ServiceState {
     settings: crate::playback_settings::PlaybackSettings,
     sleep_deadline: Option<Instant>,
     sleep_fade: Option<SleepFade>,
+    /// Pending unmute after the sleep timer paused playback: the deadline and
+    /// the mute state to restore (P-10).
+    sleep_unmute: Option<(Instant, bool)>,
     scrobble: Option<ScrobbleState>,
+    cached_stream_key: Option<(usize, String)>,
+    clock_anchor: Option<ClockAnchor>,
     /// Consecutive sink rebuilds since the last healthy stream. Bounded so a
     /// missing PipeWire/ALSA target cannot spin forever.
     sink_failures: u32,
@@ -442,8 +460,7 @@ impl ServiceState {
     /// that the node is gone, so the selection is kept in that case.
     fn fallback_from_missing_output(&mut self) -> bool {
         if self.settings.follow_default
-            || self.settings.output_backend
-                != crate::playback_settings::OutputBackend::Pipewire
+            || self.settings.output_backend != crate::playback_settings::OutputBackend::Pipewire
         {
             return false;
         }
@@ -470,38 +487,51 @@ impl ServiceState {
         }
     }
 
-    /// Warm the purgeable playback cache after the first PCM of a remote row.
-    /// The fetch runs off the playback thread and never blocks audio.
-    fn maybe_cache_current_stream(&self) {
+    /// Warm the purgeable playback cache after the first PCM or boundary into a
+    /// remote row. Guarded by `(index, song_id)` so redundant events for the
+    /// same active row never spawn duplicate stream-cache tasks.
+    fn maybe_cache_current_stream(&mut self) {
         if !self.settings.stream_cache {
             return;
         }
+        let index = self.core.index();
         let queue = self.core.queue();
-        let Some(track) = queue.get(self.core.index()) else {
+        let Some(track) = queue.get(index) else {
             return;
         };
         if track.id.is_empty() || !crate::player::is_remote_url(&track.url) {
             return;
         }
+        if self
+            .cached_stream_key
+            .as_ref()
+            .is_some_and(|(cached_index, cached_id)| {
+                *cached_index == index && cached_id == &track.id
+            })
+        {
+            return;
+        }
         let id = track.id.clone();
+        self.cached_stream_key = Some((index, id.clone()));
         let settings = self.settings.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else {
                 return;
             };
-            if let Err(error) =
-                crate::media_actions::cache_stream(&dbs, &id, &settings).await
-            {
+            if let Err(error) = crate::media_actions::cache_stream(&dbs, &id, &settings).await {
                 crate::debug_log!("stream cache: {id} failed: {error:#}");
             }
         });
     }
 
-    /// Starts the scrobble clock for the row that just produced PCM and sends
-    /// the now-playing notification.
+    /// Starts the scrobble clock for the row that just produced PCM (or crossed
+    /// a gapless boundary) and sends the now-playing notification. Guarded by
+    /// `(index, song_id)` so redundant events for the already-active play
+    /// session do not reset `accumulated`.
     fn start_scrobble(&mut self) {
+        let index = self.core.index();
         let queue = self.core.queue();
-        let Some(track) = queue.get(self.core.index()) else {
+        let Some(track) = queue.get(index) else {
             self.scrobble = None;
             return;
         };
@@ -510,10 +540,18 @@ impl ServiceState {
             self.scrobble = None;
             return;
         }
+        if self
+            .scrobble
+            .as_ref()
+            .is_some_and(|state| state.index == index && state.song_id == song_id)
+        {
+            return;
+        }
         let threshold =
             Duration::from_secs_f64(crate::scrobble::threshold_secs(self.core.duration()));
         self.scrobble = Some(ScrobbleState {
             song_id: song_id.clone(),
+            index,
             accumulated: Duration::ZERO,
             threshold,
             last_tick: Instant::now(),
@@ -524,6 +562,14 @@ impl ServiceState {
                 crate::scrobble::now_playing(&dbs, &song_id).await;
             }
         });
+    }
+
+    /// Clears the active scrobble and stream-cache guard before a new play
+    /// session begins (track load, skip, jump, or gapless/repeat-one boundary).
+    fn reset_track_session(&mut self) {
+        self.scrobble = None;
+        self.cached_stream_key = None;
+        self.clock_anchor = None;
     }
 
     /// Accumulates actual playing time (paused time is excluded) and submits
@@ -640,9 +686,8 @@ impl ServiceState {
         // forwarding thread only added a hop between the engine and the
         // playback thread.
         let service_tx = self.service_tx.clone();
-        let events: crate::player::engine::EventSink = Arc::new(move |event| {
-            service_tx.send(ServiceInput::Engine(event)).is_ok()
-        });
+        let events: crate::player::engine::EventSink =
+            Arc::new(move |event| service_tx.send(ServiceInput::Engine(event)).is_ok());
         match Engine::new(events) {
             Ok(engine) => {
                 self.engine = Some(engine);
@@ -653,7 +698,9 @@ impl ServiceState {
                 true
             }
             Err(error) => {
-                _ = self.outputs.send(PlaybackOutput::EngineUnavailable(error.clone()));
+                _ = self
+                    .outputs
+                    .send(PlaybackOutput::EngineUnavailable(error.clone()));
                 crate::debug_log!("playback: engine unavailable: {error}");
                 false
             }
@@ -706,7 +753,10 @@ fn run(
         settings: crate::playback_settings::PlaybackSettings::default(),
         sleep_deadline: None,
         sleep_fade: None,
+        sleep_unmute: None,
         scrobble: None,
+        cached_stream_key: None,
+        clock_anchor: None,
         sink_failures: 0,
         metrics: crate::player::PlaybackMetrics::default(),
     };
@@ -725,7 +775,12 @@ fn run(
     // connection cost. A failure is reported and retried on demand.
     service.ensure_engine();
     service.sync_audio();
-    publish_now(&mut service, &mut published, &mut published_at, &mut next_seq);
+    publish_now(
+        &mut service,
+        &mut published,
+        &mut published_at,
+        &mut next_seq,
+    );
     store_snapshot(&snapshot, &service, &published);
     crate::startup::trace("playback.ready");
 
@@ -733,7 +788,8 @@ fn run(
         let active = published.state() == StateWire::Playing
             || published.loading()
             || service.sleep_deadline.is_some()
-            || service.sleep_fade.is_some();
+            || service.sleep_fade.is_some()
+            || service.sleep_unmute.is_some();
         // While the transport is stopped or paused nothing changes without an
         // input, so block on the channel. While playing keep a coarse tick for
         // the drift correction; engine events arrive directly in the channel.
@@ -763,7 +819,11 @@ fn run(
             .and_then(|retry| retry.next_at)
             .is_some_and(|at| at <= Instant::now())
         {
-            let position = service.retry.as_ref().map(|retry| retry.position).unwrap_or(0.0);
+            let position = service
+                .retry
+                .as_ref()
+                .map(|retry| retry.position)
+                .unwrap_or(0.0);
             if service.ensure_engine() {
                 if let Some(retry) = service.retry.as_mut() {
                     retry.next_at = None;
@@ -793,18 +853,34 @@ fn run(
             if elapsed >= total {
                 let original = fade.original_volume;
                 service.sleep_fade = None;
-                let restore = service.core.apply(CoreCommand::SetVolume(original));
-                apply_outcome(&service, &restore, &mut force, &mut queue_reset);
+                let was_muted = service.core.muted();
                 if service.core.state() == crate::player::State::Playing {
                     let pause = service.core.apply(CoreCommand::Pause);
                     apply_outcome(&service, &pause, &mut force, &mut queue_reset);
                 }
+                // The pause triggers a short fade-out tail. Mute before
+                // restoring the user volume so that tail is rendered silently
+                // instead of jumping back to full volume (P-10); the unmute is
+                // serviced after `SLEEP_UNMUTE_GRACE`.
+                let mute = service.core.apply(CoreCommand::SetMuted(true));
+                apply_outcome(&service, &mute, &mut force, &mut queue_reset);
+                let restore = service.core.apply(CoreCommand::SetVolume(original));
+                apply_outcome(&service, &restore, &mut force, &mut queue_reset);
+                service.sleep_unmute = Some((Instant::now() + SLEEP_UNMUTE_GRACE, was_muted));
                 force = true;
             } else {
                 let volume = original_fade_volume(fade.original_volume, elapsed, total);
                 let step = service.core.apply(CoreCommand::SetVolume(volume));
                 apply_outcome(&service, &step, &mut force, &mut queue_reset);
             }
+        }
+        if let Some((deadline, was_muted)) = service.sleep_unmute
+            && Instant::now() >= deadline
+        {
+            service.sleep_unmute = None;
+            let unmute = service.core.apply(CoreCommand::SetMuted(was_muted));
+            apply_outcome(&service, &unmute, &mut force, &mut queue_reset);
+            force = true;
         }
 
         service.tick_scrobble();
@@ -825,6 +901,9 @@ fn run(
                     if needs_audio && !service.ensure_engine() {
                         ack = Some((Some(conn), req, false, ErrorCode::EngineUnavailable));
                     } else {
+                        if resets_track_session(&command) {
+                            service.reset_track_session();
+                        }
                         let setting_change = is_setting_command(&command);
                         let outcome = service.core.apply(command);
                         apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
@@ -854,6 +933,9 @@ fn run(
                         | CoreCommand::ShuffleQueueOrder(_)
                 );
                 if !needs_audio || service.ensure_engine() {
+                    if resets_track_session(&op) {
+                        service.reset_track_session();
+                    }
                     let setting_change = is_setting_command(&op);
                     let outcome = service.core.apply(op);
                     apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
@@ -877,6 +959,7 @@ fn run(
                 // An autoplay load with no usable engine stays paused instead
                 // of reporting a silent "playing" transport.
                 service.cancel_retry();
+                service.reset_track_session();
                 let paused = paused || !service.ensure_engine();
                 if let Some(volume) = volume {
                     let outcome = service.core.apply(CoreCommand::SetVolume(volume));
@@ -910,15 +993,13 @@ fn run(
                 let shuffle = service.settings.shuffle;
                 let mut outcome = service.core.apply(CoreCommand::SetRepeat(repeat));
                 for extra in [
+                    service.core.apply(CoreCommand::SetShuffle(shuffle)),
                     service
                         .core
-                        .apply(CoreCommand::SetShuffle(shuffle)),
-                    service.core.apply(CoreCommand::SetNormalization(normalization)),
-                    service
-                        .core
-                        .apply(CoreCommand::SetCrossfadeConfig(
-                            service.settings.crossfade_config(),
-                        )),
+                        .apply(CoreCommand::SetNormalization(normalization)),
+                    service.core.apply(CoreCommand::SetCrossfadeConfig(
+                        service.settings.crossfade_config(),
+                    )),
                 ] {
                     outcome.audio.extend(extra.audio);
                     outcome.changed |= extra.changed;
@@ -927,9 +1008,11 @@ fn run(
                 apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
                 service.apply_output_target();
                 service.apply_eq_from_settings();
-                _ = service.outputs.send(PlaybackOutput::SettingsChanged(Box::new(
-                    service.settings.clone(),
-                )));
+                _ = service
+                    .outputs
+                    .send(PlaybackOutput::SettingsChanged(Box::new(
+                        service.settings.clone(),
+                    )));
             }
             Some(ServiceInput::Command(PlaybackInput::SetOutputDevice {
                 device,
@@ -962,29 +1045,23 @@ fn run(
             Some(ServiceInput::Command(PlaybackInput::SetSleepTimer(minutes))) => {
                 match minutes {
                     Some(minutes) => {
-                        service.sleep_deadline =
-                            Some(Instant::now() + Duration::from_secs(minutes.saturating_mul(60)));
+                        let minutes = minutes.clamp(1, 1440);
+                        service.sleep_deadline = Instant::now()
+                            .checked_add(Duration::from_secs(minutes.saturating_mul(60)));
                     }
                     None => {
                         service.sleep_deadline = None;
                         if let Some(fade) = service.sleep_fade.take() {
-                            let restore =
-                                service.core.apply(CoreCommand::SetVolume(fade.original_volume));
-                            apply_outcome(
-                                &service,
-                                &restore,
-                                &mut force,
-                                &mut queue_reset,
-                            );
+                            let restore = service
+                                .core
+                                .apply(CoreCommand::SetVolume(fade.original_volume));
+                            apply_outcome(&service, &restore, &mut force, &mut queue_reset);
                         }
                     }
                 }
                 force = true;
             }
-            Some(ServiceInput::Command(PlaybackInput::SetOutputBackend {
-                backend,
-                device,
-            })) => {
+            Some(ServiceInput::Command(PlaybackInput::SetOutputBackend { backend, device })) => {
                 if let Some(backend) = backend {
                     service.settings.output_backend = backend;
                 }
@@ -1011,9 +1088,7 @@ fn run(
             Some(ServiceInput::Command(PlaybackInput::SetCrossfadeConfig(change))) => {
                 change.apply(&mut service.settings);
                 let config = service.settings.crossfade_config();
-                let outcome = service
-                    .core
-                    .apply(CoreCommand::SetCrossfadeConfig(config));
+                let outcome = service.core.apply(CoreCommand::SetCrossfadeConfig(config));
                 apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
                 capture_settings(&mut service);
                 force = true;
@@ -1044,9 +1119,7 @@ fn run(
                     // row the transient failure stopped, once.
                     if service.ensure_engine() {
                         service.metrics.reconnects += 1;
-                        let outcome = service
-                            .core
-                            .apply(CoreCommand::ResumeAt(recovery.position));
+                        let outcome = service.core.apply(CoreCommand::ResumeAt(recovery.position));
                         apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
                         force = true;
                     } else {
@@ -1109,11 +1182,10 @@ fn run(
                     } else {
                         service.last_engine_attempt = None;
                         if service.ensure_engine() {
-                            let position =
-                                service.core.position_at(crate::linux::monotonic_ns());
+                            service.sync_audio();
+                            let position = service.core.position_at(crate::linux::monotonic_ns());
                             let outcome = service.core.apply(CoreCommand::Recover { position });
                             apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
-                            service.sync_audio();
                             let resumed = if fallback {
                                 "Default output restored; playback resumed"
                             } else {
@@ -1121,7 +1193,7 @@ fn run(
                             };
                             _ = service
                                 .outputs
-                                .send(PlaybackOutput::Error(resumed.to_string()));
+                                .send(PlaybackOutput::Notice(resumed.to_string()));
                         }
                     }
                     force = true;
@@ -1133,11 +1205,11 @@ fn run(
                 | EngineEvent::Failed { .. }
                 | EngineEvent::SinkRecovered
                 | EngineEvent::LoadingCleared) => {
-                    let healthy = matches!(
-                        event,
-                        EngineEvent::FirstPcm | EngineEvent::Loaded { .. }
-                    );
+                    let healthy =
+                        matches!(event, EngineEvent::FirstPcm | EngineEvent::Loaded { .. });
                     let first_pcm = matches!(event, EngineEvent::FirstPcm);
+                    let boundary = matches!(event, EngineEvent::Boundary { .. });
+                    let ended = matches!(event, EngineEvent::Ended);
                     if healthy || matches!(event, EngineEvent::SinkRecovered) {
                         service.sink_failures = 0;
                     }
@@ -1153,6 +1225,9 @@ fn run(
                     };
                     let now = crate::linux::monotonic_ns();
                     let outcome = service.core.on_engine(event, now);
+                    if boundary || ended {
+                        service.reset_track_session();
+                    }
                     if healthy {
                         // The reopen succeeded; a stale retry is over and the
                         // status error line can clear.
@@ -1166,39 +1241,29 @@ fn run(
                             service.retry = None;
                             service.last_error = Some(error.message.clone());
                         } else if error.retryable() {
-                            let position = outcome
-                                .failure_position
-                                .or_else(|| had_retry.as_ref().map(|retry| retry.position))
+                            let position = had_retry
+                                .as_ref()
+                                .map(|retry| retry.position)
+                                .or(outcome.failure_position)
                                 .unwrap_or_else(|| service.core.position_at(now));
-                            let previous_attempts =
-                                had_retry.as_ref().map(|retry| retry.attempts);
+                            let previous_attempts = had_retry.as_ref().map(|retry| retry.attempts);
                             if retry_decision(previous_attempts) == RetryDecision::Exhausted {
                                 // Exhausted: stop, report once, and leave a
                                 // recovery marker for the next good probe.
                                 let stop = service.core.apply(CoreCommand::Stop);
-                                apply_outcome(
-                                    &service,
-                                    &stop,
-                                    &mut force,
-                                    &mut queue_reset,
-                                );
+                                apply_outcome(&service, &stop, &mut force, &mut queue_reset);
                                 service.retry = None;
-                                service.recovery = error
-                                    .is_network()
-                                    .then_some(Recovery { position });
+                                service.recovery =
+                                    error.is_network().then_some(Recovery { position });
                                 service.last_error = Some(if error.is_network() {
                                     crate::player::SERVER_UNAVAILABLE.to_string()
                                 } else {
                                     error.message.clone()
                                 });
                                 if error.is_network() {
-                                    _ = service
-                                        .outputs
-                                        .send(PlaybackOutput::ServerUnavailable);
+                                    _ = service.outputs.send(PlaybackOutput::ServerUnavailable);
                                 } else {
-                                    _ = service
-                                        .outputs
-                                        .send(PlaybackOutput::Error(error.message));
+                                    _ = service.outputs.send(PlaybackOutput::Error(error.message));
                                 }
                                 force = true;
                             } else if let RetryDecision::Schedule { attempt, delay } =
@@ -1216,15 +1281,15 @@ fn run(
                             // report it and forget any stale recovery.
                             service.retry = None;
                             service.recovery = None;
+                            service.reset_track_session();
                             service.last_error = Some(error.message.clone());
                             _ = service.outputs.send(PlaybackOutput::Error(error.message));
                         }
                     } else if outcome.server_unavailable {
-                        service.last_error =
-                            Some(crate::player::SERVER_UNAVAILABLE.to_string());
+                        service.last_error = Some(crate::player::SERVER_UNAVAILABLE.to_string());
                     }
                     apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
-                    if first_pcm {
+                    if first_pcm || boundary {
                         service.maybe_cache_current_stream();
                         service.start_scrobble();
                     }
@@ -1262,12 +1327,27 @@ fn run(
     service.drop_engine();
 }
 
+/// Commands that start a new track play session (or stop playback), resetting
+/// the active scrobble/stream-cache guard.
+fn resets_track_session(command: &CoreCommand) -> bool {
+    matches!(
+        command,
+        CoreCommand::Stop
+            | CoreCommand::Next
+            | CoreCommand::Previous
+            | CoreCommand::Jump(_)
+            | CoreCommand::ShuffleQueueOrder(_)
+    )
+}
+
 /// Commands whose success changes a persisted preference.
 fn is_setting_command(command: &CoreCommand) -> bool {
     matches!(
         command,
         CoreCommand::CycleRepeat
             | CoreCommand::SetRepeat(_)
+            | CoreCommand::ShuffleQueue
+            | CoreCommand::SetShuffle(_)
             | CoreCommand::CycleNormalization
             | CoreCommand::SetNormalization(_)
             | CoreCommand::ToggleCrossfade
@@ -1276,9 +1356,8 @@ fn is_setting_command(command: &CoreCommand) -> bool {
     )
 }
 
-/// Copies the live transport preferences into the settings document and tells
-/// the daemon to persist it. Only explicit user commands call this: a queue
-/// load resets repeat by design and must not overwrite the stored preference.
+/// Copies the live transport preferences into the settings document, updates
+/// the in-process settings snapshot, and tells the daemon to persist it.
 fn capture_settings(service: &mut ServiceState) {
     service.settings.repeat = service.core.repeat().code();
     service.settings.normalization = service.core.normalization().code();
@@ -1292,6 +1371,7 @@ fn capture_settings(service: &mut ServiceState) {
     };
     service.settings.crossfade_album_only = crossfade.album_only;
     service.settings.shuffle = service.core.shuffle();
+    crate::playback_settings::install(&service.settings);
     _ = service
         .outputs
         .send(PlaybackOutput::SettingsChanged(Box::new(
@@ -1321,11 +1401,55 @@ fn apply_outcome(
     }
 }
 
-fn sample_engine_metrics(service: &mut ServiceState) {
+fn sample_engine_metrics(service: &mut ServiceState) -> Option<crate::player::engine::EngineClock> {
     if let Some(engine) = service.engine.as_ref() {
         let clock = engine.clock();
         service.metrics.buffered_frames = clock.buffered_frames;
         service.metrics.underruns = clock.underruns;
+        Some(clock)
+    } else {
+        None
+    }
+}
+
+/// Reconciles `PlaybackCore`'s extrapolated position against hardware
+/// `played_frames` deltas at `sample_rate` on periodic `CLOCK_CORRECTION` ticks.
+fn reconcile_hardware_clock(
+    core: &mut PlaybackCore,
+    anchor: &mut Option<ClockAnchor>,
+    clock: Option<crate::player::engine::EngineClock>,
+    now_ns: u64,
+    reset_anchor: bool,
+    drift_due: bool,
+) {
+    let Some(clock) = clock else {
+        *anchor = None;
+        return;
+    };
+    if core.state() != crate::player::State::Playing
+        || core.retrying()
+        || clock.loading
+        || clock.sample_rate == 0
+    {
+        *anchor = None;
+        return;
+    }
+    let needs_seed = reset_anchor
+        || anchor.is_none_or(|prev| {
+            prev.sample_rate != clock.sample_rate || clock.played_frames < prev.played_frames
+        });
+    if needs_seed {
+        *anchor = Some(ClockAnchor {
+            played_frames: clock.played_frames,
+            sample_rate: clock.sample_rate,
+            track_pos: core.position_at(now_ns),
+        });
+        return;
+    }
+    if drift_due && let Some(prev) = *anchor {
+        let delta_frames = clock.played_frames.saturating_sub(prev.played_frames);
+        let hw_pos = prev.track_pos + delta_frames as f64 / f64::from(clock.sample_rate);
+        core.reconcile_clock(hw_pos, now_ns);
     }
 }
 
@@ -1335,8 +1459,16 @@ fn publish_now(
     published_at: &mut Instant,
     next_seq: &mut u64,
 ) {
-    sample_engine_metrics(service);
+    let clock = sample_engine_metrics(service);
     let now = crate::linux::monotonic_ns();
+    reconcile_hardware_clock(
+        &mut service.core,
+        &mut service.clock_anchor,
+        clock,
+        now,
+        true,
+        false,
+    );
     let mut state = service.core.snapshot(*next_seq, now);
     if !service.engine.is_some() {
         state.flags |= crate::ipc_protocol::STATE_FLAG_ENGINE_UNAVAILABLE;
@@ -1357,7 +1489,7 @@ fn publish(
     next_seq: &mut u64,
     force: bool,
 ) -> Option<PlaybackState> {
-    sample_engine_metrics(service);
+    let clock = sample_engine_metrics(service);
     let now = crate::linux::monotonic_ns();
     let mut state = service.core.snapshot(*next_seq, now);
     if service.engine.is_none() {
@@ -1376,11 +1508,28 @@ fn publish(
         || state.queue_rev != published.queue_rev;
     let playing = state.state() == StateWire::Playing;
     let drift_due = playing && published_at.elapsed() >= CLOCK_CORRECTION;
+    reconcile_hardware_clock(
+        &mut service.core,
+        &mut service.clock_anchor,
+        clock,
+        now,
+        force || identity_changed,
+        drift_due,
+    );
+    if drift_due && !(force || identity_changed) {
+        state = service.core.snapshot(*next_seq, now);
+        if service.engine.is_none() {
+            state.flags |= crate::ipc_protocol::STATE_FLAG_ENGINE_UNAVAILABLE;
+        }
+        if service.retry.is_some() {
+            state.flags |= crate::ipc_protocol::STATE_FLAG_RETRYING;
+        }
+    }
     if !(force || identity_changed || drift_due || published.seq == 0) {
         return None;
     }
     // The UI extrapolates from the anchor; only corrections are published.
-    state.seq = next_seq.wrapping_add(1);
+    state.seq = *next_seq;
     *next_seq = next_seq.wrapping_add(1);
     *published = state;
     *published_at = Instant::now();
@@ -1399,19 +1548,15 @@ fn store_snapshot(
         last_error: service.last_error.clone(),
         engine_available: service.engine.is_some(),
         retrying: service.retry.is_some(),
-        retry_attempt: service
-            .retry
-            .as_ref()
-            .map_or(0, |retry| retry.attempts + 1),
+        retry_attempt: service.retry.as_ref().map_or(0, |retry| retry.attempts + 1),
         sleep_remaining_secs: service
             .sleep_deadline
             .map(|deadline| deadline.saturating_duration_since(Instant::now()).as_secs())
             .or_else(|| {
-                service.sleep_fade.as_ref().map(|fade| {
-                    SLEEP_FADE
-                        .saturating_sub(fade.started.elapsed())
-                        .as_secs()
-                })
+                service
+                    .sleep_fade
+                    .as_ref()
+                    .map(|fade| SLEEP_FADE.saturating_sub(fade.started.elapsed()).as_secs())
             })
             .unwrap_or(0),
         metrics: service.metrics,
@@ -1492,10 +1637,7 @@ pub(crate) fn command_for_text(command: &crate::ipc_command::IpcCommand) -> Opti
 /// Builds the ordered TCP-style frames for a full queue reset: `Reset` followed
 /// by `QueueRows` chunks. Serialization happens once and the frames are shared
 /// by every UI client.
-pub(crate) fn reset_frames(
-    rev: u64,
-    queue: &[crate::player::Track],
-) -> Vec<Arc<Vec<u8>>> {
+pub(crate) fn reset_frames(rev: u64, queue: &[crate::player::Track]) -> Vec<Arc<Vec<u8>>> {
     use crate::ipc_protocol as proto;
     let mut frames = Vec::new();
     let reset = proto::QueueDelta::reset(rev, queue.len());
@@ -1517,4 +1659,129 @@ pub(crate) fn reset_frames(
         frames.push(Arc::new(frame));
     }
     frames
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seq_is_contiguous_from_one() {
+        let (service_tx, _service_rx) = mpsc::channel();
+        let (outputs, _outputs_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut service = ServiceState {
+            core: PlaybackCore::new(),
+            engine: None,
+            service_tx,
+            outputs,
+            last_engine_attempt: None,
+            last_error: None,
+            retry: None,
+            recovery: None,
+            offline: false,
+            settings: crate::playback_settings::PlaybackSettings::default(),
+            sleep_deadline: None,
+            sleep_fade: None,
+            sleep_unmute: None,
+            scrobble: None,
+            cached_stream_key: None,
+            clock_anchor: None,
+            sink_failures: 0,
+            metrics: crate::player::PlaybackMetrics::default(),
+        };
+        let mut published = PlaybackState {
+            rate_milli: 1000,
+            ..PlaybackState::default()
+        };
+        let mut published_at = Instant::now();
+        let mut next_seq = 1u64;
+
+        publish_now(
+            &mut service,
+            &mut published,
+            &mut published_at,
+            &mut next_seq,
+        );
+        assert_eq!(published.seq, 1);
+        assert_eq!(next_seq, 2);
+
+        let second = publish(
+            &mut service,
+            &mut published,
+            &mut published_at,
+            &mut next_seq,
+            true,
+        )
+        .expect("forced publish");
+        assert_eq!(second.seq, 2);
+        assert_eq!(published.seq, 2);
+        assert_eq!(next_seq, 3);
+
+        let third = publish(
+            &mut service,
+            &mut published,
+            &mut published_at,
+            &mut next_seq,
+            true,
+        )
+        .expect("forced publish");
+        assert_eq!(third.seq, 3);
+        assert_eq!(published.seq, 3);
+        assert_eq!(next_seq, 4);
+    }
+
+    #[test]
+    fn hardware_clock_reconciliation_prevents_playhead_drift_on_underrun() {
+        let mut core = PlaybackCore::new();
+        let track = crate::player::Track {
+            item: crate::model::ItemMeta {
+                id: "1".to_string(),
+                title: "Song 1".to_string(),
+                ..crate::model::ItemMeta::default()
+            },
+            artist: String::new(),
+            album: String::new(),
+            favorite: false,
+            duration: 100.0,
+            url: "file:///1.flac".to_string(),
+            cover_art: String::new(),
+        };
+        core.load(vec![track], 0, false);
+        core.on_engine(EngineEvent::FirstPcm, 0);
+        core.snapshot(1, 0);
+
+        let mut anchor = None;
+        let initial_clock = crate::player::engine::EngineClock {
+            played_frames: 1_000,
+            buffered_frames: 48_000,
+            underruns: 0,
+            sample_rate: 48_000,
+            loading: false,
+        };
+        reconcile_hardware_clock(&mut core, &mut anchor, Some(initial_clock), 0, true, false);
+        assert!(anchor.is_some());
+
+        // 5 seconds of wall-clock time pass, but hardware only played 3.5 seconds (168,000 frames).
+        let five_sec_ns = 5_000_000_000;
+        let stalled_clock = crate::player::engine::EngineClock {
+            played_frames: 1_000 + 168_000,
+            sample_rate: 48_000,
+            ..initial_clock
+        };
+        reconcile_hardware_clock(
+            &mut core,
+            &mut anchor,
+            Some(stalled_clock),
+            five_sec_ns,
+            false,
+            true,
+        );
+        assert!((core.position_at(five_sec_ns) - 3.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn is_setting_command_includes_shuffle_and_capture_installs_settings() {
+        assert!(is_setting_command(&CoreCommand::ShuffleQueue));
+        assert!(is_setting_command(&CoreCommand::SetShuffle(true)));
+    }
 }

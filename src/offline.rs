@@ -45,14 +45,6 @@ impl Filter {
     pub(crate) fn contains_artist(&self, id: &str) -> bool {
         self.artists.contains_key(id)
     }
-
-    pub(crate) fn album_count(&self, id: &str) -> Option<i64> {
-        self.albums.get(id).copied()
-    }
-
-    pub(crate) fn artist_count(&self, id: &str) -> Option<i64> {
-        self.artists.get(id).copied()
-    }
 }
 
 /// PATH-12: the offline catalog is the same for every payload between ledger

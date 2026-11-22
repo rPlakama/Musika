@@ -17,11 +17,37 @@
 use std::io::Read;
 use std::sync::Arc;
 
-use futures_util::future::BoxFuture;
+use futures_util::future::{AbortHandle, Abortable, BoxFuture};
 use gpui::http_client::{
     AsyncBody, HttpClient, Inner, Request, Response, Url, http::HeaderValue,
     http::header::ACCEPT_ENCODING,
 };
+
+/// Aborts the background HTTP task when the GPUI image future is dropped.
+///
+/// GPUI may abandon an image load at any time (a page navigated away, a cover
+/// reloaded for a bigger edge, an overlay closed). Without this guard the
+/// reqwest task for the abandoned URL would keep running to completion because
+/// the oneshot sender stays owned by the spawned task.
+struct CancelOnDrop {
+    handle: Option<AbortHandle>,
+}
+
+impl CancelOnDrop {
+    fn new(handle: AbortHandle) -> Self {
+        Self {
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
 
 pub struct ReqwestHttpClient {
     client: reqwest::Client,
@@ -61,10 +87,20 @@ impl HttpClient for ReqwestHttpClient {
             .insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
         let client = self.client.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
+        let (abort_handle, abort_registration) = AbortHandle::new_pair();
         crate::app::runtime().spawn(async move {
-            _ = tx.send(fetch(client, request).await);
+            let result = Abortable::new(fetch(client, request), abort_registration).await;
+            let result = match result {
+                Ok(result) => result,
+                Err(_aborted) => Err(anyhow::anyhow!("GPUI image HTTP request aborted")),
+            };
+            _ = tx.send(result);
         });
+        // Held inside the returned future: dropping the future (GPUI abandoning
+        // the image) drops the guard and cancels the in-flight request.
+        let cancel = CancelOnDrop::new(abort_handle);
         Box::pin(async move {
+            let _cancel = cancel;
             rx.await
                 .map_err(|_| anyhow::anyhow!("GPUI image HTTP task cancelled"))?
         })
@@ -109,4 +145,32 @@ async fn fetch(
 
 pub fn app_http_client() -> Arc<dyn HttpClient> {
     Arc::new(ReqwestHttpClient::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::future::Future as _;
+    use std::task::{Context, Poll};
+
+    #[test]
+    fn dropping_an_abandoned_request_aborts_the_http_task() {
+        let (abort_handle, registration) = AbortHandle::new_pair();
+        let cancel = CancelOnDrop::new(abort_handle);
+        let mut request = Box::pin(Abortable::new(std::future::pending::<()>(), registration));
+        let waker = futures_util::task::noop_waker();
+        let mut context = Context::from_waker(&waker);
+        assert!(
+            request.as_mut().poll(&mut context).is_pending(),
+            "a pending HTTP request stays pending while the image future is alive"
+        );
+
+        // GPUI abandoned the image: the returned future (and its guard) is
+        // dropped, which must cancel the request instead of letting it run.
+        drop(cancel);
+        assert!(
+            matches!(request.as_mut().poll(&mut context), Poll::Ready(Err(_))),
+            "the aborted HTTP request resolves as cancelled"
+        );
+    }
 }

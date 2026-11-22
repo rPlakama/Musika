@@ -55,12 +55,12 @@ mod visuals;
 mod widgets;
 
 use self::text_modal::TextModal;
-use self::widgets::marquee::{MarqueeText, line_width, marquee_offset};
 use self::widgets::cover_image::CoverImage;
+use self::widgets::marquee::{MarqueeText, line_width, marquee_offset};
 use self::widgets::media::{
-    CoverRole, CoverSource, FAVORITE_GOLD, RowMarks, collage_art_from_sources, cover_source_with_remote,
-    format_time, full_cover_source_with_remote, highlighted_text, icon, icon_rotated,
-    loading_placeholder, loading_skeleton, page_key, repeat_label, progress_bar,
+    CoverRole, CoverSource, FAVORITE_GOLD, RowMarks, collage_art_from_sources,
+    cover_source_with_remote, format_time, full_cover_source_with_remote, highlighted_text, icon,
+    icon_rotated, loading_placeholder, loading_skeleton, page_key, progress_bar, repeat_label,
     row_mark_icons, spinning_icon, transport_controls, volume_meter,
 };
 use self::widgets::retained_icon::RetainedIcon;
@@ -112,10 +112,6 @@ actions!(
         LyricsOverlay,
         PlayPause,
         Mute,
-        VolumeUp,
-        VolumeDown,
-        SeekBack,
-        SeekForward,
         NextTrack,
         PrevTrack,
         QueueToggle,
@@ -234,9 +230,7 @@ pub fn run() {
 struct Header {
     server_url: String,
     username: String,
-    server_type: String,
     last_sync: Option<String>,
-    counts: (i64, i64, i64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -372,13 +366,6 @@ enum RetryAction {
     Playback,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ToastKind {
-    Error,
-    Sync,
-    Notice,
-}
-
 /// One queued IPC/`:` command plus whether the surface that queued it must
 /// echo it in a toast. The command line does; commands forwarded from the
 /// core were already announced there (and key presses are not IPC at all).
@@ -387,10 +374,59 @@ struct PendingIpc {
     announce: bool,
 }
 
+/// Deferred IPC command queue (A-02).
+///
+/// Socket and `:` commands are queued here and executed from a
+/// [`gpui::Context::defer_in`] task after the frame that queued them, never
+/// from inside `Render::render`: running them mid-render mutated the view
+/// while it was being composed (an `:add account` command could set `login`
+/// after the login early-return had already been passed) and fired redundant
+/// `cx.notify()` repaints. The deferred drain runs against a settled render
+/// tree instead.
+#[derive(Default)]
+struct PendingIpcQueue {
+    commands: Vec<PendingIpc>,
+    /// A deferred drain is already scheduled; commands queued meanwhile ride
+    /// along with it instead of scheduling another task.
+    drain_scheduled: bool,
+}
+
+impl PendingIpcQueue {
+    fn push(&mut self, pending: PendingIpc) {
+        self.commands.push(pending);
+    }
+
+    fn clear(&mut self) {
+        self.commands.clear();
+    }
+
+    fn is_empty(&self) -> bool {
+        self.commands.is_empty()
+    }
+
+    fn take(&mut self) -> Vec<PendingIpc> {
+        std::mem::take(&mut self.commands)
+    }
+
+    /// Claims the one pending drain slot; `false` means a drain is already
+    /// queued or there is nothing to drain.
+    fn schedule(&mut self) -> bool {
+        if self.commands.is_empty() || self.drain_scheduled {
+            return false;
+        }
+        self.drain_scheduled = true;
+        true
+    }
+
+    /// Releases the drain slot when the deferred task starts.
+    fn begin_drain(&mut self) {
+        self.drain_scheduled = false;
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ToastState {
     message: String,
-    kind: ToastKind,
     retry: Option<RetryAction>,
     created_at: f64,
 }
@@ -512,7 +548,9 @@ impl KeyHold {
         };
         let step = kind.step(key).unwrap_or(0.0);
         match previous {
-            Some(hold) if hold.kind == kind && now_ns.saturating_sub(hold.at_ns) < HOLD_STALE_NS => {
+            Some(hold)
+                if hold.kind == kind && now_ns.saturating_sub(hold.at_ns) < HOLD_STALE_NS =>
+            {
                 Self {
                     kind,
                     delta: hold.delta + step,
@@ -564,6 +602,9 @@ struct RowPaint {
 struct RowEmphasis {
     cover: anim::Behavior,
     text: anim::Behavior,
+    /// Access stamp of the last render lookup (see [`RowScales`]); drives the
+    /// bounded eviction so the map cannot grow with every row ever painted.
+    touched: u64,
 }
 
 impl RowEmphasis {
@@ -572,7 +613,130 @@ impl RowEmphasis {
         Self {
             cover: anim::Behavior::new(value),
             text: anim::Behavior::new(value),
+            touched: 0,
         }
+    }
+}
+
+/// `(surface, scope/generation, row index)` key of [`RowScales`].
+type RowScaleKey = (LineSurface, usize, usize);
+
+/// Number of row lookups remembered before the least recently touched entries
+/// are dropped (U-20).
+///
+/// Every visible row retargets its emphasis each frame and that lookup is the
+/// only signal marking an entry live, so one stamp is consumed per lookup: at
+/// most this many entries can carry a stamp newer than the prune horizon. The
+/// budget is far above any viewport (rows only enter the map while they are on
+/// screen) yet small enough that the per-frame "anything animating" scan over
+/// the map stays cheap.
+const ROW_SCALE_BUDGET: usize = 512;
+
+/// The map may grow this far past [`ROW_SCALE_BUDGET`] before a prune pass runs,
+/// so a burst of lookups does not pay an O(budget) retain on every row (U-20).
+const ROW_SCALE_PRUNE_SLACK: usize = 128;
+
+/// Bounded row-emphasis store (U-20).
+///
+/// `Library`, `Queue` and `Search` row entries used to accumulate for every row
+/// a session had ever painted, so a long scroll grew the map without limit and
+/// the per-frame scan in `views/render.rs` walked every one of them. Entries are
+/// now stamped on lookup and the least recently touched are pruned once the map
+/// grows past [`ROW_SCALE_BUDGET`] + [`ROW_SCALE_PRUNE_SLACK`], which bounds both
+/// the memory and the scan. A row touched in the last `ROW_SCALE_BUDGET` lookups
+/// keeps its animation state, so scrolling within a screenful never restarts a
+/// fade.
+///
+/// Reads stay a plain `Ref<HashMap>` (the render scan is unchanged); writes go
+/// through [`RowScalesWrite`], whose entry API records the stamp.
+struct RowScales {
+    entries: std::cell::RefCell<std::collections::HashMap<RowScaleKey, RowEmphasis>>,
+    stamp: std::cell::Cell<u64>,
+}
+
+impl RowScales {
+    fn new() -> Self {
+        Self {
+            entries: std::cell::RefCell::new(std::collections::HashMap::new()),
+            stamp: std::cell::Cell::new(0),
+        }
+    }
+
+    /// Read-only view: the per-frame settled scan and diagnostics only need the
+    /// entries, never the bookkeeping.
+    fn borrow(&self) -> std::cell::Ref<'_, std::collections::HashMap<RowScaleKey, RowEmphasis>> {
+        self.entries.borrow()
+    }
+
+    /// Writable view, pruning the least recently touched entries first.
+    fn borrow_mut(&self) -> RowScalesWrite<'_> {
+        let mut entries = self.entries.borrow_mut();
+        if entries.len() > ROW_SCALE_BUDGET + ROW_SCALE_PRUNE_SLACK {
+            let stamp = self.stamp.get();
+            let oldest = stamp.saturating_sub(ROW_SCALE_BUDGET as u64);
+            // One stamp is consumed per lookup, so only the last
+            // `ROW_SCALE_BUDGET` lookups can be newer than `oldest`; retaining
+            // by stamp alone bounds the map (Checked in the unit tests below).
+            entries.retain(|_, emphasis| emphasis.touched >= oldest);
+        }
+        RowScalesWrite {
+            entries,
+            stamp: &self.stamp,
+        }
+    }
+}
+
+/// Writable [`RowScales`] view; derefs to the raw map so `values_mut`/`retain`
+/// call sites keep working, while [`RowScalesWrite::entry`] stamps lookups.
+struct RowScalesWrite<'a> {
+    entries: std::cell::RefMut<'a, std::collections::HashMap<RowScaleKey, RowEmphasis>>,
+    stamp: &'a std::cell::Cell<u64>,
+}
+
+impl std::ops::Deref for RowScalesWrite<'_> {
+    type Target = std::collections::HashMap<RowScaleKey, RowEmphasis>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+impl std::ops::DerefMut for RowScalesWrite<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.entries
+    }
+}
+
+impl RowScalesWrite<'_> {
+    /// [`std::collections::HashMap::entry`] that also records the lookup stamp.
+    fn entry(&mut self, key: RowScaleKey) -> RowScaleEntry<'_> {
+        let touched = self.stamp.get().saturating_add(1);
+        self.stamp.set(touched);
+        RowScaleEntry {
+            entry: self.entries.entry(key),
+            touched,
+        }
+    }
+}
+
+/// One pending [`RowScales`] lookup; inserts also write the entry's stamp.
+struct RowScaleEntry<'a> {
+    entry: std::collections::hash_map::Entry<'a, RowScaleKey, RowEmphasis>,
+    touched: u64,
+}
+
+impl<'a> RowScaleEntry<'a> {
+    fn or_insert_with<F>(self, default: F) -> &'a mut RowEmphasis
+    where
+        F: FnOnce() -> RowEmphasis,
+    {
+        let Self { entry, touched } = self;
+        let emphasis = match entry {
+            std::collections::hash_map::Entry::Occupied(occupied) => occupied.into_mut(),
+            std::collections::hash_map::Entry::Vacant(vacant) => vacant.insert(default()),
+        };
+        emphasis.touched = touched;
+        emphasis
     }
 }
 
@@ -596,6 +760,13 @@ enum FullscreenFocus {
 }
 
 impl FullscreenFocus {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "only the command-line tests exercise this edit helper"
+        )
+    )]
     fn next(self) -> Self {
         match self {
             Self::Cover => Self::Title,
@@ -604,6 +775,13 @@ impl FullscreenFocus {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "only the command-line tests exercise this edit helper"
+        )
+    )]
     fn prev(self) -> Self {
         match self {
             Self::Cover => Self::Lyrics,
@@ -709,7 +887,7 @@ fn page_actions(page: &PageBarState<'_>, artist_tool: bool) -> Vec<TopBarAction>
 }
 
 fn topbar_actions_for(mode: SuperiorMode, page: Option<&PageBarState<'_>>) -> Vec<TopBarAction> {
-    match mode {
+    let mut actions = match mode {
         SuperiorMode::Home => vec![TopBarAction::Sync, TopBarAction::Normalization],
         SuperiorMode::Album => page
             .map(|page| page_actions(page, false))
@@ -719,7 +897,14 @@ fn topbar_actions_for(mode: SuperiorMode, page: Option<&PageBarState<'_>>) -> Ve
             .unwrap_or_default(),
         SuperiorMode::Playlist => Vec::new(),
         SuperiorMode::Radio => vec![TopBarAction::Tool],
+    };
+    // The page context bar always renders its Normalization chip (it is the
+    // right-most action chip), so the Tab/Alt order must include slot 3 on
+    // every page mode too; only Home adds it above.
+    if mode != SuperiorMode::Home {
+        actions.push(TopBarAction::Normalization);
     }
+    actions
 }
 
 fn next_tab_slot(order: &[usize], current: Option<usize>, backward: bool) -> Option<usize> {
@@ -825,6 +1010,20 @@ fn activate_niri_window() {
     if std::env::var_os("NIRI_SOCKET").is_none() {
         return;
     }
+    // U-08: both `niri msg` calls block on a subprocess round-trip, so they run
+    // on a worker thread and their output is dropped. Activating the window
+    // must never stall a GPUI frame; every caller keeps calling this
+    // synchronously and only pays the (non-blocking) thread spawn.
+    if let Err(error) = std::thread::Builder::new()
+        .name("musika-niri-activate".to_string())
+        .spawn(focus_niri_window)
+    {
+        crate::debug_log!("GPUI: could not spawn niri window activation: {error}");
+    }
+}
+
+/// Blocking body of [`activate_niri_window`], only ever runs on its worker.
+fn focus_niri_window() {
     let pid = std::process::id();
     let Ok(output) = std::process::Command::new("niri")
         .args(["msg", "-j", "windows"])
@@ -846,6 +1045,65 @@ fn activate_niri_window() {
     _ = std::process::Command::new("niri")
         .args(["msg", "action", "focus-window", "--id", &id.to_string()])
         .output();
+}
+
+/// How long the startup path waits for the worker's first dial before falling
+/// back to the asynchronous retrying client (U-08).
+///
+/// The core spawns this UI, so its socket is already listening and the worker's
+/// dial completes in microseconds; the bound only costs anything when the core
+/// has vanished, and it replaces the former up-to-5 s retry loop on the GPUI
+/// thread.
+const STARTUP_CONNECT_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The core client, its update stream and the startup notice for the retry
+/// surface (if the connection had to start asynchronously).
+type StartupConnect = (
+    Client,
+    tokio::sync::mpsc::Receiver<UiUpdate>,
+    Option<String>,
+);
+
+/// Dials the core off the GPUI thread (U-08).
+///
+/// The blocking [`Client::connect`] retry loop runs on a worker thread and hands
+/// the connected client back through a channel; only the first dial is awaited.
+/// When the core is not reachable within [`STARTUP_CONNECT_WAIT`], the app falls
+/// back to [`Client::connect_when_available`], whose retrying supervisor reports
+/// the connection through the existing [`UiUpdate::Connected`] update path.
+fn connect_for_startup() -> StartupConnect {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("musika-ipc-startup-dial".to_string())
+        .spawn(move || {
+            _ = sender.send(Client::connect());
+        });
+    if let Err(error) = spawned {
+        crate::debug_log!("musika-ui: could not spawn the startup dial thread: {error}");
+        return connect_unavailable(format!(
+            "Core daemon unavailable (could not start the dial: {error}). Retrying…"
+        ));
+    }
+    match receiver.recv_timeout(STARTUP_CONNECT_WAIT) {
+        Ok(Ok((client, updates))) => (client, updates, None),
+        Ok(Err(error)) => {
+            connect_unavailable(format!("Core daemon unavailable ({error}). Retrying…"))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => connect_unavailable(
+            "Core daemon unavailable (the startup dial timed out). Retrying…".to_string(),
+        ),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => connect_unavailable(
+            "Core daemon unavailable (the startup dial failed). Retrying…".to_string(),
+        ),
+    }
+}
+
+/// The asynchronous fallback of [`connect_for_startup`]: retries in the
+/// background and reports through [`UiUpdate::Connected`].
+fn connect_unavailable(notice: String) -> StartupConnect {
+    eprintln!("musika-ui: waiting for the core daemon: {notice}");
+    let (client, updates) = Client::connect_when_available();
+    (client, updates, Some(notice))
 }
 
 struct AppRoot {
@@ -911,12 +1169,15 @@ struct AppRoot {
     image_cache_bytes: usize,
     image_cache_hits: u64,
     image_cache_misses: u64,
-    row_scales:
-        std::cell::RefCell<std::collections::HashMap<(LineSurface, usize, usize), RowEmphasis>>,
+    /// Bounded per-row emphasis animations (U-20); see [`RowScales`].
+    row_scales: RowScales,
     library_hover_fill: anim::ColorBehavior,
     page_hover_fill: anim::ColorBehavior,
     client: Client,
     player: AppPlayer,
+    /// True once the first `PlaybackState` snapshot after (re)connect has been
+    /// applied, so initial crossfade/normalization values do not fire toasts.
+    state_seeded: bool,
     /// Startup-only: the core was not reachable after the initial connect
     /// attempts, so the root renders a retry surface instead of the UI.
     awaiting_core: bool,
@@ -978,7 +1239,8 @@ struct AppRoot {
     command_line: command_line::CommandLineState,
     command_line_anim: anim::Behavior,
     command_suggestions_generation: u64,
-    pending_ipc: Vec<PendingIpc>,
+    /// Commands awaiting execution after the next frame (A-02).
+    pending_ipc: PendingIpcQueue,
     line_search_snapshot: Vec<line_search::LineTarget>,
     line_search_surfaces: Vec<LineSurface>,
     status_focus: Option<usize>,
@@ -1034,25 +1296,20 @@ impl AppRoot {
         focus.focus(window);
 
         crate::scroll_memory::hydrate();
-        // A dead/slow core must not kill the UI: start disconnected, show the
-        // retry surface, and let the supervisor connect when the core is back.
-        let (client, mut updates, startup_notice) = match Client::connect() {
-            Ok((client, updates)) => (client, updates, None),
-            Err(error) => {
-                let (client, updates) = Client::connect_when_available();
-                eprintln!("musika-ui: waiting for the core daemon: {error}");
-                (
-                    client,
-                    updates,
-                    Some(format!("Core daemon unavailable ({error}). Retrying…")),
-                )
-            }
-        };
+        // U-08: the daemon dial (with its up-to-5 s retry loop) runs off the
+        // GPUI thread; a dead/slow core must not kill the UI, so the fallback
+        // starts disconnected and lets the supervisor connect when the core is
+        // back.
+        let (client, mut updates, startup_notice) = connect_for_startup();
         let bridge = RemoteBridge::new(client.clone());
         let player = AppPlayer::new(client.clone());
-        let mut view = ViewState::default();
-        bridge.load_library(view.scope, view.order);
-        view.loading = true;
+        // U-29: the first library load belongs to `UiUpdate::Connected` (it
+        // runs once the handshake is complete and is also what re-seeds a
+        // reconnect); issuing it here too only queued a duplicate request.
+        let view = ViewState {
+            loading: true,
+            ..ViewState::default()
+        };
 
         cx.spawn(async move |this, cx| {
             while let Some(update) = updates.recv().await {
@@ -1069,40 +1326,34 @@ impl AppRoot {
                         UiUpdate::State(state) => {
                             // Playback frames arrive on transport changes only;
                             // the anchor carries the position between them.
-                            let old_state = this.player.state();
-                            let old_index = this.player.index();
-                            let old_loading = this.player.is_loading();
+                            let was_seeded = this.state_seeded;
                             let old_normalization = this.player.normalization();
                             let old_crossfade = this.player.crossfade();
                             this.player.apply_state(state);
+                            this.state_seeded = true;
                             this.repeat = this.player.repeat();
                             this.clamp_queue();
                             this.drain_resync();
                             this.sync_mute_toast(this.player.muted());
-                            if this.player.crossfade() != old_crossfade {
+                            if was_seeded && this.player.crossfade() != old_crossfade {
                                 this.push_toast(
                                     if this.player.crossfade() {
                                         "Crossfade on".to_string()
                                     } else {
                                         "Crossfade off".to_string()
                                     },
-                                    ToastKind::Notice,
                                     None,
                                 );
                             }
-                            if this.player.normalization() != old_normalization {
+                            if was_seeded && this.player.normalization() != old_normalization {
                                 this.push_toast(
                                     format!(
                                         "Normalization: {}",
                                         this.player.normalization().label()
                                     ),
-                                    ToastKind::Notice,
                                     None,
                                 );
                             }
-                            notify = old_state != this.player.state()
-                                || old_index != this.player.index()
-                                || old_loading != this.player.is_loading();
                         }
                         UiUpdate::QueueDelta(delta) => {
                             this.player.apply_delta(delta);
@@ -1119,11 +1370,7 @@ impl AppRoot {
                             this.drain_resync();
                             if !reply.ok {
                                 this.push_toast(
-                                    format!(
-                                        "Core rejected a playback command ({:?}).",
-                                        reply.code
-                                    ),
-                                    ToastKind::Error,
+                                    format!("Core rejected a playback command ({:?}).", reply.code),
                                     None,
                                 );
                             }
@@ -1150,6 +1397,17 @@ impl AppRoot {
                             crate::debug_log!("musika-ui: connected to core session {session}");
                             this.awaiting_core = false;
                             this.reconnecting = None;
+                            this.state_seeded = false;
+                            this.player.reset_for_reconnect();
+                            this.generation = 0;
+                            this.view.rows.generation = 0;
+                            this.page_generation = 0;
+                            this.marks.generation = 0;
+                            this.marks.inflight = false;
+                            this.marks.signature = None;
+                            if let Some(search) = this.search.as_mut() {
+                                search.generation = 0;
+                            }
                             this.repeat = this.player.repeat();
                             // A (re)connect starts a fresh stream: rebuild the
                             // bridge surfaces the core did not replay itself.
@@ -1159,9 +1417,10 @@ impl AppRoot {
                                 let descriptor = page.descriptor.clone();
                                 this.bridge.load_page(descriptor);
                             }
-                            this.marks.signature = None;
                         }
                         UiUpdate::Reconnecting(reason) => {
+                            this.state_seeded = false;
+                            this.marks.inflight = false;
                             let message = match reason {
                                 Some(reason) => {
                                     format!("Core connection lost ({reason}); reconnecting…")
@@ -1169,12 +1428,12 @@ impl AppRoot {
                                 None => "Core connection lost; reconnecting…".to_string(),
                             };
                             this.reconnecting = Some(message.clone());
-                            this.push_toast(message, ToastKind::Notice, None);
+                            this.push_toast(message, None);
                         }
                         UiUpdate::Fatal(message) => {
                             this.error = Some(message.clone());
                             this.reconnecting = Some(message.clone());
-                            this.push_toast(message, ToastKind::Error, None);
+                            this.push_toast(message, None);
                             cx.notify();
                             cx.quit();
                             return false;
@@ -1245,12 +1504,13 @@ impl AppRoot {
             image_cache_bytes: 0,
             image_cache_hits: 0,
             image_cache_misses: 0,
-            row_scales: std::cell::RefCell::new(std::collections::HashMap::new()),
+            row_scales: RowScales::new(),
             library_hover_fill: anim::ColorBehavior::new(palette::surface()),
             page_hover_fill: anim::ColorBehavior::new(palette::surface()),
             awaiting_core: startup_notice.is_some(),
             reconnecting: startup_notice,
             player,
+            state_seeded: false,
             current_cover: views::shell::CurrentCover::default(),
             playback_error: None,
             queue_open: false,
@@ -1305,7 +1565,7 @@ impl AppRoot {
             command_line: command_line::CommandLineState::new(),
             command_line_anim: anim::Behavior::new(0.0),
             command_suggestions_generation: 0,
-            pending_ipc: Vec::new(),
+            pending_ipc: PendingIpcQueue::default(),
             line_search_snapshot: Vec::new(),
             line_search_surfaces: Vec::new(),
             status_focus: None,
@@ -1347,7 +1607,7 @@ impl AppRoot {
         if let Ok(message) = std::env::var("MUSIKA_GPUUI_TOAST")
             && !message.is_empty()
         {
-            app.push_toast(message, ToastKind::Error, None);
+            app.push_toast(message, None);
         }
         if std::env::var_os("MUSIKA_GPUUI_FULLSCREEN").is_some() {
             app.fullscreen = true;
@@ -1400,7 +1660,43 @@ impl AppRoot {
 
     /// Keeps the queue cursor inside the row window the core reported.
     fn clamp_queue(&mut self) {
-        self.queue_list.cursor = self.queue_list.cursor.min(self.player.len().saturating_sub(1));
+        self.queue_list.cursor = self
+            .queue_list
+            .cursor
+            .min(self.player.len().saturating_sub(1));
+    }
+
+    /// Schedules the deferred drain of the IPC command queue (A-02).
+    ///
+    /// Called from `render`; the commands execute at the end of the current
+    /// effect cycle through [`gpui::Context::defer_in`], outside the render
+    /// pass. Commands queued while the task is pending join the same batch.
+    pub(in crate::ui) fn schedule_pending_ipc_drain(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.pending_ipc.schedule() {
+            return;
+        }
+        cx.defer_in(window, |this, window, cx| {
+            this.drain_pending_ipc(window, cx);
+        });
+    }
+
+    /// Executes every queued IPC command after the render pass.
+    fn drain_pending_ipc(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_ipc.begin_drain();
+        let pending = self.pending_ipc.take();
+        for pending in pending {
+            self.execute_ipc_command(pending.command, pending.announce, window, cx);
+        }
+        // A handler can queue another command (the track-next/-previous helpers
+        // go through `handle_command`); do not leave it stranded until the next
+        // repaint, schedule a follow-up drain for it.
+        if !self.pending_ipc.is_empty() {
+            self.schedule_pending_ipc_drain(window, cx);
+        }
     }
 }
 
@@ -1553,14 +1849,105 @@ fn local_day(secs: i64) -> String {
         .unwrap_or_else(|| "—".to_string())
 }
 
-fn join_phrase(parts: &[&str]) -> String {
-    parts
-        .iter()
-        .filter(|part| !part.is_empty())
-        .copied()
-        .collect::<Vec<_>>()
-        .join(" · ")
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+mod row_scales_tests {
+    use super::{LineSurface, ROW_SCALE_BUDGET, ROW_SCALE_PRUNE_SLACK, RowEmphasis, RowScales};
+
+    /// Scrolling through many more rows than the budget must not grow the
+    /// emphasis store without limit (U-20).
+    #[test]
+    fn row_scales_stay_bounded_while_scrolling() {
+        let scales = RowScales::new();
+        let rows = (ROW_SCALE_BUDGET + ROW_SCALE_PRUNE_SLACK) * 3;
+        for index in 0..rows {
+            let mut write = scales.borrow_mut();
+            let _ = write
+                .entry((LineSurface::Library, 0, index))
+                .or_insert_with(|| RowEmphasis::new(false));
+        }
+        let len = scales.borrow().len();
+        assert!(
+            len <= ROW_SCALE_BUDGET + ROW_SCALE_PRUNE_SLACK + 1,
+            "row scale store grew to {len} entries"
+        );
+        assert!(len < rows, "nothing was pruned ({len} of {rows})");
+        // The row painted last is still tracked; the first one is long gone.
+        assert!(
+            scales
+                .borrow()
+                .contains_key(&(LineSurface::Library, 0, rows - 1))
+        );
+        assert!(!scales.borrow().contains_key(&(LineSurface::Library, 0, 0)));
+    }
+
+    /// A row that stays visible while the list scrolls keeps its animation
+    /// state even after the map prunes the rows scrolled past it.
+    #[test]
+    fn row_scales_keep_rows_that_stay_visible() {
+        let scales = RowScales::new();
+        let rows = (ROW_SCALE_BUDGET + ROW_SCALE_PRUNE_SLACK) * 2;
+        for index in 0..rows {
+            for key_index in [0, index] {
+                let mut write = scales.borrow_mut();
+                let _ = write
+                    .entry((LineSurface::Queue, 0, key_index))
+                    .or_insert_with(|| RowEmphasis::new(key_index == 0));
+            }
+        }
+        let retained = scales
+            .borrow()
+            .get(&(LineSurface::Queue, 0, 0))
+            .map(|emphasis| emphasis.touched);
+        assert!(
+            retained.is_some_and(|touched| touched > 0),
+            "the row kept on screen lost its emphasis state"
+        );
+    }
 }
 
 #[cfg(test)]
-mod tests;
+mod pending_ipc_tests {
+    use super::{PendingIpc, PendingIpcQueue};
+
+    fn command() -> PendingIpc {
+        PendingIpc {
+            command: crate::ipc_command::IpcCommand::PlayPause,
+            announce: false,
+        }
+    }
+
+    /// A-02: the deferred drain coalesces every command queued before it runs
+    /// and nothing is left behind afterwards.
+    #[test]
+    fn queued_commands_drain_as_one_coalesced_batch() {
+        let mut queue = PendingIpcQueue::default();
+        assert!(!queue.schedule(), "nothing queued, so nothing to drain");
+        queue.push(command());
+        queue.push(command());
+        assert!(queue.schedule(), "the first queued command arms the drain");
+        assert!(
+            !queue.schedule(),
+            "a second frame must join the armed drain, not schedule another"
+        );
+        // A command queued while the drain is armed rides along with it.
+        queue.push(command());
+        queue.begin_drain();
+        assert_eq!(queue.take().len(), 3);
+        assert!(queue.is_empty());
+        assert!(!queue.schedule());
+    }
+
+    /// The login form drops queued commands instead of executing them behind
+    /// the form (the pre-A-02 render path cleared the queue the same way).
+    #[test]
+    fn clear_drops_commands_queued_before_the_login_form() {
+        let mut queue = PendingIpcQueue::default();
+        queue.push(command());
+        queue.clear();
+        assert!(queue.is_empty());
+        assert!(!queue.schedule());
+    }
+}

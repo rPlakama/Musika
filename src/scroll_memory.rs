@@ -119,6 +119,10 @@ pub(crate) fn hydrate_raw(raw: &str) {
 }
 
 /// The persisted store, read once. Safe to call from every `ScrollMemory`.
+#[cfg_attr(
+    not(feature = "gpuui"),
+    expect(dead_code, reason = "consumed by the GPUI front end")
+)]
 pub(crate) fn hydrate() {
     let mut store = store();
     if store.hydrated {
@@ -151,6 +155,10 @@ pub(crate) fn remember(key: &str, index: i64, y: f64, scope: i64, layout: &str) 
     );
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the scroll-memory tests call this helper")
+)]
 pub(crate) fn remember_layout(key: &str, layout: &str) {
     if key.is_empty() {
         return;
@@ -171,6 +179,10 @@ pub(crate) fn remember_layout(key: &str, layout: &str) {
     entry.saved_at = now_ms();
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the scroll-memory tests call this helper")
+)]
 pub(crate) fn entry_json(key: &str) -> String {
     let store = store();
     store
@@ -188,6 +200,10 @@ pub(crate) fn saved_index(key: &str) -> i64 {
         .unwrap_or(-1)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the scroll-memory tests call this helper")
+)]
 pub(crate) fn saved_layout(key: &str) -> String {
     store()
         .entries
@@ -196,6 +212,10 @@ pub(crate) fn saved_layout(key: &str) -> String {
         .unwrap_or_default()
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the scroll-memory tests call this helper")
+)]
 pub(crate) fn clear(key: &str) {
     if key.is_empty() {
         return;
@@ -208,6 +228,10 @@ pub(crate) fn serialize() -> String {
 }
 
 /// Writes the current store to the scroll file (shared with the legacy UI oracle).
+#[cfg_attr(
+    not(feature = "gpuui"),
+    expect(dead_code, reason = "consumed by the GPUI front end")
+)]
 pub(crate) fn persist() {
     let Ok(path) = crate::db::scroll_path() else {
         return;

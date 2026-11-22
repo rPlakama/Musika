@@ -444,10 +444,15 @@ async fn artist_info_round_trips_and_purges_with_the_artist() {
     assert_eq!(row.biography, "Updated bio.");
     assert_eq!(row.url, "");
 
+    // Invalidating the biography keeps the row (it also owns the similar-
+    // artist graph, N-06) but marks the text stale for the next page open.
     invalidate_artist_info(&pool, &["a1".to_string()])
         .await
         .unwrap();
-    assert!(artist_info(&pool, "a1").await.unwrap().is_none());
+    let row = artist_info(&pool, "a1").await.unwrap().unwrap();
+    assert!(row.biography.is_empty());
+    assert!(row.url.is_empty());
+    assert!(row.fetched_at.is_empty());
 
     // The artist left the library: the cached biography goes with it.
     upsert_artist_info(&pool, "a1", "Stale bio.", "")
@@ -492,7 +497,9 @@ async fn similar_artist_graph_round_trips_and_stays_with_the_biography() {
     assert_eq!(similar_artists(&row), similar);
 
     // A graph refresh keeps the biography.
-    upsert_artist_similar(&pool, "a1", &similar[..1]).await.unwrap();
+    upsert_artist_similar(&pool, "a1", &similar[..1])
+        .await
+        .unwrap();
     let row = artist_info(&pool, "a1").await.unwrap().unwrap();
     assert_eq!(row.biography, "Boston band.");
     assert_eq!(similar_artists(&row), similar[..1].to_vec());
@@ -505,11 +512,128 @@ async fn similar_artist_graph_round_trips_and_stays_with_the_biography() {
     let row = artist_info(&pool, "a1").await.unwrap().unwrap();
     assert!(similar_artists(&row).is_empty());
 
-    // Artist changes/removal invalidate the graph with the biography row.
+    // N-06: an artist metadata change clears the cached biography but keeps
+    // the graph — the similar-artist list has its own TTL, and wiping it here
+    // would make radio refetch it on every sync.
+    upsert_artist_similar(&pool, "a1", &similar).await.unwrap();
     invalidate_artist_info(&pool, &["a1".to_string()])
         .await
         .unwrap();
-    assert!(artist_info(&pool, "a1").await.unwrap().is_none());
+    let row = artist_info(&pool, "a1").await.unwrap().expect("row kept");
+    assert!(row.biography.is_empty());
+    assert_eq!(similar_artists(&row), similar);
+}
+
+/// N-06: `upsert_artist_similar` writes a graph-only row whose biography
+/// `fetched_at` is empty; the provider-TTL invalidation must not delete it.
+/// A stale biography is dropped, but the graph stored beside it survives.
+#[tokio::test]
+async fn artist_similar_survives_sync() {
+    let pool = library_pool().await;
+    sqlx::query("INSERT INTO artists (id, name) VALUES ('a1', 'Pixies')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let similar = vec![
+        crate::library::SimilarArtist {
+            id: "a2".to_string(),
+            name: "The Breeders".to_string(),
+        },
+        crate::library::SimilarArtist {
+            id: "a3".to_string(),
+            name: "Throwing Muses".to_string(),
+        },
+    ];
+    upsert_artist_similar(&pool, "a1", &similar).await.unwrap();
+
+    // A sync whose provider timestamp is newer than every cached row: the
+    // graph-only row's empty fetched_at used to cast to 0 and be deleted.
+    let before = crate::consts::now_secs() + 3_600;
+    let cleared = invalidate_artist_info_before(&pool, before).await.unwrap();
+    assert_eq!(cleared, 0, "a graph-only row has no biography to age out");
+    let row = artist_info(&pool, "a1")
+        .await
+        .unwrap()
+        .expect("similar graph survives the sync");
+    assert_eq!(similar_artists(&row), similar);
+    assert!(row.fetched_at.is_empty());
+
+    // A genuinely stale biography is invalidated; the graph beside it stays.
+    sqlx::query("UPDATE artist_info SET fetched_at = '1' WHERE artist_id = 'a1'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let cleared = invalidate_artist_info_before(&pool, before).await.unwrap();
+    assert_eq!(cleared, 1);
+    let row = artist_info(&pool, "a1").await.unwrap().unwrap();
+    assert!(row.biography.is_empty());
+    assert!(row.fetched_at.is_empty());
+    assert_eq!(similar_artists(&row), similar);
+}
+
+/// N-06: the queue snapshot restore path reads ids from a `HashMap`, so a
+/// track queued twice must come back twice — the old `remove`-draining map
+/// silently dropped every repeat.
+#[tokio::test]
+async fn songs_by_ids_refs_preserves_duplicates() {
+    let pool = library_pool().await;
+    for (id, title) in [("s1", "One"), ("s2", "Two")] {
+        sqlx::query("INSERT INTO songs (id, title) VALUES (?1, ?2)")
+            .bind(id)
+            .bind(title)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let ids = ["s1", "s2", "s1", "missing", "s2"];
+    let songs = songs_by_ids_refs(&pool, &ids).await.unwrap();
+    let got: Vec<&str> = songs.iter().map(|song| song.id.as_str()).collect();
+    assert_eq!(got, ["s1", "s2", "s1", "s2"]);
+    // Every entry carries the full row, not a placeholder for the repeats.
+    assert_eq!(songs[0].title, "One");
+    assert_eq!(songs[2].title, "One");
+    assert_eq!(songs[1].title, songs[3].title);
+    assert!(songs_by_ids_refs(&pool, &[]).await.unwrap().is_empty());
+}
+
+/// N-06: the id lookups bind `cache::IN_BATCH` chunks, so a set larger than
+/// one chunk still resolves every row (a single `IN (...)` used to hit
+/// SQLite's bound-parameter limit).
+#[tokio::test]
+async fn id_lookups_chunk_past_the_bind_limit() {
+    let pool = library_pool().await;
+    let count = crate::cache::IN_BATCH * 2 + 17;
+    let seed = format!(
+        "INSERT INTO albums (id, name) VALUES ('al', 'Album');
+         INSERT INTO songs (id, title, album_id, artist_id, cover_art, starred)
+             SELECT printf('s%05d', x), 'Track ' || x, 'al', 'ar',
+                    printf('cov%05d', x),
+                    CASE WHEN x % 2 = 0 THEN '2026-01-01T00:00:00Z' END
+             FROM (WITH RECURSIVE c(x) AS (
+                       VALUES(0) UNION ALL SELECT x + 1 FROM c WHERE x + 1 < {count}
+                   ) SELECT x FROM c);"
+    );
+    sqlx::raw_sql(sqlx::AssertSqlSafe(seed))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let ids: Vec<String> = (0..count).map(|i| format!("s{i:05}")).collect();
+    let covers = song_cover_ids(&pool, &ids).await.unwrap();
+    assert_eq!(covers.len(), count);
+    assert_eq!(covers.get("s00000").map(String::as_str), Some("cov00000"));
+    assert_eq!(song_album_ids(&pool, &ids).await.unwrap().len(), count);
+    assert_eq!(
+        song_starred_ids(&pool, &ids).await.unwrap().len(),
+        count.div_ceil(2)
+    );
+    assert_eq!(song_scopes(&pool, &ids).await.unwrap().len(), count);
+
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let ordered = songs_by_ids_refs(&pool, &refs).await.unwrap();
+    assert_eq!(ordered.len(), count);
+    assert_eq!(ordered[0].id, "s00000");
+    assert_eq!(ordered[count - 1].id, format!("s{:05}", count - 1));
 }
 
 #[tokio::test]
@@ -661,7 +785,10 @@ async fn random_album_id_skips_empty_albums() {
     .await
     .unwrap();
     for _ in 0..8 {
-        assert_eq!(random_album_id(&pool).await.unwrap().as_deref(), Some("full"));
+        assert_eq!(
+            random_album_id(&pool).await.unwrap().as_deref(),
+            Some("full")
+        );
     }
 
     sqlx::query("DELETE FROM albums")

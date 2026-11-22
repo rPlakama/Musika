@@ -22,12 +22,15 @@ struct SyncQueueState {
 #[derive(Debug)]
 pub(crate) struct SyncQueue {
     state: Mutex<SyncQueueState>,
+    cancel_tx: watch::Sender<u64>,
 }
 
 impl SyncQueue {
     pub(crate) fn new() -> Self {
+        let (cancel_tx, _) = watch::channel(0);
         Self {
             state: Mutex::new(SyncQueueState::default()),
+            cancel_tx,
         }
     }
 
@@ -67,21 +70,29 @@ impl SyncQueue {
     }
 
     /// Drops queued work and invalidates a live pass (account switch/logout).
-    /// The session watch cancels the run; its result is discarded.
+    /// The cancellation watch aborts the run immediately; its result is discarded.
     pub(crate) fn clear(&self) {
-        let mut state = self.lock();
-        state.pending = None;
-        state.generation = state.generation.wrapping_add(1);
+        let generation = {
+            let mut state = self.lock();
+            state.pending = None;
+            state.generation = state.generation.wrapping_add(1);
+            state.generation
+        };
+        _ = self.cancel_tx.send(generation);
     }
 
     /// Ends the supervisor after a terminal failure or a lost session watch.
     /// The slot, queue and generation move under one lock so a request racing
     /// the failure either starts a fresh driver or is left for `next`.
     pub(crate) fn finish(&self) {
-        let mut state = self.lock();
-        state.pending = None;
-        state.running = false;
-        state.generation = state.generation.wrapping_add(1);
+        let generation = {
+            let mut state = self.lock();
+            state.pending = None;
+            state.running = false;
+            state.generation = state.generation.wrapping_add(1);
+            state.generation
+        };
+        _ = self.cancel_tx.send(generation);
     }
 
     /// Whether `generation` still belongs to the current account/session.
@@ -166,8 +177,9 @@ pub(crate) async fn drive_syncs<F, Fut>(
         let Some((mode, generation)) = queue.next() else {
             break;
         };
+        let mut cancel_rx = queue.cancel_tx.subscribe();
         let result = tokio::select! {
-            result = run(mode) => result,
+            result = run(mode) => Some(result),
             _ = online.wait_for(|online| !*online) => {
                 // Dropping the run future cancels its network fetches; an
                 // in-flight SQLite transaction rolls back on drop. Nothing
@@ -175,6 +187,10 @@ pub(crate) async fn drive_syncs<F, Fut>(
                 queue.requeue(mode, generation);
                 continue;
             }
+            _ = cancel_rx.wait_for(|&current| current != generation) => None,
+        };
+        let Some(result) = result else {
+            continue;
         };
         if !queue.is_current(generation) {
             // The session changed under the pass; discard its result instead
@@ -345,6 +361,7 @@ impl Bridge {
                 id: artist_id.clone(),
                 on,
             });
+            let _settled = DownloadSettledGuard::new(tx.clone());
             let ids = crate::library::artist_song_ids(&dbs.library, &artist_id)
                 .await
                 .unwrap_or_default();
@@ -355,12 +372,28 @@ impl Bridge {
                 return;
             }
             if on {
+                let mut failed = 0usize;
+                let mut first_err: Option<String> = None;
                 for song in &ids {
                     if let Err(err) = crate::media_actions::download_one(&dbs, song).await {
-                        _ = tx.send(Event::Error(format!("Download failed: {err:#}")));
+                        failed += 1;
+                        if first_err.is_none() {
+                            first_err = Some(format!("{err:#}"));
+                        }
                     }
                 }
+                if let Some(first_err) = first_err {
+                    _ = tx.send(Event::Error(format!(
+                        "{failed} track download(s) failed: {first_err}"
+                    )));
+                }
             } else {
+                if let Ok(albums) = crate::library::artist_album_ids(&dbs.library, &artist_id).await
+                {
+                    for album_id in &albums {
+                        crate::media_actions::album_container_off(&dbs, album_id).await;
+                    }
+                }
                 for song in &ids {
                     _ = crate::download::unmark(&dbs.download, song).await;
                 }
@@ -370,7 +403,6 @@ impl Bridge {
                     )));
                 }
             }
-            send_download_settled(&tx);
         });
     }
 
@@ -411,11 +443,15 @@ impl Bridge {
 
     /// UI request: change one stream-quality/cache field.
     pub fn set_stream_change(&self, change: crate::playback_settings::StreamChange) {
-        self.send_playback(crate::daemon::playback::PlaybackInput::ApplyStreamChange(change));
+        self.send_playback(crate::daemon::playback::PlaybackInput::ApplyStreamChange(
+            change,
+        ));
     }
 
     pub fn set_color_contrast(&self, contrast: f64) {
-        self.send_playback(crate::daemon::playback::PlaybackInput::SetColorContrast(contrast));
+        self.send_playback(crate::daemon::playback::PlaybackInput::SetColorContrast(
+            contrast,
+        ));
     }
 
     pub fn set_color_saturation(&self, saturation: f64) {
@@ -426,7 +462,9 @@ impl Bridge {
 
     /// UI request: arm/cancel the sleep timer.
     pub fn set_sleep_timer(&self, minutes: Option<u64>) {
-        self.send_playback(crate::daemon::playback::PlaybackInput::SetSleepTimer(minutes));
+        self.send_playback(crate::daemon::playback::PlaybackInput::SetSleepTimer(
+            minutes,
+        ));
     }
 
     /// UI request: enable/disable scrobbling.
@@ -449,7 +487,9 @@ impl Bridge {
 
     /// UI request: change one crossfade field.
     pub fn set_crossfade_change(&self, change: crate::playback_settings::CrossfadeChange) {
-        self.send_playback(crate::daemon::playback::PlaybackInput::SetCrossfadeConfig(change));
+        self.send_playback(crate::daemon::playback::PlaybackInput::SetCrossfadeConfig(
+            change,
+        ));
     }
 
     /// UI request: change exclusive/bit-perfect output mode.
@@ -466,9 +506,10 @@ impl Bridge {
         backend: Option<crate::playback_settings::OutputBackend>,
         device: Option<String>,
     ) {
-        self.send_playback(
-            crate::daemon::playback::PlaybackInput::SetOutputBackend { backend, device },
-        );
+        self.send_playback(crate::daemon::playback::PlaybackInput::SetOutputBackend {
+            backend,
+            device,
+        });
     }
 
     pub(crate) fn is_offline(&self) -> bool {
@@ -489,5 +530,73 @@ impl Bridge {
                 self.refresh_header();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use tokio::sync::{Notify, mpsc};
+
+    struct DropCounter(Arc<AtomicUsize>);
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn clear_immediately_aborts_in_flight_sync_while_online() {
+        let queue = Arc::new(SyncQueue::new());
+        let (events_tx, mut events) = mpsc::unbounded_channel();
+        let (_online_tx, online_rx) = watch::channel(true);
+        let (started_tx, mut started) = mpsc::unbounded_channel();
+        let finish = Arc::new(Notify::new());
+        let dropped = Arc::new(AtomicUsize::new(0));
+
+        let run_started = started_tx.clone();
+        let run_finish = Arc::clone(&finish);
+        let run_dropped = Arc::clone(&dropped);
+        let driver = tokio::spawn(drive_syncs(
+            Arc::clone(&queue),
+            events_tx,
+            online_rx,
+            move |mode| {
+                let started = run_started.clone();
+                let finish = Arc::clone(&run_finish);
+                let dropped = Arc::clone(&run_dropped);
+                async move {
+                    started.send(mode).expect("run start channel");
+                    let _guard = DropCounter(dropped);
+                    finish.notified().await;
+                    Ok(())
+                }
+            },
+        ));
+
+        assert!(queue.request(SyncMode::All));
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), started.recv())
+                .await
+                .expect("in-flight pass starts"),
+            Some(SyncMode::All)
+        );
+
+        // Account switch while online remains true: clear() must immediately
+        // cancel the in-flight pass and let the driver exit cleanly.
+        queue.clear();
+        tokio::time::timeout(Duration::from_secs(1), driver)
+            .await
+            .expect("driver aborts in-flight pass without waiting for offline")
+            .expect("driver task");
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        assert!(events.try_recv().is_err(), "aborted pass emits no event");
+
+        // A subsequent sync for the new account can now claim the queue slot.
+        assert!(queue.request(SyncMode::Incremental));
+        assert_eq!(queue.next(), Some((SyncMode::Incremental, 1)));
     }
 }

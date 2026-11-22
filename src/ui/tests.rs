@@ -18,8 +18,8 @@ mod fullscreen_focus_tests {
 #[cfg(test)]
 mod contextual_bar_tests {
     use super::*;
-    use crate::ui::widgets::media::remote_cover;
     use crate::ui::widgets::media::cover_source;
+    use crate::ui::widgets::media::remote_cover;
 
     fn page_state(
         kind: PageKind,
@@ -48,45 +48,51 @@ mod contextual_bar_tests {
             topbar_actions_for(SuperiorMode::Home, None),
             vec![Sync, Normalization]
         );
-        assert!(topbar_actions_for(SuperiorMode::Playlist, None).is_empty());
-        assert_eq!(topbar_actions_for(SuperiorMode::Radio, None), vec![Tool]);
+        assert_eq!(
+            topbar_actions_for(SuperiorMode::Playlist, None),
+            vec![Normalization]
+        );
+        assert_eq!(
+            topbar_actions_for(SuperiorMode::Radio, None),
+            vec![Tool, Normalization]
+        );
 
         let neutral = page_state(PageKind::Album, false, false, false);
         assert_eq!(
             topbar_actions_for(SuperiorMode::Album, Some(&neutral)),
-            vec![Tool]
+            vec![Tool, Normalization]
         );
         let favorite = page_state(PageKind::Album, true, false, false);
         assert_eq!(
             topbar_actions_for(SuperiorMode::Album, Some(&favorite)),
-            vec![Favorite, Tool]
+            vec![Favorite, Tool, Normalization]
         );
         let cached = page_state(PageKind::Album, false, true, false);
         assert_eq!(
             topbar_actions_for(SuperiorMode::Album, Some(&cached)),
-            vec![Download, Tool]
+            vec![Download, Tool, Normalization]
         );
         let both = page_state(PageKind::Album, true, true, false);
         assert_eq!(
             topbar_actions_for(SuperiorMode::Album, Some(&both)),
-            vec![Favorite, Download]
+            vec![Favorite, Download, Normalization]
         );
 
         assert_eq!(
             topbar_actions_for(SuperiorMode::Artist, Some(&neutral)),
-            vec![Tool]
+            vec![Tool, Normalization]
         );
         assert_eq!(
             topbar_actions_for(SuperiorMode::Artist, Some(&favorite)),
-            vec![Favorite, Tool]
+            vec![Favorite, Tool, Normalization]
         );
         assert_eq!(
             topbar_actions_for(SuperiorMode::Artist, Some(&cached)),
-            vec![Download, Tool]
+            vec![Download, Tool, Normalization]
         );
         assert_eq!(
             topbar_actions_for(SuperiorMode::Artist, Some(&both)),
-            vec![Favorite, Download, Tool]
+            vec![Favorite, Download, Tool, Normalization]
         );
         assert!(page_tool_visible(&neutral));
         assert!(page_tool_visible(&favorite));

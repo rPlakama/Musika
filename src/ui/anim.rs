@@ -13,7 +13,6 @@ pub const STANDARD_MS: f32 = 160.0;
 pub const EMPHASIZED_MS: f32 = 240.0;
 /// Alt quick-actions: 30% faster than the standard emphasized motion.
 pub const ALT_MS: f32 = EMPHASIZED_MS * 0.7;
-pub const MICRO_MS: f32 = 80.0;
 
 /// LYR-8: a manual lyric scroll pauses the centre-follow for this idle window
 /// when the lyrics pane/overlay has focus, and for the shorter window when it
@@ -32,6 +31,10 @@ pub enum Curve {
     /// legacy UI `Easing.OutBack` with overshoot 1.7 (PopFx).
     OutBack,
     /// `Easing.OutCubic`: fast start, gentle settle (lyrics follow).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     OutCubic,
 }
 

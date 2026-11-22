@@ -25,7 +25,10 @@ pub enum QuickDirection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrackCommand { Next, Previous }
+pub enum TrackCommand {
+    Next,
+    Previous,
+}
 
 /// Three-state crossfade control for the text/IPC command surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +86,13 @@ pub enum IpcCommand {
     },
     Shuffle {
         target: ShuffleTarget,
+    },
+    /// MPRIS `SetShuffle`: switch the persistent shuffle *mode*. Naming a mode
+    /// is idempotent for the caller, but the core only exposes a toggle, so
+    /// [`MprisPlayer::set_shuffle`](crate::mpris) submits this only when the
+    /// published mode disagrees.
+    ShuffleMode {
+        enabled: bool,
     },
     Radio {
         seed: RadioSeed,
@@ -242,7 +252,8 @@ impl IpcCommand {
             | Self::SeekRelative(_)
             | Self::RepeatCycle
             | Self::Crossfade(_)
-            | Self::Normalize(_) => T::CorePlayback,
+            | Self::Normalize(_)
+            | Self::ShuffleMode { .. } => T::CorePlayback,
             // `shuffle queue` is playback; album/artist shuffles build a queue
             // from the library through the bridge.
             Self::Shuffle {
@@ -378,10 +389,20 @@ impl IpcCommand {
             },
             I::Normalize(normalize) => match normalize {
                 NormalizeCommand::Cycle => P::CycleNormalization,
-                NormalizeCommand::Off => P::SetNormalization(crate::player::Normalization::Off.code()),
-                NormalizeCommand::Track => P::SetNormalization(crate::player::Normalization::Track.code()),
-                NormalizeCommand::Album => P::SetNormalization(crate::player::Normalization::Album.code()),
+                NormalizeCommand::Off => {
+                    P::SetNormalization(crate::player::Normalization::Off.code())
+                }
+                NormalizeCommand::Track => {
+                    P::SetNormalization(crate::player::Normalization::Track.code())
+                }
+                NormalizeCommand::Album => {
+                    P::SetNormalization(crate::player::Normalization::Album.code())
+                }
             },
+            // MPRIS `SetShuffle` wants the persistent mode, which the wire
+            // vocabulary only exposes as a toggle (`ShuffleQueue` keeps the
+            // visible row order); the MPRIS side sends it only on a mismatch.
+            I::ShuffleMode { .. } => P::ShuffleQueue,
             I::Shuffle {
                 target: ShuffleTarget::Queue,
             } => P::ShuffleQueueOrder,
@@ -413,6 +434,13 @@ pub enum DownloadScope {
 
 impl DownloadScope {
     /// The canonical item kind this command scope names (`track` is a song).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "only the IPC command tests classify scope item kinds"
+        )
+    )]
     pub fn item_kind(self) -> crate::model::ItemKind {
         match self {
             Self::Artist => crate::model::ItemKind::Artist,
@@ -452,6 +480,13 @@ pub struct CurrentTrack {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    not(any(test, feature = "gpuui")),
+    expect(
+        dead_code,
+        reason = "command-line completions are consumed by the GPUI front end"
+    )
+)]
 pub struct ContextRow {
     pub kind: &'static str,
     pub id: String,
@@ -460,6 +495,13 @@ pub struct ContextRow {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(
+    not(any(test, feature = "gpuui")),
+    expect(
+        dead_code,
+        reason = "command-line completions are consumed by the GPUI front end"
+    )
+)]
 pub struct SuggestionContext {
     pub current: Option<CurrentTrack>,
     pub rows: Vec<ContextRow>,
@@ -478,6 +520,13 @@ pub enum SuggestScope {
 impl SuggestScope {
     /// The canonical item kind this suggestion column names; `Any` spans all
     /// of them and has no single kind.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "only the IPC command tests classify scope item kinds"
+        )
+    )]
     pub fn item_kind(self) -> Option<crate::model::ItemKind> {
         use crate::model::ItemKind;
         Some(match self {
@@ -491,6 +540,13 @@ impl SuggestScope {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    not(any(test, feature = "gpuui")),
+    expect(
+        dead_code,
+        reason = "command-line completions are consumed by the GPUI front end"
+    )
+)]
 pub struct SuggestRequest {
     pub scope: SuggestScope,
     pub query: String,
@@ -526,14 +582,29 @@ pub enum CommandForm {
     Exact(&'static [(&'static str, IpcCommand)]),
     /// Grammar that needs the raw rest (ids, numbers, quoted targets, flags);
     /// `parse`/`canonical_string` keep explicit arms for these.
-    Advanced(ArgHints),
+    Advanced(
+        #[cfg_attr(
+            not(any(test, feature = "gpuui")),
+            expect(
+                dead_code,
+                reason = "command-line completions are consumed by the GPUI front end"
+            )
+        )]
+        ArgHints,
+    ),
 }
 
 /// The argument completion metadata an [`CommandForm::Advanced`] command
 /// carries (the hand-written grammar cannot derive it).
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(
+    not(any(test, feature = "gpuui")),
+    expect(
+        dead_code,
+        reason = "command-line completions are consumed by the GPUI front end"
+    )
+)]
 pub enum ArgHints {
-    None,
     /// One of the listed words.
     Values(&'static [&'static str]),
     /// A free argument shown as a usage hint (`<seconds>`).
@@ -542,6 +613,13 @@ pub enum ArgHints {
 
 impl CommandSpec {
     /// Whether completing this command's name should continue into arguments.
+    #[cfg_attr(
+        not(feature = "gpuui"),
+        expect(
+            dead_code,
+            reason = "command-line argument completion is consumed by the GPUI front end"
+        )
+    )]
     pub fn needs_argument(&self) -> bool {
         !matches!(self.form, CommandForm::Bare(_))
     }
@@ -550,6 +628,13 @@ impl CommandSpec {
 pub struct CommandSpec {
     pub name: &'static str,
     pub usage: &'static str,
+    #[cfg_attr(
+        not(any(test, feature = "gpuui")),
+        expect(
+            dead_code,
+            reason = "command-line completions are consumed by the GPUI front end"
+        )
+    )]
     pub description: &'static str,
     /// How the command is parsed and printed.
     pub form: CommandForm,
@@ -560,13 +645,24 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "sync",
         usage: "sync [all|repair]",
         description: "Sync the library (incremental, deep, or repair)",
-        form: CommandForm::Exact(&[("", IpcCommand::Sync(SyncMode::Incremental)), ("all", IpcCommand::Sync(SyncMode::All)), ("repair", IpcCommand::Sync(SyncMode::Repair))]),
+        form: CommandForm::Exact(&[
+            ("", IpcCommand::Sync(SyncMode::Incremental)),
+            ("all", IpcCommand::Sync(SyncMode::All)),
+            ("repair", IpcCommand::Sync(SyncMode::Repair)),
+        ]),
     },
     CommandSpec {
         name: "wipe",
         usage: "wipe <album|lyrics|covers>",
         description: "Clear downloaded albums or a cache",
-        form: CommandForm::Word { values: &[("album", IpcCommand::Wipe(WipeScope::Album)), ("lyrics", IpcCommand::Wipe(WipeScope::Lyrics)), ("covers", IpcCommand::Wipe(WipeScope::Covers))], unknown: "wipe scope" },
+        form: CommandForm::Word {
+            values: &[
+                ("album", IpcCommand::Wipe(WipeScope::Album)),
+                ("lyrics", IpcCommand::Wipe(WipeScope::Lyrics)),
+                ("covers", IpcCommand::Wipe(WipeScope::Covers)),
+            ],
+            unknown: "wipe scope",
+        },
     },
     CommandSpec {
         name: "wipe_databases",
@@ -615,7 +711,10 @@ pub const COMMANDS: &[CommandSpec] = &[
         usage: "scrobble <on|off>",
         description: "Enable or disable server scrobbling",
         form: CommandForm::Word {
-            values: &[("on", IpcCommand::Scrobble(true)), ("off", IpcCommand::Scrobble(false))],
+            values: &[
+                ("on", IpcCommand::Scrobble(true)),
+                ("off", IpcCommand::Scrobble(false)),
+            ],
             unknown: "scrobble state",
         },
     },
@@ -641,7 +740,10 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "remove_account",
         usage: "remove_account [--keep-data]",
         description: "Remove the current account",
-        form: CommandForm::Exact(&[("", IpcCommand::RemoveAccount { keep_data: false }), ("--keep-data", IpcCommand::RemoveAccount { keep_data: true })]),
+        form: CommandForm::Exact(&[
+            ("", IpcCommand::RemoveAccount { keep_data: false }),
+            ("--keep-data", IpcCommand::RemoveAccount { keep_data: true }),
+        ]),
     },
     CommandSpec {
         name: "playlist",
@@ -875,9 +977,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "crossfade",
         usage: "crossfade [on|off|length <seconds>|curve <equal|linear>|album <on|off>]",
         description: "Toggle the crossfade or set its length, curve and album-only gate",
-        form: CommandForm::Advanced(ArgHints::Values(&[
-            "on", "off", "length", "curve", "album",
-        ])),
+        form: CommandForm::Advanced(ArgHints::Values(&["on", "off", "length", "curve", "album"])),
     },
     CommandSpec {
         name: "normalize",
@@ -906,7 +1006,10 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "pane_cycle",
         usage: "pane_cycle [back]",
         description: "Cycle the active pane/cursor scope",
-        form: CommandForm::Exact(&[("", IpcCommand::PaneCycle { backward: false }), ("back", IpcCommand::PaneCycle { backward: true })]),
+        form: CommandForm::Exact(&[
+            ("", IpcCommand::PaneCycle { backward: false }),
+            ("back", IpcCommand::PaneCycle { backward: true }),
+        ]),
     },
     CommandSpec {
         name: "search",
@@ -978,7 +1081,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "track",
         usage: "track <next|previous>",
         description: "Control track playback",
-        form: CommandForm::Word { values: &[("next", IpcCommand::Track(TrackCommand::Next)), ("previous", IpcCommand::Track(TrackCommand::Previous))], unknown: "track command" },
+        form: CommandForm::Word {
+            values: &[
+                ("next", IpcCommand::Track(TrackCommand::Next)),
+                ("previous", IpcCommand::Track(TrackCommand::Previous)),
+            ],
+            unknown: "track command",
+        },
     },
     CommandSpec {
         name: "mute",
@@ -1135,14 +1244,20 @@ fn parse_on_off(value: &str, label: &str) -> Result<bool, CommandError> {
     match value {
         "on" | "true" => Ok(true),
         "off" | "false" => Ok(false),
-        _ => Err(CommandError(format!("{label} expects on|off, got '{value}'"))),
+        _ => Err(CommandError(format!(
+            "{label} expects on|off, got '{value}'"
+        ))),
     }
 }
 
 fn parse_number(value: &str, label: &str) -> Result<f64, CommandError> {
-    value
+    let parsed = value
         .parse::<f64>()
-        .map_err(|_| CommandError(format!("invalid {label}: {value}")))
+        .map_err(|_| CommandError(format!("invalid {label}: {value}")))?;
+    if !parsed.is_finite() {
+        return Err(CommandError(format!("invalid {label}: {value}")));
+    }
+    Ok(parsed)
 }
 
 pub fn parse(input: &str) -> Result<IpcCommand, CommandError> {
@@ -1171,6 +1286,9 @@ pub fn parse(input: &str) -> Result<IpcCommand, CommandError> {
                 let micros = parse_number(value, "microseconds")?;
                 Ok(IpcCommand::Seek((micros / 1_000_000.0).max(0.0)))
             }
+            "mpris_shuffle" => Ok(IpcCommand::ShuffleMode {
+                enabled: parse_on_off(value, "shuffle")?,
+            }),
             _ => Err(CommandError(format!("unknown command: {name}"))),
         };
     }
@@ -1207,38 +1325,31 @@ pub fn parse(input: &str) -> Result<IpcCommand, CommandError> {
 /// numbers, quoted targets and the playlist/download/radio sub-grammars.
 fn advanced_parse(name: &str, rest: &str, usage: &str) -> Result<IpcCommand, CommandError> {
     match name {
-
         "crossfade" => match split_quoted_args(rest)?.as_slice() {
             [] => Ok(IpcCommand::Crossfade(CrossfadeCommand::Toggle)),
             [value] if value == "on" => Ok(IpcCommand::Crossfade(CrossfadeCommand::On)),
             [value] if value == "off" => Ok(IpcCommand::Crossfade(CrossfadeCommand::Off)),
-            [value] if value == "toggle" => {
-                Ok(IpcCommand::Crossfade(CrossfadeCommand::Toggle))
-            }
+            [value] if value == "toggle" => Ok(IpcCommand::Crossfade(CrossfadeCommand::Toggle)),
             [what, value] if what == "length" => Ok(IpcCommand::CrossfadeConfig(
                 CrossfadeChange::Length(parse_number(value, "seconds")?),
             )),
             [what, value] if what == "curve" => match value.as_str() {
-                "equal" | "equal-power" => Ok(IpcCommand::CrossfadeConfig(
-                    CrossfadeChange::Curve(true),
-                )),
-                "linear" => Ok(IpcCommand::CrossfadeConfig(CrossfadeChange::Curve(
-                    false,
-                ))),
+                "equal" | "equal-power" => {
+                    Ok(IpcCommand::CrossfadeConfig(CrossfadeChange::Curve(true)))
+                }
+                "linear" => Ok(IpcCommand::CrossfadeConfig(CrossfadeChange::Curve(false))),
                 _ => Err(CommandError(
                     "usage: crossfade curve <equal|linear>".to_string(),
                 )),
             },
             [what, value] if what == "album" => match value.as_str() {
-                "on" | "true" => Ok(IpcCommand::CrossfadeConfig(
-                    CrossfadeChange::AlbumOnly(true),
-                )),
-                "off" | "false" => Ok(IpcCommand::CrossfadeConfig(
-                    CrossfadeChange::AlbumOnly(false),
-                )),
-                _ => Err(CommandError(
-                    "usage: crossfade album <on|off>".to_string(),
-                )),
+                "on" | "true" => Ok(IpcCommand::CrossfadeConfig(CrossfadeChange::AlbumOnly(
+                    true,
+                ))),
+                "off" | "false" => Ok(IpcCommand::CrossfadeConfig(CrossfadeChange::AlbumOnly(
+                    false,
+                ))),
+                _ => Err(CommandError("usage: crossfade album <on|off>".to_string())),
             },
             _ => Err(CommandError(
                 "usage: crossfade [on|off|length <s>|curve <equal|linear>|album <on|off>]"
@@ -1344,11 +1455,9 @@ fn advanced_parse(name: &str, rest: &str, usage: &str) -> Result<IpcCommand, Com
         },
 
         "stream" => match split_quoted_args(rest)?.as_slice() {
-            [what, value] if what == "quality" => {
-                Ok(IpcCommand::Stream(StreamChange::Quality(
-                    parse_number(value, "kbps")?.max(0.0) as u32,
-                )))
-            }
+            [what, value] if what == "quality" => Ok(IpcCommand::Stream(StreamChange::Quality(
+                parse_number(value, "kbps")?.max(0.0) as u32,
+            ))),
             [what, value] if what == "format" => {
                 let format = (!value.eq_ignore_ascii_case("original")).then(|| value.clone());
                 Ok(IpcCommand::Stream(StreamChange::Format(format)))
@@ -1379,18 +1488,14 @@ fn advanced_parse(name: &str, rest: &str, usage: &str) -> Result<IpcCommand, Com
             [what, value] if what == "contrast" => {
                 let contrast = parse_number(value, "contrast")?;
                 if !(-1.0..=1.0).contains(&contrast) {
-                    return Err(CommandError(
-                        "contrast must be in -1.0..=1.0".to_string(),
-                    ));
+                    return Err(CommandError("contrast must be in -1.0..=1.0".to_string()));
                 }
                 Ok(IpcCommand::ColorContrast(contrast))
             }
             [what, value] if what == "saturation" => {
                 let saturation = parse_number(value, "saturation")?;
                 if !(-1.0..=1.0).contains(&saturation) {
-                    return Err(CommandError(
-                        "saturation must be in -1.0..=1.0".to_string(),
-                    ));
+                    return Err(CommandError("saturation must be in -1.0..=1.0".to_string()));
                 }
                 Ok(IpcCommand::ColorSaturation(saturation))
             }
@@ -1402,11 +1507,9 @@ fn advanced_parse(name: &str, rest: &str, usage: &str) -> Result<IpcCommand, Com
         "sleep" => match split_quoted_args(rest)?.as_slice() {
             [target] if target == "off" => Ok(IpcCommand::Sleep(None)),
             [minutes] => Ok(IpcCommand::Sleep(Some(
-                parse_number(minutes, "minutes")?.max(1.0) as u64,
+                parse_number(minutes, "minutes")?.clamp(1.0, 1440.0) as u64,
             ))),
-            _ => Err(CommandError(
-                "usage: sleep <minutes|off>".to_string(),
-            )),
+            _ => Err(CommandError("usage: sleep <minutes|off>".to_string())),
         },
 
         "download" => parse_download(rest),
@@ -1443,13 +1546,9 @@ fn advanced_parse(name: &str, rest: &str, usage: &str) -> Result<IpcCommand, Com
             one_arg(rest, usage)?.to_string(),
         )),
 
-        "open_song_album" => Ok(IpcCommand::OpenSongAlbum(
-            one_arg(rest, usage)?.to_string(),
-        )),
+        "open_song_album" => Ok(IpcCommand::OpenSongAlbum(one_arg(rest, usage)?.to_string())),
 
-        "download_song" => Ok(IpcCommand::DownloadSong(
-            one_arg(rest, usage)?.to_string(),
-        )),
+        "download_song" => Ok(IpcCommand::DownloadSong(one_arg(rest, usage)?.to_string())),
 
         "quick_hold" => Ok(IpcCommand::QuickHold(one_arg(rest, usage)? == "on")),
 
@@ -1468,8 +1567,14 @@ fn advanced_parse(name: &str, rest: &str, usage: &str) -> Result<IpcCommand, Com
     }
 }
 
-
 /// Whether completing `name` should append a space and continue into args.
+#[cfg_attr(
+    not(feature = "gpuui"),
+    expect(
+        dead_code,
+        reason = "command-line argument completion is consumed by the GPUI front end"
+    )
+)]
 pub fn needs_argument(name: &str) -> bool {
     COMMANDS
         .iter()
@@ -1478,60 +1583,143 @@ pub fn needs_argument(name: &str) -> bool {
 }
 
 /// Shell-like argument splitting for commands whose names contain spaces.
-/// Quotes group words; backslash escapes the next character.
+/// Quotes group words; backslash escapes the next character (outside single
+/// quotes). The counterpart of [`quote_arg`]: every value it quotes tokenizes
+/// back to the same value here (D-24).
 fn split_quoted_args(input: &str) -> Result<Vec<String>, CommandError> {
-    let mut out = Vec::new();
-    let mut current = String::new();
+    Ok(split_quoted_spans(input)?
+        .into_iter()
+        .map(|(start, end)| unquote_span(&input[start..end]))
+        .collect())
+}
+
+/// Byte spans of the shell-like tokens in `input`. Splitting the raw text first
+/// and unquoting each span afterwards keeps the quote context available to
+/// callers that must split on a delimiter (see [`split_unquoted_commas`]).
+fn split_quoted_spans(input: &str) -> Result<Vec<(usize, usize)>, CommandError> {
+    let mut spans = Vec::new();
     let mut quote: Option<char> = None;
     let mut escaped = false;
-    let mut in_word = false;
-    for ch in input.chars() {
+    let mut start: Option<usize> = None;
+    for (index, ch) in input.char_indices() {
         if escaped {
-            current.push(ch);
             escaped = false;
-            in_word = true;
             continue;
         }
         if ch == '\\' && quote != Some('\'') {
+            start.get_or_insert(index);
             escaped = true;
             continue;
         }
-        if let Some(q) = quote {
-            if ch == q {
+        if let Some(active) = quote {
+            if ch == active {
                 quote = None;
-            } else {
-                current.push(ch);
             }
-            in_word = true;
             continue;
         }
         match ch {
             '"' | '\'' => {
+                start.get_or_insert(index);
                 quote = Some(ch);
-                in_word = true;
             }
             c if c.is_whitespace() => {
-                if in_word {
-                    out.push(std::mem::take(&mut current));
-                    in_word = false;
+                if let Some(begin) = start.take() {
+                    spans.push((begin, index));
                 }
             }
-            c => {
-                current.push(c);
-                in_word = true;
+            _ => {
+                start.get_or_insert(index);
             }
         }
     }
     if quote.is_some() {
         return Err(CommandError("unterminated quoted argument".to_string()));
     }
+    if let Some(begin) = start {
+        spans.push((begin, input.len()));
+    }
+    Ok(spans)
+}
+
+/// Unquotes one raw token span produced by [`split_quoted_spans`].
+fn unquote_span(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for ch in raw.chars() {
+        if escaped {
+            out.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+            continue;
+        }
+        if let Some(active) = quote {
+            if ch == active {
+                quote = None;
+            } else {
+                out.push(ch);
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            _ => out.push(ch),
+        }
+    }
     if escaped {
-        current.push('\\');
+        out.push('\\');
     }
-    if in_word {
-        out.push(current);
+    out
+}
+
+/// Byte index of the first `needle` outside quotes (and not backslash-escaped).
+/// An unterminated quote is reported so a grammar can fail with a precise
+/// message instead of silently accepting a truncated argument.
+fn find_unquoted(input: &str, needle: char) -> Result<Option<usize>, CommandError> {
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (index, ch) in input.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+            continue;
+        }
+        if let Some(active) = quote {
+            if ch == active {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            c if c == needle => return Ok(Some(index)),
+            _ => {}
+        }
     }
-    Ok(out)
+    if quote.is_some() {
+        return Err(CommandError("unterminated quoted argument".to_string()));
+    }
+    Ok(None)
+}
+
+/// Splits a raw target list on commas that are outside quotes, so a comma in a
+/// quoted title (`"AC,DC"`) stays part of that target. Each returned segment is
+/// still raw text and can be tokenized with [`split_quoted_args`].
+fn split_unquoted_commas(input: &str) -> Result<Vec<&str>, CommandError> {
+    let mut segments = Vec::new();
+    let mut rest = input;
+    while let Some(index) = find_unquoted(rest, ',')? {
+        segments.push(&rest[..index]);
+        rest = &rest[index + 1..];
+    }
+    segments.push(rest);
+    Ok(segments)
 }
 
 fn parse_download(rest: &str) -> Result<IpcCommand, CommandError> {
@@ -1605,30 +1793,8 @@ fn parse_download(rest: &str) -> Result<IpcCommand, CommandError> {
 /// Byte index of the first unquoted `;` in `input`. Used by the `playlist add`
 /// grammar to cut the target list from the playlist name.
 fn unquoted_semicolon(input: &str) -> Option<usize> {
-    let mut quote: Option<char> = None;
-    let mut escaped = false;
-    for (index, ch) in input.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if ch == '\\' && quote != Some('\'') {
-            escaped = true;
-            continue;
-        }
-        if let Some(active) = quote {
-            if ch == active {
-                quote = None;
-            }
-            continue;
-        }
-        match ch {
-            '"' | '\'' => quote = Some(ch),
-            ';' => return Some(index),
-            _ => {}
-        }
-    }
-    None
+    // An unterminated quote is reported by the tokenizer that runs next.
+    find_unquoted(input, ';').ok().flatten()
 }
 
 fn parse_playlist(rest: &str) -> Result<IpcCommand, CommandError> {
@@ -1640,7 +1806,11 @@ fn parse_playlist(rest: &str) -> Result<IpcCommand, CommandError> {
         Some(index) => (&rest[..index], Some(&rest[index + 1..])),
         None => (rest, None),
     };
-    let tokens = split_quoted_args(head)?;
+    let spans = split_quoted_spans(head)?;
+    let tokens: Vec<String> = spans
+        .iter()
+        .map(|(start, end)| unquote_span(&head[*start..*end]))
+        .collect();
     let Some(subcommand) = tokens.first().map(String::as_str) else {
         return Err(CommandError("usage: playlist <create|add> ...".to_string()));
     };
@@ -1665,12 +1835,23 @@ fn parse_playlist(rest: &str) -> Result<IpcCommand, CommandError> {
             Ok(IpcCommand::PlaylistCreate { name, offline })
         }
         "add" | "rm" => {
-            let mut targets: Vec<String> = tokens[1..]
-                .iter()
-                .flat_map(|value| value.split(','))
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-                .collect();
+            // Split the *raw* target text on unquoted commas first (D-24), so a
+            // comma inside a quoted title stays part of that target. Quoted
+            // segments are tokenized afterwards, which also keeps the legacy
+            // whitespace-separated targets working.
+            let raw_targets = match spans.first() {
+                Some((_, end)) => &head[*end..],
+                None => "",
+            };
+            let mut targets: Vec<String> = Vec::new();
+            for segment in split_unquoted_commas(raw_targets)? {
+                targets.extend(
+                    split_quoted_args(segment)?
+                        .into_iter()
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty()),
+                );
+            }
             // `playlist rm ; <playlist>` (an explicit cutoff with no targets)
             // deletes the playlist itself. The `;` is also what switches the
             // command-line suggestions to playlist names.
@@ -1681,9 +1862,7 @@ fn parse_playlist(rest: &str) -> Result<IpcCommand, CommandError> {
                 let values = split_quoted_args(tail)?;
                 let playlist = values.join(" ").trim().trim_matches(',').trim().to_string();
                 if playlist.is_empty() {
-                    return Err(CommandError(
-                        "usage: playlist rm; <playlist>".to_string(),
-                    ));
+                    return Err(CommandError("usage: playlist rm; <playlist>".to_string()));
                 }
                 return Ok(IpcCommand::PlaylistDelete { playlist });
             }
@@ -1724,7 +1903,9 @@ fn parse_playlist(rest: &str) -> Result<IpcCommand, CommandError> {
                 Ok(IpcCommand::PlaylistAdd { targets, playlist })
             }
         }
-        _ => Err(CommandError("usage: playlist <create|add|rm> ...".to_string())),
+        _ => Err(CommandError(
+            "usage: playlist <create|add|rm> ...".to_string(),
+        )),
     }
 }
 
@@ -1738,12 +1919,39 @@ fn is_queue_target(value: &str) -> bool {
     value.eq_ignore_ascii_case("queue")
 }
 
+/// Quotes one argument so [`split_quoted_args`] (and the quote-aware list
+/// splitters) recover the exact value (D-24).
+///
+/// Quotes are only added when the text would otherwise tokenize differently:
+/// whitespace separates arguments, `\` escapes and `'`/`"` open quotes, and the
+/// playlist grammars treat unquoted `,`/`;` as separators. Inside the double
+/// quotes, `\` and `"` are backslash-escaped; every other character stays
+/// literal.
 pub(crate) fn quote_arg(value: &str) -> String {
-    if value.is_empty() || value.chars().any(char::is_whitespace) || value.contains('"') {
-        format!("\"{}\"", value.replace('"', "\\\""))
-    } else {
-        value.to_string()
+    if !needs_quoting(value) {
+        return value.to_string();
     }
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' | '"' => {
+                quoted.push('\\');
+                quoted.push(ch);
+            }
+            _ => quoted.push(ch),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
+/// Whether `value` would be misparsed as a bare argument.
+fn needs_quoting(value: &str) -> bool {
+    value.is_empty()
+        || value
+            .chars()
+            .any(|ch| ch.is_whitespace() || matches!(ch, '\\' | '"' | '\'' | ',' | ';'))
 }
 
 fn canonical_download(request: &DownloadRequest) -> String {
@@ -1818,7 +2026,6 @@ pub fn canonical_string(command: &IpcCommand) -> String {
 fn advanced_canonical(command: &IpcCommand) -> String {
     use IpcCommand::*;
     match command {
-
         ColorContrast(contrast) => format!("colors contrast {contrast}"),
         ColorSaturation(saturation) => format!("colors saturation {saturation}"),
 
@@ -1860,6 +2067,10 @@ fn advanced_canonical(command: &IpcCommand) -> String {
             out.push_str(&quote_arg(playlist));
             out
         }
+        ShuffleMode { enabled: true } => "mpris_shuffle:on".to_string(),
+
+        ShuffleMode { enabled: false } => "mpris_shuffle:off".to_string(),
+
         Shuffle {
             target: ShuffleTarget::Queue,
         } => "shuffle queue".to_string(),
@@ -1952,13 +2163,9 @@ fn advanced_canonical(command: &IpcCommand) -> String {
             format!("crossfade length {seconds}")
         }
 
-        CrossfadeConfig(CrossfadeChange::Curve(true)) => {
-            "crossfade curve equal".to_string()
-        }
+        CrossfadeConfig(CrossfadeChange::Curve(true)) => "crossfade curve equal".to_string(),
 
-        CrossfadeConfig(CrossfadeChange::Curve(false)) => {
-            "crossfade curve linear".to_string()
-        }
+        CrossfadeConfig(CrossfadeChange::Curve(false)) => "crossfade curve linear".to_string(),
 
         CrossfadeConfig(CrossfadeChange::AlbumOnly(enabled)) => {
             format!("crossfade album {}", if *enabled { "on" } else { "off" })
@@ -2029,8 +2236,14 @@ fn advanced_canonical(command: &IpcCommand) -> String {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    not(any(test, feature = "gpuui")),
+    expect(
+        dead_code,
+        reason = "command-line completions are consumed by the GPUI front end"
+    )
+)]
 pub struct Suggestion {
     pub start: usize,
     pub end: usize,
@@ -2040,6 +2253,13 @@ pub struct Suggestion {
     pub completion: Option<String>,
 }
 
+#[cfg_attr(
+    not(any(test, feature = "gpuui")),
+    expect(
+        dead_code,
+        reason = "command-line completions are consumed by the GPUI front end"
+    )
+)]
 fn token_at(input: &str, cursor: usize) -> (usize, usize, usize) {
     let mut cursor = cursor.min(input.len());
     while cursor > 0 && !input.is_char_boundary(cursor) {
@@ -2076,6 +2296,13 @@ fn token_at(input: &str, cursor: usize) -> (usize, usize, usize) {
 /// Parse the current command-line token into a scoped search request. Only
 /// commands whose previous argument names a scope participate; the query is
 /// the text after that scope plus the partially typed current token.
+#[cfg_attr(
+    not(any(test, feature = "gpuui")),
+    expect(
+        dead_code,
+        reason = "command-line completions are consumed by the GPUI front end"
+    )
+)]
 pub fn suggestion_request(input: &str, cursor: usize) -> Option<SuggestRequest> {
     let (start, end, index) = token_at(input, cursor);
     if index == 0 {
@@ -2167,10 +2394,24 @@ pub fn suggestion_request(input: &str, cursor: usize) -> Option<SuggestRequest> 
     })
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "only the command-line completion tests call the context-free wrapper"
+    )
+)]
 pub fn suggestions(input: &str, cursor: usize) -> Vec<Suggestion> {
     suggestions_with(input, cursor, &SuggestionContext::default())
 }
 
+#[cfg_attr(
+    not(any(test, feature = "gpuui")),
+    expect(
+        dead_code,
+        reason = "command-line completions are consumed by the GPUI front end"
+    )
+)]
 pub fn suggestions_with(
     input: &str,
     cursor: usize,
@@ -2207,7 +2448,7 @@ pub fn suggestions_with(
         return Vec::new();
     }
     let args: Vec<&'static str> = match &spec.form {
-        CommandForm::Bare(_) | CommandForm::Advanced(ArgHints::None) => return Vec::new(),
+        CommandForm::Bare(_) => return Vec::new(),
         CommandForm::Word { values, .. } | CommandForm::Exact(values) => values
             .iter()
             .filter(|(label, _)| !label.is_empty())
@@ -2247,6 +2488,13 @@ pub fn suggestions_with(
 ///   name region is replaced (so a two-word query completes in one Tab).
 ///
 /// Async search hits replace the list after the debounce.
+#[cfg_attr(
+    not(any(test, feature = "gpuui")),
+    expect(
+        dead_code,
+        reason = "command-line completions are consumed by the GPUI front end"
+    )
+)]
 fn playlist_suggestions(
     input: &str,
     start: usize,
@@ -2302,9 +2550,7 @@ fn playlist_suggestions(
             completion: Some("selected".to_string()),
         });
     }
-    if !playlist_only
-        && before.get(1).copied() == Some("add")
-        && "queue".starts_with(&prefix_lower)
+    if !playlist_only && before.get(1).copied() == Some("add") && "queue".starts_with(&prefix_lower)
     {
         out.push(Suggestion {
             start,
@@ -2331,6 +2577,13 @@ fn playlist_suggestions(
 
 /// Completion for the download grammar. The command line context is a
 /// snapshot, so suggestions stay synchronous; execution resolves live search.
+#[cfg_attr(
+    not(any(test, feature = "gpuui")),
+    expect(
+        dead_code,
+        reason = "command-line completions are consumed by the GPUI front end"
+    )
+)]
 fn download_suggestions(
     input: &str,
     cursor: usize,
@@ -2408,6 +2661,13 @@ fn download_suggestions(
     out
 }
 
+#[cfg_attr(
+    not(any(test, feature = "gpuui")),
+    expect(
+        dead_code,
+        reason = "command-line completions are consumed by the GPUI front end"
+    )
+)]
 fn current_download_path(current: &CurrentTrack) -> String {
     let mut path = quote_arg(&current.artist);
     if !current.album.is_empty() {
@@ -2435,9 +2695,7 @@ mod tests {
         );
         assert_eq!(
             parse("crossfade curve linear"),
-            Ok(IpcCommand::CrossfadeConfig(CrossfadeChange::Curve(
-                false
-            )))
+            Ok(IpcCommand::CrossfadeConfig(CrossfadeChange::Curve(false)))
         );
         assert_eq!(
             parse("crossfade album on"),
@@ -2447,9 +2705,7 @@ mod tests {
         );
         assert!(parse("crossfade curve maybe").is_err());
         assert_eq!(
-            canonical_string(&IpcCommand::CrossfadeConfig(CrossfadeChange::Length(
-                7.0
-            ))),
+            canonical_string(&IpcCommand::CrossfadeConfig(CrossfadeChange::Length(7.0))),
             "crossfade length 7"
         );
     }
@@ -2468,10 +2724,7 @@ mod tests {
         assert_eq!(parse("scrobble off"), Ok(IpcCommand::Scrobble(false)));
         assert!(parse("scrobble").is_err());
         assert!(parse("scrobble maybe").is_err());
-        assert_eq!(
-            canonical_string(&IpcCommand::Scrobble(true)),
-            "scrobble on"
-        );
+        assert_eq!(canonical_string(&IpcCommand::Scrobble(true)), "scrobble on");
     }
 
     #[test]
@@ -2483,9 +2736,75 @@ mod tests {
     }
 
     #[test]
+    fn rejects_non_finite_floats_and_clamps_sleep() {
+        for bad in ["NaN", "nan", "inf", "-inf", "Infinity", "-Infinity"] {
+            assert!(parse(&format!("sleep {bad}")).is_err(), "sleep {bad}");
+            assert!(
+                parse(&format!("set_volume {bad}")).is_err(),
+                "set_volume {bad}"
+            );
+            assert!(parse(&format!("seek {bad}")).is_err(), "seek {bad}");
+            assert!(
+                parse(&format!("seek_relative {bad}")).is_err(),
+                "seek_relative {bad}"
+            );
+            assert!(
+                parse(&format!("mpris_volume:{bad}")).is_err(),
+                "mpris_volume:{bad}"
+            );
+            assert!(
+                parse(&format!("mpris_seek:{bad}")).is_err(),
+                "mpris_seek:{bad}"
+            );
+            assert!(
+                parse(&format!("mpris_position:{bad}")).is_err(),
+                "mpris_position:{bad}"
+            );
+            assert!(
+                parse(&format!("crossfade length {bad}")).is_err(),
+                "crossfade length {bad}"
+            );
+            assert!(
+                parse(&format!("colors contrast {bad}")).is_err(),
+                "colors contrast {bad}"
+            );
+            assert!(
+                parse(&format!("colors saturation {bad}")).is_err(),
+                "colors saturation {bad}"
+            );
+            assert!(
+                parse(&format!("stream quality {bad}")).is_err(),
+                "stream quality {bad}"
+            );
+            assert!(
+                parse(&format!("stream size {bad}")).is_err(),
+                "stream size {bad}"
+            );
+            assert!(
+                parse(&format!("stream fixed {bad}")).is_err(),
+                "stream fixed {bad}"
+            );
+        }
+
+        assert_eq!(parse("sleep 0"), Ok(IpcCommand::Sleep(Some(1))));
+        assert_eq!(parse("sleep -5"), Ok(IpcCommand::Sleep(Some(1))));
+        assert_eq!(parse("sleep 1"), Ok(IpcCommand::Sleep(Some(1))));
+        assert_eq!(parse("sleep 1440"), Ok(IpcCommand::Sleep(Some(1440))));
+        assert_eq!(parse("sleep 1441"), Ok(IpcCommand::Sleep(Some(1440))));
+        assert_eq!(
+            parse("sleep 99999999999999999999"),
+            Ok(IpcCommand::Sleep(Some(1440)))
+        );
+        assert_eq!(parse("sleep 1e30"), Ok(IpcCommand::Sleep(Some(1440))));
+    }
+
+    #[test]
     fn advanced_command_usage_advertises_every_parser_literal() {
         for (name, literals) in [
-            ("stream", &["quality", "format", "cache", "size", "fixed"][..]),
+            (
+                "stream",
+                &["quality", "format", "cache", "size", "fixed"][..],
+            ),
             (
                 "output",
                 &[
@@ -2576,9 +2895,7 @@ mod tests {
         );
         assert_eq!(
             parse("stream fixed 48000"),
-            Ok(IpcCommand::Stream(StreamChange::FixedRate(Some(
-                48_000
-            ))))
+            Ok(IpcCommand::Stream(StreamChange::FixedRate(Some(48_000))))
         );
         assert_eq!(
             parse("stream fixed off"),
@@ -2612,7 +2929,10 @@ mod tests {
                 backend: Some(OutputBackend::Alsa),
                 device: Some("hw:0,0".to_string())
             }),
-            "output alsa hw:0,0"
+            // A comma is quoted so the playlist grammars can treat unquoted
+            // commas as target separators (D-24); re-parsing still yields the
+            // exact device name.
+            "output alsa \"hw:0,0\""
         );
         assert!(parse("output backend coreaudio").is_err());
     }
@@ -2678,8 +2998,14 @@ mod tests {
 
     #[test]
     fn parses_aliases_and_numbers() {
-        assert_eq!(parse("track next"), Ok(IpcCommand::Track(TrackCommand::Next)));
-        assert_eq!(parse("track previous"), Ok(IpcCommand::Track(TrackCommand::Previous)));
+        assert_eq!(
+            parse("track next"),
+            Ok(IpcCommand::Track(TrackCommand::Next))
+        );
+        assert_eq!(
+            parse("track previous"),
+            Ok(IpcCommand::Track(TrackCommand::Previous))
+        );
         assert_eq!(parse("volume 40"), Ok(IpcCommand::SetVolume(40.0)));
         assert_eq!(parse("seek 30"), Ok(IpcCommand::Seek(30.0)));
         assert!(parse("set_volume 101").is_err());
@@ -2937,7 +3263,8 @@ mod tests {
         let prefixed = suggestions_with("playlist add sel", "playlist add sel".len(), &context);
         assert_eq!(prefixed.len(), 1);
         assert_eq!(prefixed[0].completion.as_deref(), Some("selected"));
-        let queue_prefixed = suggestions_with("playlist add que", "playlist add que".len(), &context);
+        let queue_prefixed =
+            suggestions_with("playlist add que", "playlist add que".len(), &context);
         assert_eq!(queue_prefixed.len(), 1);
         assert_eq!(queue_prefixed[0].completion.as_deref(), Some("queue"));
         // `playlist rm` has no selected/queue target form.
@@ -3359,6 +3686,8 @@ mod tests {
             "mpris_volume:40",
             "mpris_seek:5000000",
             "mpris_position:5000000",
+            "mpris_shuffle:on",
+            "mpris_shuffle:off",
         ];
         for sample in samples {
             assert!(parse(sample).is_ok(), "{sample}");
@@ -3371,10 +3700,7 @@ mod tests {
             canonical_string(&IpcCommand::Sync(SyncMode::All)),
             "sync all"
         );
-        assert_eq!(
-            canonical_string(&IpcCommand::OutputList),
-            "output list"
-        );
+        assert_eq!(canonical_string(&IpcCommand::OutputList), "output list");
         assert_eq!(
             canonical_string(&IpcCommand::OutputDefault),
             "output default"
@@ -3391,14 +3717,8 @@ mod tests {
             canonical_string(&IpcCommand::Stream(StreamChange::Cache(true))),
             "stream cache on"
         );
-        assert_eq!(
-            canonical_string(&IpcCommand::Sleep(Some(30))),
-            "sleep 30"
-        );
-        assert_eq!(
-            canonical_string(&IpcCommand::Sleep(None)),
-            "sleep off"
-        );
+        assert_eq!(canonical_string(&IpcCommand::Sleep(Some(30))), "sleep 30");
+        assert_eq!(canonical_string(&IpcCommand::Sleep(None)), "sleep off");
         assert_eq!(
             canonical_string(&IpcCommand::Wipe(WipeScope::Lyrics)),
             "wipe lyrics"
@@ -3407,6 +3727,93 @@ mod tests {
             canonical_string(&IpcCommand::QuickCycle { next: false }),
             "quick_cycle prev"
         );
-        assert_eq!(canonical_string(&parse("track next").unwrap()), "track next");
+        assert_eq!(
+            canonical_string(&parse("track next").unwrap()),
+            "track next"
+        );
+    }
+
+    /// D-24: `quote_arg` must emit a form that `split_quoted_args` turns back
+    /// into the exact same value, including `\`, quotes, `;` and `,`.
+    #[test]
+    fn quoting_round_trips_backslashes_quotes_commas_and_semicolons() {
+        for value in [
+            "plain",
+            "two words",
+            "AC\\DC",
+            "O'Brien",
+            "it's",
+            "a;b",
+            "a,b",
+            "semi;comma,",
+            "\"quoted\"",
+            "  padded  ",
+        ] {
+            let quoted = quote_arg(value);
+            assert_eq!(
+                split_quoted_args(&quoted).expect("quoted argument tokenizes"),
+                vec![value.to_string()],
+                "tokenizer round trip for {value:?} via {quoted:?}"
+            );
+            assert_eq!(
+                unquote_span(&quoted),
+                value,
+                "single-span decode for {value:?} via {quoted:?}"
+            );
+        }
+        // The canonical printer and the parser must agree for values that used
+        // to be emitted bare and lose their punctuation.
+        for value in [
+            "plain",
+            "two words",
+            "AC\\DC",
+            "O'Brien",
+            "a;b",
+            "a,b",
+            "semi;comma,",
+        ] {
+            let command = IpcCommand::PlaylistAdd {
+                targets: vec![value.to_string()],
+                playlist: "Mix, One; Two".to_string(),
+            };
+            let canonical = canonical_string(&command);
+            assert_eq!(parse(&canonical), Ok(command), "canonical {canonical:?}");
+        }
+    }
+
+    /// D-24: `playlist add`/`rm` split targets on commas only outside quotes, so
+    /// a quoted title containing a comma is one target.
+    #[test]
+    fn playlist_targets_split_commas_only_outside_quotes() {
+        assert_eq!(
+            parse("playlist add \"AC,DC\", \"O'Brien\"; \"Mix, One\""),
+            Ok(IpcCommand::PlaylistAdd {
+                targets: vec!["AC,DC".to_string(), "O'Brien".to_string()],
+                playlist: "Mix, One".to_string(),
+            })
+        );
+        assert_eq!(
+            parse("playlist add a1, b2; P"),
+            Ok(IpcCommand::PlaylistAdd {
+                targets: vec!["a1".to_string(), "b2".to_string()],
+                playlist: "P".to_string(),
+            }),
+            "unquoted commas still separate targets"
+        );
+        assert_eq!(
+            parse("playlist rm \"AC,DC\"; P"),
+            Ok(IpcCommand::PlaylistRemove {
+                targets: vec!["AC,DC".to_string()],
+                playlist: "P".to_string(),
+            })
+        );
+        // Legacy form (playlist = last token) still works with commas in titles.
+        assert_eq!(
+            parse("playlist add \"AC,DC\" \"Road Trip\""),
+            Ok(IpcCommand::PlaylistAdd {
+                targets: vec!["AC,DC".to_string()],
+                playlist: "Road Trip".to_string(),
+            })
+        );
     }
 }

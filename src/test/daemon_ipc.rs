@@ -58,7 +58,11 @@ impl Harness {
             client: "test-ui".to_string(),
             features: UI_FEATURES,
         };
-        proto_write(&mut stream, &Frame::new(KIND_HELLO, json_encode(&hello).unwrap())).await;
+        proto_write(
+            &mut stream,
+            &Frame::new(KIND_HELLO, json_encode(&hello).unwrap()),
+        )
+        .await;
 
         let welcome = next_frame(&mut stream).await;
         let message = Message::decode(&welcome).unwrap();
@@ -142,7 +146,11 @@ async fn handshake_rejects_a_protocol_mismatch() {
         client: "old-ui".to_string(),
         features: UI_FEATURES,
     };
-    proto_write(&mut stream, &Frame::new(KIND_HELLO, json_encode(&hello).unwrap())).await;
+    proto_write(
+        &mut stream,
+        &Frame::new(KIND_HELLO, json_encode(&hello).unwrap()),
+    )
+    .await;
     let message = read_message(&mut stream).await;
     let Message::Reject(reject) = message else {
         panic!("expected a rejection, got {message:?}");
@@ -197,10 +205,7 @@ async fn bridge_requests_are_delivered_and_replies_round_trip() {
     assert_eq!(decoded.method, "play_song");
 
     let reply = ReplyJson::ok(7);
-    outbox.send(&Frame::new(
-        KIND_REPLY_JSON,
-        json_encode(&reply).unwrap(),
-    ));
+    outbox.send(&Frame::new(KIND_REPLY_JSON, json_encode(&reply).unwrap()));
     let message = read_message(&mut stream).await;
     let Message::Reply(reply) = message else {
         panic!("expected a reply, got {message:?}");
@@ -270,11 +275,8 @@ async fn a_silent_client_is_closed_by_the_heartbeat() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-        let frame = tokio::time::timeout(
-            left.min(Duration::from_secs(2)),
-            read_frame(&mut stream),
-        )
-        .await;
+        let frame =
+            tokio::time::timeout(left.min(Duration::from_secs(2)), read_frame(&mut stream)).await;
         match frame {
             Ok(Ok(Some(frame))) => match Message::decode(&frame) {
                 Ok(Message::Ping(_)) => continue,
@@ -309,4 +311,47 @@ async fn a_client_that_stops_reading_is_dropped() {
     drop(_stream);
     outbox.close();
     harness.drop_gone(conn).await;
+}
+
+#[tokio::test]
+async fn omitted_features_fall_back_to_the_role_defaults_and_are_masked() {
+    // D-15: the daemon negotiates the surface from `Hello.features`; a client
+    // that omits the bits keeps its role's default surface, and bits outside
+    // its role's mask are never advertised back.
+    let harness = harness();
+    let mut stream = harness.connect().await;
+    let hello = Hello {
+        proto: VERSION,
+        role: Role::Ui,
+        client: "old-ui".to_string(),
+        features: 0,
+    };
+    proto_write(
+        &mut stream,
+        &Frame::new(KIND_HELLO, json_encode(&hello).unwrap()),
+    )
+    .await;
+    let message = read_message(&mut stream).await;
+    let Message::Welcome(welcome) = message else {
+        panic!("expected a welcome, got {message:?}");
+    };
+    assert_eq!(welcome.features, UI_FEATURES);
+
+    let mut stream = harness.connect().await;
+    let hello = Hello {
+        proto: VERSION,
+        role: Role::Control,
+        client: "tool".to_string(),
+        features: u32::MAX,
+    };
+    proto_write(
+        &mut stream,
+        &Frame::new(KIND_HELLO, json_encode(&hello).unwrap()),
+    )
+    .await;
+    let message = read_message(&mut stream).await;
+    let Message::Welcome(welcome) = message else {
+        panic!("expected a welcome, got {message:?}");
+    };
+    assert_eq!(welcome.features, CONTROL_FEATURES);
 }

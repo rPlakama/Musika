@@ -30,7 +30,10 @@ const SAMPLES: &[(&str, &str)] = &[
     ("radio save", "radio save"),
     ("radio save --offline", "radio save --offline"),
     ("playlist create \"My Mix\"", "playlist create My Mix"),
-    ("playlist create \"My Mix\" --offline", "playlist create My Mix --offline"),
+    (
+        "playlist create \"My Mix\" --offline",
+        "playlist create My Mix --offline",
+    ),
     ("playlist add a1 b2; P", "playlist add a1 b2; P"),
     ("playlist add selected; P", "playlist add selected; P"),
     ("playlist add queue; P", "playlist add queue; P"),
@@ -195,7 +198,9 @@ fn documented_commands_are_registered() {
     assert!(!documented.is_empty(), "the docs table must be found");
     for name in &documented {
         assert!(
-            crate::ipc_command::COMMANDS.iter().any(|spec| spec.name == name),
+            crate::ipc_command::COMMANDS
+                .iter()
+                .any(|spec| spec.name == name),
             "documented command {name:?} is not in the registry"
         );
     }

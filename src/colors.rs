@@ -28,7 +28,10 @@
 //! the MIT/Apache `material-colors` crate and reimplement the surrounding
 //! pipeline, honoring DMS's seed/scheme split (`MATUGENSTUDY.md`).
 
-#![expect(dead_code, reason = "some milestone APIs (previews/settings) land later")]
+#![expect(
+    dead_code,
+    reason = "some milestone APIs (previews/settings) land later"
+)]
 
 macro_rules! name_enum {
     (

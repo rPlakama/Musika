@@ -200,15 +200,6 @@ fn warm_file(path: &Path) -> std::io::Result<()> {
     crate::linux::prefetch_file(path)
 }
 
-/// Bounds the WAL after a successful bulk write. Only call this from a
-/// completed sync, never from a cancelled or failed one.
-pub async fn checkpoint_truncate(pool: &SqlitePool) -> Result<()> {
-    sqlx::raw_sql("PRAGMA wal_checkpoint(TRUNCATE)")
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 /// One-time import of the old per-domain databases (backup, not required).
 ///
 /// Each physical database keeps its own flag: a crash between the two halves
@@ -298,7 +289,7 @@ async fn media_meta_flag(pool: &SqlitePool) -> Result<bool> {
     Ok(value.is_some())
 }
 
-async fn import_file(
+pub(crate) async fn import_file(
     conn: &mut sqlx::SqliteConnection,
     path: &Path,
     tables: &[&'static str],
@@ -310,31 +301,37 @@ async fn import_file(
         .bind(path.to_string_lossy().to_string())
         .execute(&mut *conn)
         .await?;
-    for table in tables {
-        let exists: Option<String> = sqlx::query_scalar(
-            "SELECT name FROM legacy.sqlite_master WHERE type IN ('table', 'view') AND name = ?1",
-        )
-        .bind(table)
-        .fetch_optional(&mut *conn)
-        .await?;
-        if exists.is_some() {
-            let sql = if *table == "song_search" {
-                "INSERT OR IGNORE INTO main.song_search
-                     (rowid, title, artist, album, duration, song_id, play_count)
-                 SELECT rowid, title, artist, album, duration, song_id, play_count
-                 FROM legacy.song_search"
-                    .to_string()
-            } else {
-                format!("INSERT OR IGNORE INTO main.{table} SELECT * FROM legacy.{table}")
-            };
-            sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
-                .execute(&mut *conn)
-                .await?;
+    let import_result: Result<()> = async {
+        for table in tables {
+            let exists: Option<String> = sqlx::query_scalar(
+                "SELECT name FROM legacy.sqlite_master WHERE type IN ('table', 'view') AND name = ?1",
+            )
+            .bind(table)
+            .fetch_optional(&mut *conn)
+            .await?;
+            if exists.is_some() {
+                let sql = if *table == "song_search" {
+                    "INSERT OR IGNORE INTO main.song_search
+                         (rowid, title, artist, album, duration, song_id, play_count)
+                     SELECT rowid, title, artist, album, duration, song_id, play_count
+                     FROM legacy.song_search"
+                        .to_string()
+                } else {
+                    format!("INSERT OR IGNORE INTO main.{table} SELECT * FROM legacy.{table}")
+                };
+                sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+                    .execute(&mut *conn)
+                    .await?;
+            }
         }
+        Ok(())
     }
-    sqlx::query("DETACH DATABASE legacy")
+    .await;
+    let detach_result = sqlx::query("DETACH DATABASE legacy")
         .execute(&mut *conn)
-        .await?;
+        .await;
+    import_result?;
+    detach_result?;
     Ok(())
 }
 
@@ -414,49 +411,111 @@ fn remove_dir(dir: &Path) -> Result<()> {
     }
 }
 
-/// The full reset: the pools close, **every entry under the config
-/// directory** goes (databases, WAL/SHM sidecars, covers, media, the
-/// `index.txt` mirror — the running IPC socket stays), the cache-tier media
-/// (`playback_dir`, outside the config tree) goes with it, and the caller
-/// re-initialises the databases with fresh files and schemas. An old or
-/// foreign schema cannot survive this.
+/// The full reset: the pools close, **Musika-owned data files and directories**
+/// under `data_root()` go (databases, WAL/SHM sidecars, covers, media,
+/// playback, playlists, `index.txt`), while global account/config state
+/// (`accounts.json`, `accounts/`, `key`, `eqs/`, sockets, and any non-Musika
+/// sibling entries) is never touched. Cache-tier media (`media_dir`,
+/// `playback_dir`, `covers_dir`) goes too, and the caller re-initialises
+/// fresh files and schemas.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the full database wipe is exercised only by the wipe tests"
+    )
+)]
 pub async fn wipe_files(dbs: &Dbs) -> Result<()> {
     crate::search::index::clear();
     // Close first: an open pool keeps the deleted inodes alive and the next
     // login would write into unlinked files.
-    for pool in [&dbs.library, &dbs.media] {
+    for pool in [&dbs.library, &dbs.sync, &dbs.search, &dbs.media] {
         pool.clone().close().await;
     }
     let dir = data_root()?;
-    let global = config_dir()?;
-    let socket = crate::ipc::socket_path();
-    let entries =
-        std::fs::read_dir(&dir).with_context(|| format!("failed to list {}", dir.display()))?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path == socket
-            || path == global.join("accounts.json")
-            || path == global.join("accounts")
-            || path == global.join("key")
-            || path == global.join("accounts.json.tmp")
-        {
-            continue;
-        }
-        let result = if path.is_dir() {
-            std::fs::remove_dir_all(&path)
-        } else {
-            std::fs::remove_file(&path)
-        };
-        if let Err(err) = result {
-            eprintln!("wipe: could not remove {}: {err}", path.display());
+    let extra_dirs: Vec<PathBuf> = [covers_dir(), media_dir(), playback_dir()]
+        .into_iter()
+        .flatten()
+        .collect();
+    wipe_allowlisted_in(&dir, &extra_dirs)
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the full database wipe is exercised only by the wipe tests"
+    )
+)]
+const WIPE_DB_FILES: &[&str] = &[
+    "library.db",
+    "media.db",
+    "credentials.db",
+    "search.db",
+    "covers.db",
+    "lyrics.db",
+    "colors.db",
+    "statussave.db",
+    "artist_user.db",
+    "download.db",
+    "playlist.db",
+];
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the full database wipe is exercised only by the wipe tests"
+    )
+)]
+const WIPE_PLAIN_FILES: &[&str] = &["index.txt"];
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the full database wipe is exercised only by the wipe tests"
+    )
+)]
+const WIPE_DIRS: &[&str] = &["covers", "media", "playback", "playlists"];
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the full database wipe is exercised only by the wipe tests"
+    )
+)]
+fn remove_file_best_effort(path: &Path) {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => eprintln!("wipe: could not remove {}: {err}", path.display()),
+    }
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the full database wipe is exercised only by the wipe tests"
+    )
+)]
+fn wipe_allowlisted_in(dir: &Path, extra_dirs: &[PathBuf]) -> Result<()> {
+    for db_name in WIPE_DB_FILES {
+        for suffix in ["", "-wal", "-shm"] {
+            remove_file_best_effort(&dir.join(format!("{db_name}{suffix}")));
         }
     }
-    // Media is explicitly wiped wherever it lives: the config-tier dir is a
-    // config-tree entry above (env overrides can point it elsewhere), and
-    // the playback/rolling tier sits under the XDG cache, outside the config
-    // dir — "wipe everything" leaves no media behind anywhere.
-    for dir in [media_dir(), playback_dir()].into_iter().flatten() {
-        remove_dir(&dir)?;
+    for file_name in WIPE_PLAIN_FILES {
+        remove_file_best_effort(&dir.join(file_name));
+    }
+    for dir_name in WIPE_DIRS {
+        remove_dir(&dir.join(dir_name))?;
+    }
+    // Media is explicitly wiped wherever it lives: env overrides can point
+    // covers/media/playback outside `data_root()`.
+    for extra in extra_dirs {
+        remove_dir(extra)?;
     }
     Ok(())
 }
@@ -673,7 +732,21 @@ db_path! {
     download_path: "download.db", "MUSIKA_DOWNLOAD_FILE";
     playlist_path: "playlist.db", "MUSIKA_PLAYLIST_FILE";
     mirror_path: "index.txt", "MUSIKA_INDEX_MIRROR";
-    scroll_path: "scroll.json", "MUSIKA_SCROLL_FILE";
+}
+
+/// Path to the persisted scroll-memory document (GPUI front end only).
+#[cfg_attr(
+    not(feature = "gpuui"),
+    expect(
+        dead_code,
+        reason = "the scroll-memory document is only read by the GPUI front end"
+    )
+)]
+pub fn scroll_path() -> Result<PathBuf> {
+    dir_from_env(
+        "MUSIKA_SCROLL_FILE",
+        || Ok(data_root()?.join("scroll.json")),
+    )
 }
 
 /// Directory holding the cached cover-art blobs.
@@ -691,12 +764,15 @@ pub fn media_dir() -> Result<PathBuf> {
 /// purgeable without losing user data.
 pub fn playback_dir() -> Result<PathBuf> {
     dir_from_env("MUSIKA_MEDIA_CACHE_DIR", || {
-        Ok(data_root()?.join("playback"))
+        Ok(cache_dir()?.join("playback"))
     })
 }
 
 fn cache_dir() -> Result<PathBuf> {
-    dir_from_env("XDG_CACHE_HOME", || Ok(home_dir()?.join(".cache")))
+    match non_empty_env("XDG_CACHE_HOME") {
+        Some(dir) => Ok(PathBuf::from(dir).join("musika")),
+        None => Ok(home_dir()?.join(".cache").join("musika")),
+    }
 }
 
 fn dir_from_env(env: &str, fallback: impl FnOnce() -> Result<PathBuf>) -> Result<PathBuf> {
@@ -713,9 +789,47 @@ fn home_dir() -> Result<PathBuf> {
 }
 
 pub fn config_dir() -> Result<PathBuf> {
-    dir_from_env("XDG_CONFIG_HOME", || {
-        Ok(home_dir()?.join(".config").join("musika"))
-    })
+    match non_empty_env("XDG_CONFIG_HOME") {
+        Some(dir) => Ok(PathBuf::from(dir).join("musika")),
+        None => Ok(home_dir()?.join(".config").join("musika")),
+    }
+}
+
+const LEGACY_XDG_FILES: &[&str] = &["accounts.json", "library.db", "media.db", "key"];
+
+fn legacy_xdg_config_warning(xdg_config_home: &Path) -> Option<String> {
+    let target = xdg_config_home.join("musika");
+    if target.exists() {
+        return None;
+    }
+    let found: Vec<&'static str> = LEGACY_XDG_FILES
+        .iter()
+        .copied()
+        .filter(|name| xdg_config_home.join(name).exists())
+        .collect();
+    if found.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "musika: found legacy config files directly in XDG_CONFIG_HOME ({}): {}; Musika now uses {} and will not move files automatically",
+        xdg_config_home.display(),
+        found.join(", "),
+        target.display()
+    ))
+}
+
+/// Warns once on startup if `XDG_CONFIG_HOME` is non-empty,
+/// `$XDG_CONFIG_HOME/musika` does not exist, and legacy Musika files exist
+/// directly in `$XDG_CONFIG_HOME`. Warn-only: never moves files.
+pub fn warn_legacy_xdg_config_once() {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        if let Some(xdg) = non_empty_env("XDG_CONFIG_HOME")
+            && let Some(warning) = legacy_xdg_config_warning(Path::new(&xdg))
+        {
+            eprintln!("{warning}");
+        }
+    });
 }
 
 fn non_empty_env(key: &str) -> Option<String> {
@@ -751,9 +865,17 @@ mod options_tests {
         ensure_dir(&dir).expect("temp dir");
         let path = dir.join("lazy.db");
         let pool = open_lazy_pool(path, 1, Durability::Normal).expect("lazy pool");
-        assert_eq!(pool.size(), 0, "a lazy pool must not open a connection at construction");
+        assert_eq!(
+            pool.size(),
+            0,
+            "a lazy pool must not open a connection at construction"
+        );
         drop(pool.acquire().await.expect("first acquire"));
-        assert_eq!(pool.size(), 1, "the first acquire opens exactly one connection");
+        assert_eq!(
+            pool.size(),
+            1,
+            "the first acquire opens exactly one connection"
+        );
         pool.close().await;
         _ = std::fs::remove_dir_all(&dir);
     }
@@ -943,5 +1065,266 @@ impl Durability {
             Self::Full => "FULL",
             Self::Normal => "NORMAL",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_dir_appends_musika_under_xdg_config_home() {
+        if std::env::var_os("MUSIKA_TEST_XDG_SET").is_some() {
+            let cfg_home = PathBuf::from(std::env::var_os("XDG_CONFIG_HOME").unwrap());
+            let cache_home = PathBuf::from(std::env::var_os("XDG_CACHE_HOME").unwrap());
+            assert_eq!(config_dir().unwrap(), cfg_home.join("musika"));
+            assert_eq!(cache_dir().unwrap(), cache_home.join("musika"));
+            assert_eq!(
+                playback_dir().unwrap(),
+                cache_home.join("musika").join("playback")
+            );
+            return;
+        }
+        if std::env::var_os("MUSIKA_TEST_XDG_EMPTY").is_some() {
+            let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+            assert_eq!(config_dir().unwrap(), home.join(".config").join("musika"));
+            assert_eq!(cache_dir().unwrap(), home.join(".cache").join("musika"));
+            assert_eq!(
+                playback_dir().unwrap(),
+                home.join(".cache").join("musika").join("playback")
+            );
+            return;
+        }
+
+        let base = std::env::temp_dir().join(format!("musika-xdg-test-{}", std::process::id()));
+        let cfg_home = base.join("cfg");
+        let cache_home = base.join("cache");
+        let home = base.join("home");
+
+        let exe = std::env::current_exe().unwrap();
+        for (mode, xdg_cfg, xdg_cache) in [
+            (
+                "MUSIKA_TEST_XDG_SET",
+                cfg_home.to_string_lossy().into_owned(),
+                cache_home.to_string_lossy().into_owned(),
+            ),
+            ("MUSIKA_TEST_XDG_EMPTY", String::new(), String::new()),
+        ] {
+            let output = std::process::Command::new(&exe)
+                .env("XDG_CONFIG_HOME", &xdg_cfg)
+                .env("XDG_CACHE_HOME", &xdg_cache)
+                .env_remove("MUSIKA_MEDIA_CACHE_DIR")
+                .env("HOME", &home)
+                .env(mode, "1")
+                .args([
+                    "--exact",
+                    "db::tests::config_dir_appends_musika_under_xdg_config_home",
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "child ({mode}) failed: stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    #[test]
+    fn warn_legacy_xdg_config_once_detects_without_moving() {
+        if std::env::var_os("MUSIKA_TEST_LEGACY_XDG_CHILD").is_some() {
+            warn_legacy_xdg_config_once();
+            return;
+        }
+
+        let base = std::env::temp_dir().join(format!("musika-xdg-legacy-{}", std::process::id()));
+        _ = std::fs::remove_dir_all(&base);
+        let xdg = base.join("xdg_cfg");
+        ensure_dir(&xdg).unwrap();
+
+        // Empty XDG_CONFIG_HOME: no warning.
+        assert!(legacy_xdg_config_warning(&xdg).is_none());
+
+        // Legacy files directly under XDG_CONFIG_HOME and no `musika/` subdir.
+        for file in ["accounts.json", "library.db", "media.db", "key"] {
+            std::fs::write(xdg.join(file), format!("legacy-{file}")).unwrap();
+        }
+        let warning = legacy_xdg_config_warning(&xdg).expect("should warn for legacy files");
+        assert!(warning.contains("accounts.json"));
+        assert!(warning.contains("musika"));
+
+        // Calling warn_legacy_xdg_config_once in a clean subprocess emits the warning
+        // on stderr and leaves all legacy files in place without auto-moving them.
+        let exe = std::env::current_exe().unwrap();
+        let output = std::process::Command::new(&exe)
+            .env("XDG_CONFIG_HOME", &xdg)
+            .env("MUSIKA_TEST_LEGACY_XDG_CHILD", "1")
+            .args([
+                "--exact",
+                "db::tests::warn_legacy_xdg_config_once_detects_without_moving",
+                "--nocapture",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("found legacy config files directly in XDG_CONFIG_HOME"),
+            "unexpected stderr: {stderr}"
+        );
+        assert!(
+            !xdg.join("musika").exists(),
+            "warn-only must not create or move into musika/"
+        );
+        for file in ["accounts.json", "library.db", "media.db", "key"] {
+            assert_eq!(
+                std::fs::read_to_string(xdg.join(file)).unwrap(),
+                format!("legacy-{file}")
+            );
+        }
+
+        // Once `musika/` exists, legacy_xdg_config_warning stays quiet.
+        ensure_dir(&xdg.join("musika")).unwrap();
+        assert!(legacy_xdg_config_warning(&xdg).is_none());
+
+        _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn wipe_files_preserves_non_musika_siblings_and_eqs() {
+        if std::env::var_os("MUSIKA_TEST_WIPE_CHILD").is_some() {
+            let musika_root = config_dir().unwrap();
+            let runtime = crate::app::runtime();
+            runtime.block_on(async {
+                let dbs = init().await.unwrap();
+
+                // Musika-owned wipe targets (legacy DBs + sidecars, index.txt, media/cache dirs).
+                for legacy in [
+                    "credentials.db",
+                    "credentials.db-wal",
+                    "credentials.db-shm",
+                    "search.db",
+                    "index.txt",
+                ] {
+                    std::fs::write(musika_root.join(legacy), b"wipe-me").unwrap();
+                }
+                for dir in ["covers", "media", "playback", "playlists"] {
+                    ensure_dir(&musika_root.join(dir)).unwrap();
+                    std::fs::write(musika_root.join(dir).join("item"), b"wipe-me").unwrap();
+                }
+
+                // Protected global files, EQ profiles, sockets, and unknown siblings.
+                std::fs::write(musika_root.join("accounts.json"), b"{\"active\":\"a1\"}").unwrap();
+                ensure_dir(&musika_root.join("accounts").join("a1")).unwrap();
+                std::fs::write(
+                    musika_root.join("accounts").join("a1").join("library.db"),
+                    b"other-account",
+                )
+                .unwrap();
+                std::fs::write(musika_root.join("key"), b"secret-key").unwrap();
+                ensure_dir(&musika_root.join("eqs")).unwrap();
+                std::fs::write(musika_root.join("eqs").join("flat.eq"), b"Preamp: 0\n").unwrap();
+                std::fs::write(musika_root.join("ipc.sock"), b"sock").unwrap();
+                std::fs::write(musika_root.join("daemon.sock"), b"sock").unwrap();
+                std::fs::write(musika_root.join("custom_notes.txt"), b"keep").unwrap();
+                std::fs::write(musika_root.join("unrelated.db"), b"keep-db").unwrap();
+                ensure_dir(&musika_root.join("sibling_dir")).unwrap();
+                std::fs::write(musika_root.join("sibling_dir").join("data"), b"keep").unwrap();
+
+                wipe_files(&dbs).await.unwrap();
+
+                assert!(dbs.library.is_closed(), "library pool must be closed");
+                assert!(dbs.sync.is_closed(), "sync pool must be closed");
+                assert!(dbs.search.is_closed(), "search pool must be closed");
+                assert!(dbs.media.is_closed(), "media pool must be closed");
+
+                for removed in [
+                    "library.db",
+                    "library.db-wal",
+                    "library.db-shm",
+                    "media.db",
+                    "media.db-wal",
+                    "media.db-shm",
+                    "credentials.db",
+                    "credentials.db-wal",
+                    "credentials.db-shm",
+                    "search.db",
+                    "index.txt",
+                    "covers",
+                    "media",
+                    "playback",
+                    "playlists",
+                ] {
+                    assert!(
+                        !musika_root.join(removed).exists(),
+                        "Musika target {removed} should have been wiped"
+                    );
+                }
+
+                assert_eq!(
+                    std::fs::read(musika_root.join("accounts.json")).unwrap(),
+                    b"{\"active\":\"a1\"}"
+                );
+                assert_eq!(
+                    std::fs::read(musika_root.join("accounts").join("a1").join("library.db"))
+                        .unwrap(),
+                    b"other-account"
+                );
+                assert_eq!(
+                    std::fs::read(musika_root.join("key")).unwrap(),
+                    b"secret-key"
+                );
+                assert_eq!(
+                    std::fs::read(musika_root.join("eqs").join("flat.eq")).unwrap(),
+                    b"Preamp: 0\n"
+                );
+                assert!(musika_root.join("ipc.sock").exists());
+                assert!(musika_root.join("daemon.sock").exists());
+                assert_eq!(
+                    std::fs::read(musika_root.join("custom_notes.txt")).unwrap(),
+                    b"keep"
+                );
+                assert_eq!(
+                    std::fs::read(musika_root.join("unrelated.db")).unwrap(),
+                    b"keep-db"
+                );
+                assert_eq!(
+                    std::fs::read(musika_root.join("sibling_dir").join("data")).unwrap(),
+                    b"keep"
+                );
+            });
+            return;
+        }
+
+        let base = std::env::temp_dir().join(format!("musika-wipe-test-{}", std::process::id()));
+        let xdg_cfg = base.join("cfg");
+        let xdg_cache = base.join("cache");
+        _ = std::fs::remove_dir_all(&base);
+        ensure_dir(&xdg_cfg).unwrap();
+        ensure_dir(&xdg_cache).unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let output = std::process::Command::new(&exe)
+            .env("XDG_CONFIG_HOME", &xdg_cfg)
+            .env("XDG_CACHE_HOME", &xdg_cache)
+            .env_remove("MUSIKA_LIBRARY_FILE")
+            .env_remove("MUSIKA_MEDIA_FILE")
+            .env_remove("MUSIKA_MEDIA_DIR")
+            .env_remove("MUSIKA_MEDIA_CACHE_DIR")
+            .env_remove("MUSIKA_COVERS_DIR")
+            .env("MUSIKA_TEST_WIPE_CHILD", "1")
+            .args([
+                "--exact",
+                "db::tests::wipe_files_preserves_non_musika_siblings_and_eqs",
+            ])
+            .output()
+            .unwrap();
+        _ = std::fs::remove_dir_all(&base);
+        assert!(
+            output.status.success(),
+            "wipe child failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

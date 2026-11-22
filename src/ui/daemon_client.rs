@@ -63,8 +63,6 @@ const RECONNECT_MAX_MS: u64 = 1_000;
 /// Retry cadence for the "core is not up yet" startup surface.
 const STARTUP_RETRY_MS: u64 = 1_000;
 
-/// Bounded outbound frame queue (writer thread side).
-const WRITER_QUEUE_FRAMES: usize = 64;
 /// Bounded inbound update channel (GPUI side).
 const UPDATE_QUEUE_FRAMES: usize = 256;
 /// Hard cap for non-droppable frames that did not fit the writer queue.
@@ -119,37 +117,54 @@ pub enum UiUpdate {
 // ---------------------------------------------------------------------------
 
 struct Outbound {
-    /// Live writer queue; `None` while disconnected.
-    writer: Option<SyncSender<Frame>>,
-    /// Latest coalescible frame (volume/seek) that did not fit the queue.
-    pending: Option<Frame>,
+    /// Wake handle for the live writer thread; `None` while disconnected.
+    writer: Option<SyncSender<()>>,
+    /// Latest coalesced volume frame (`PlayerOp::SetVolume`).
+    pending_volume: Option<Frame>,
+    /// Latest coalesced absolute seek frame (`PlayerOp::Seek`).
+    pending_seek: Option<Frame>,
+    /// Accumulated relative seek request id and delta (`PlayerOp::SeekRelative`).
+    pending_seek_relative: Option<(u32, f64)>,
     /// Frames that must not be dropped (transport, requests, pongs) kept while
-    /// the writer queue was full or the transport was down.
+    /// the transport is down or waiting to drain.
     overflow: VecDeque<Frame>,
 }
 
-/// Pushes one frame without ever blocking the caller. A full queue keeps the
-/// frame for the writer thread (coalescible) or parks it in the overflow
-/// (critical); a dead writer is dropped so the next connection adopts the work.
-fn try_send_frame(writer: &mut Option<SyncSender<Frame>>, frame: Frame) -> Result<(), Frame> {
+enum OutboundItem {
+    Volume(Frame),
+    Seek(Frame),
+    SeekRelative { req: u32, delta: f64, frame: Frame },
+    Overflow(Frame),
+}
+
+impl OutboundItem {
+    fn frame(&self) -> &Frame {
+        match self {
+            Self::Volume(frame)
+            | Self::Seek(frame)
+            | Self::SeekRelative { frame, .. }
+            | Self::Overflow(frame) => frame,
+        }
+    }
+}
+
+/// Wakes the writer thread without blocking the caller.
+fn wake_writer(writer: &mut Option<SyncSender<()>>) {
     let Some(sender) = writer.take() else {
-        return Err(frame);
+        return;
     };
-    match sender.try_send(frame) {
-        Ok(()) => {
+    match sender.try_send(()) {
+        Ok(()) | Err(WriteTrySendError::Full(())) => {
             *writer = Some(sender);
-            Ok(())
         }
-        Err(WriteTrySendError::Full(frame)) => {
-            *writer = Some(sender);
-            Err(frame)
-        }
-        Err(WriteTrySendError::Disconnected(frame)) => Err(frame),
+        Err(WriteTrySendError::Disconnected(())) => {}
     }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 struct Inner {
@@ -168,7 +183,9 @@ impl Inner {
             updates,
             outbound: Mutex::new(Outbound {
                 writer: None,
-                pending: None,
+                pending_volume: None,
+                pending_seek: None,
+                pending_seek_relative: None,
                 overflow: VecDeque::new(),
             }),
             next_req: AtomicU32::new(0),
@@ -182,37 +199,15 @@ impl Inner {
         self.next_req.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Enqueues one frame; `coalescible` marks frames a newer value supersedes.
-    fn send_frame(&self, frame: Frame, coalescible: bool) {
+    /// Enqueues one ordered non-coalescible frame.
+    fn send_frame(&self, frame: Frame) {
         let mut out = lock(&self.outbound);
-        if coalescible {
-            // A parked value is always the newest one: supersede it instead of
-            // letting the writer replay an older target after a newer frame.
-            if out.pending.is_some() {
-                out.pending = Some(frame);
-                return;
-            }
-            if let Err(frame) = try_send_frame(&mut out.writer, frame) {
-                out.pending = Some(frame);
-            }
-            return;
-        }
-        // Critical frames keep their order: once one is parked (the queue was
-        // full or the transport was down), later ones follow it instead of
-        // jumping ahead of it.
-        let frame = if out.overflow.is_empty() {
-            match try_send_frame(&mut out.writer, frame) {
-                Ok(()) => return,
-                Err(frame) => frame,
-            }
-        } else {
-            frame
-        };
         if out.overflow.len() >= OVERFLOW_FRAMES {
             crate::debug_log!("ipc: outbound overflow is full; dropping the oldest frame");
             out.overflow.pop_front();
         }
         out.overflow.push_back(frame);
+        wake_writer(&mut out.writer);
     }
 
     /// Sends one `RequestJson` (bridge surface) and returns its request id.
@@ -224,9 +219,7 @@ impl Inner {
             args,
         };
         match ipc_protocol::json_encode(&message) {
-            Ok(payload) => {
-                self.send_frame(Frame::new(ipc_protocol::KIND_REQUEST_JSON, payload), false)
-            }
+            Ok(payload) => self.send_frame(Frame::new(ipc_protocol::KIND_REQUEST_JSON, payload)),
             Err(error) => crate::debug_log!(
                 "ipc: could not encode bridge request {method}: {:?}",
                 error.code
@@ -235,19 +228,85 @@ impl Inner {
         req
     }
 
-    /// Sends one `PlayerOp` and returns its request id. Volume/seek are
-    /// coalescible: a backlog keeps only the newest target.
+    /// Encodes a player-operation frame. A batch that cannot be represented on
+    /// the wire (more than `u16::MAX` removal indices, D-09) is logged and
+    /// dropped instead of silently truncating.
+    fn player_frame(&self, request: &PlayerRequest) -> Option<Frame> {
+        match request.encode() {
+            Ok(payload) => Some(Frame::new(ipc_protocol::KIND_PLAYER_REQUEST, payload)),
+            Err(error) => {
+                crate::debug_log!(
+                    "ipc: dropped an unencodable player request: {:?} {}",
+                    error.code,
+                    error.message
+                );
+                None
+            }
+        }
+    }
+
+    /// Sends one `PlayerOp` and returns its request id.
+    ///
+    /// - `SetVolume` coalesces only with prior `SetVolume`.
+    /// - `Seek` coalesces only with prior `Seek`.
+    /// - `SeekRelative` accumulates (`delta_a + delta_b`) across pending taps.
     fn send_player(&self, op: PlayerOp) -> u32 {
         let req = self.next_req();
-        let coalescible = matches!(
-            op,
-            PlayerOp::SetVolume(_) | PlayerOp::Seek(_) | PlayerOp::SeekRelative(_)
-        );
-        let request = PlayerRequest { req, op };
-        self.send_frame(
-            Frame::new(ipc_protocol::KIND_PLAYER_REQUEST, request.encode()),
-            coalescible,
-        );
+        match op {
+            PlayerOp::SetVolume(_) => {
+                let request = PlayerRequest { req, op };
+                if let Some(frame) = self.player_frame(&request) {
+                    let mut out = lock(&self.outbound);
+                    out.pending_volume = Some(frame);
+                    wake_writer(&mut out.writer);
+                }
+            }
+            PlayerOp::Seek(_) => {
+                let request = PlayerRequest { req, op };
+                if let Some(frame) = self.player_frame(&request) {
+                    let mut out = lock(&self.outbound);
+                    out.pending_seek = Some(frame);
+                    wake_writer(&mut out.writer);
+                }
+            }
+            PlayerOp::SeekRelative(delta) => {
+                let mut out = lock(&self.outbound);
+                let total = out
+                    .pending_seek_relative
+                    .map_or(delta, |(_, prev)| prev + delta);
+                out.pending_seek_relative = Some((req, total));
+                wake_writer(&mut out.writer);
+            }
+            PlayerOp::PlayPause
+            | PlayerOp::Play
+            | PlayerOp::Pause
+            | PlayerOp::Stop
+            | PlayerOp::Next
+            | PlayerOp::Previous
+            | PlayerOp::VolumeUp
+            | PlayerOp::VolumeDown
+            | PlayerOp::ToggleMute
+            | PlayerOp::SetMuted(_)
+            | PlayerOp::Jump(_)
+            | PlayerOp::Remove(_)
+            | PlayerOp::RemoveMany(_)
+            | PlayerOp::Move { .. }
+            | PlayerOp::MoveBlock { .. }
+            | PlayerOp::CycleRepeat
+            | PlayerOp::ShuffleQueue
+            | PlayerOp::ShuffleQueueOrder
+            | PlayerOp::SetTrackFavorite { .. }
+            | PlayerOp::CycleNormalization
+            | PlayerOp::ToggleCrossfade
+            | PlayerOp::SetNormalization(_)
+            | PlayerOp::SetCrossfade(_)
+            | PlayerOp::Resync => {
+                let request = PlayerRequest { req, op };
+                if let Some(frame) = self.player_frame(&request) {
+                    self.send_frame(frame);
+                }
+            }
+        }
         req
     }
 
@@ -256,7 +315,7 @@ impl Inner {
             nonce: heartbeat.nonce,
             monotonic_ns: crate::linux::monotonic_ns(),
         };
-        self.send_frame(Frame::new(ipc_protocol::KIND_PONG, pong.encode()), false);
+        self.send_frame(Frame::new(ipc_protocol::KIND_PONG, pong.encode()));
     }
 
     /// Structural updates are never dropped: the reader thread may block, the
@@ -282,15 +341,15 @@ impl Inner {
         }
     }
 
-    /// Installs the writer thread for a fresh socket, keeping the overflow of
-    /// critical frames so requests issued while disconnected are delivered.
+    /// Installs the writer thread for a fresh socket, keeping queued frames so
+    /// requests issued while disconnected or pre-handshake are delivered after
+    /// `Welcome`.
     fn install_writer(self: &Arc<Self>, socket: &UnixStream) -> io::Result<()> {
         let write_half = socket.try_clone()?;
-        let (sender, receiver) = sync_channel::<Frame>(WRITER_QUEUE_FRAMES);
+        let (sender, receiver) = sync_channel::<()>(1);
         {
             let mut out = lock(&self.outbound);
             out.writer = Some(sender);
-            out.pending = None;
         }
         let inner = Arc::clone(self);
         #[expect(
@@ -309,25 +368,73 @@ impl Inner {
         self.session.store(0, Ordering::Release);
         let mut out = lock(&self.outbound);
         out.writer = None;
-        out.pending = None;
+        out.overflow
+            .retain(|frame| frame.kind != ipc_protocol::KIND_PONG);
     }
 
-    /// Writes the coalesced slot and the overflow, in that order.
-    fn drain_outbound(&self, write_half: &UnixStream) -> io::Result<()> {
-        loop {
-            let frame = {
-                let mut out = lock(&self.outbound);
-                match out.pending.take() {
-                    Some(frame) => Some(frame),
-                    None => out.overflow.pop_front(),
-                }
-            };
-            let Some(frame) = frame else {
-                return Ok(());
-            };
-            let mut writer = write_half;
-            ipc_protocol::write_frame_blocking(&mut writer, &frame)?;
+    fn pop_outbound_item(&self) -> Option<OutboundItem> {
+        if !self.connected.load(Ordering::Acquire) {
+            return None;
         }
+        let mut out = lock(&self.outbound);
+        if let Some(frame) = out.pending_volume.take() {
+            return Some(OutboundItem::Volume(frame));
+        }
+        if let Some(frame) = out.pending_seek.take() {
+            return Some(OutboundItem::Seek(frame));
+        }
+        if let Some((req, delta)) = out.pending_seek_relative.take() {
+            let request = PlayerRequest {
+                req,
+                op: PlayerOp::SeekRelative(delta),
+            };
+            let frame = self.player_frame(&request)?;
+            return Some(OutboundItem::SeekRelative { req, delta, frame });
+        }
+        out.overflow.pop_front().map(OutboundItem::Overflow)
+    }
+
+    fn requeue_outbound_item(&self, item: OutboundItem) {
+        let mut out = lock(&self.outbound);
+        match item {
+            OutboundItem::Volume(frame) => {
+                if out.pending_volume.is_none() {
+                    out.pending_volume = Some(frame);
+                }
+            }
+            OutboundItem::Seek(frame) => {
+                if out.pending_seek.is_none() {
+                    out.pending_seek = Some(frame);
+                }
+            }
+            OutboundItem::SeekRelative { req, delta, .. } => match out.pending_seek_relative {
+                Some((newer_req, newer_delta)) => {
+                    out.pending_seek_relative = Some((newer_req, delta + newer_delta));
+                }
+                None => {
+                    out.pending_seek_relative = Some((req, delta));
+                }
+            },
+            OutboundItem::Overflow(frame) => {
+                if frame.kind != ipc_protocol::KIND_PONG {
+                    out.overflow.push_front(frame);
+                }
+            }
+        }
+    }
+
+    /// Writes coalesced slots and the overflow once the handshake has completed.
+    /// If a socket write fails mid-drain, the unsent frame is re-queued for the
+    /// next connection.
+    fn drain_outbound(&self, write_half: &UnixStream) -> io::Result<()> {
+        while let Some(item) = self.pop_outbound_item() {
+            let mut writer = write_half;
+            if let Err(error) = ipc_protocol::write_frame_blocking(&mut writer, item.frame()) {
+                self.requeue_outbound_item(item);
+                return Err(error);
+            }
+        }
+        Ok(())
     }
 
     /// Maps one inbound message.
@@ -343,6 +450,10 @@ impl Inner {
                 }
                 self.session.store(welcome.session, Ordering::Release);
                 self.connected.store(true, Ordering::Release);
+                {
+                    let mut out = lock(&self.outbound);
+                    wake_writer(&mut out.writer);
+                }
                 self.push_structural(UiUpdate::Connected {
                     session: welcome.session,
                 });
@@ -357,16 +468,13 @@ impl Inner {
                 ))
             }
             Message::Bye(bye) => match bye.reason {
-                ByeReason::Quit | ByeReason::Shutdown => {
+                ByeReason::Quit | ByeReason::Shutdown | ByeReason::Replaced => {
                     self.stopping.store(true, Ordering::Release);
                     Reaction::Shutdown
                 }
                 ByeReason::VersionMismatch => {
                     self.stopping.store(true, Ordering::Release);
                     Reaction::Fatal("core protocol version mismatch".to_string())
-                }
-                ByeReason::Replaced => {
-                    Reaction::Closed(Some("another UI window replaced this one".to_string()))
                 }
                 ByeReason::Protocol | ByeReason::SlowConsumer | ByeReason::Heartbeat => {
                     Reaction::Closed(Some(format!(
@@ -493,31 +601,12 @@ impl Client {
         self.inner.send_player(PlayerOp::Resync);
     }
 
-    /// Asks the core to show/raise this window.
-    ///
-    /// Protocol v2 has no client frame for lifecycle requests yet, so this uses
-    /// the core command socket (the same channel the tray/launcher uses, see
-    /// `ipc::send_line`); the daemon answers with `KIND_ACTIVATE`, which the
-    /// reader maps to [`UiUpdate::Activate`].
-    pub fn show(&self) {
-        _ = crate::ipc::send_line("show");
-    }
-
     /// Asks the core to quit. The core broadcasts `Bye { reason: Quit }` before
     /// closing, which the reader maps to [`UiUpdate::Shutdown`].
     pub fn shutdown_core(&self) {
         // One line on the bounded command socket; the write timeout keeps this
         // short enough for the quit path that calls it from the render loop.
         _ = crate::ipc::send_line("quit");
-    }
-
-    /// Random id of the current daemon run (0 while disconnected).
-    pub fn session(&self) -> u64 {
-        self.inner.session.load(Ordering::Acquire)
-    }
-
-    pub fn is_connected(&self) -> bool {
-        self.inner.connected.load(Ordering::Acquire)
     }
 }
 
@@ -535,9 +624,8 @@ fn dial(attempts: usize, step: Duration) -> io::Result<UnixStream> {
             }
         }
     }
-    Err(last_error.unwrap_or_else(|| {
-        io::Error::new(io::ErrorKind::NotConnected, "core daemon unavailable")
-    }))
+    Err(last_error
+        .unwrap_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "core daemon unavailable")))
 }
 
 fn hello_frame() -> Frame {
@@ -574,7 +662,6 @@ fn supervise(inner: Arc<Inner>, initial: Option<UnixStream>, retry_ms: u64) {
             inner.push_structural(UiUpdate::Reconnecting(Some(format!(
                 "handshake write failed: {error}"
             ))));
-            std::thread::sleep(Duration::from_millis(backoff));
             backoff = (backoff * 2).min(RECONNECT_MAX_MS);
             continue;
         }
@@ -583,18 +670,21 @@ fn supervise(inner: Arc<Inner>, initial: Option<UnixStream>, retry_ms: u64) {
             inner.push_structural(UiUpdate::Reconnecting(Some(format!(
                 "handshake setup failed: {error}"
             ))));
-            std::thread::sleep(Duration::from_millis(backoff));
             backoff = (backoff * 2).min(RECONNECT_MAX_MS);
             continue;
         }
-        inner.connected.store(true, Ordering::Release);
         let control = serve(&inner, &connected);
+        let welcomed = inner.connected.load(Ordering::Acquire);
         inner.drop_connection();
         match control {
             Served::Stop => break,
             Served::Closed(reason) => {
                 inner.push_structural(UiUpdate::Reconnecting(reason));
-                backoff = RECONNECT_MIN_MS;
+                if welcomed {
+                    backoff = RECONNECT_MIN_MS;
+                } else {
+                    backoff = (backoff * 2).min(RECONNECT_MAX_MS);
+                }
             }
         }
     }
@@ -612,7 +702,6 @@ fn reconnect(inner: &Arc<Inner>, backoff: &mut u64) -> Option<UnixStream> {
         }
         match UnixStream::connect(crate::ipc::daemon_socket_path()) {
             Ok(socket) => {
-                *backoff = RECONNECT_MIN_MS;
                 return Some(socket);
             }
             Err(_) => {
@@ -655,14 +744,10 @@ fn serve(inner: &Arc<Inner>, socket: &UnixStream) -> Served {
     }
 }
 
-fn write_loop(inner: Arc<Inner>, write_half: UnixStream, receiver: WriteReceiver<Frame>) {
+fn write_loop(inner: Arc<Inner>, write_half: UnixStream, receiver: WriteReceiver<()>) {
     loop {
         match receiver.recv_timeout(WRITER_POLL) {
-            Ok(frame) => {
-                let mut writer = &write_half;
-                if ipc_protocol::write_frame_blocking(&mut writer, &frame).is_err() {
-                    break;
-                }
+            Ok(()) => {
                 if inner.drain_outbound(&write_half).is_err() {
                     break;
                 }
@@ -704,6 +789,10 @@ impl RemoteBridge {
 /// `RequestJson` frame per call, keyed by the method name.
 macro_rules! bridge_client {
     ($( $name:ident ( $( $field:ident : $ty:ty ),* $(,)? ), )*) => {
+        #[expect(
+            dead_code,
+            reason = "generated methods mirror the shared RPC table: a request the UI does not send yet is still protocol surface"
+        )]
         impl RemoteBridge {
             $(
                 #[allow(
@@ -795,6 +884,15 @@ impl PlaybackView {
         Self::default()
     }
 
+    /// Resets per-session sequence and revision counters on reconnect so frames
+    /// from a restarted core daemon (whose counters restart at 1) are accepted.
+    pub fn reset_for_reconnect(&mut self) {
+        self.last_seq = 0;
+        self.queue_rev = 0;
+        self.resync = false;
+        self.last_error = None;
+    }
+
     /// Applies one transport snapshot. The anchor carries the position, so the
     /// UI extrapolates between frames instead of receiving ticks.
     pub fn apply_state(&mut self, state: PlaybackState) {
@@ -849,6 +947,7 @@ impl PlaybackView {
             }
             QueueOp::Rows { start, rows } => self.fill_rows(start as usize, rows),
             QueueOp::Insert { at, rows } => {
+                let was_empty = self.count == 0;
                 let at = (at as usize).min(self.count);
                 let added: Vec<Track> = rows.into_iter().map(Track::from).collect();
                 let added_len = added.len();
@@ -857,7 +956,9 @@ impl PlaybackView {
                     self.rows.insert(at + offset, track);
                 }
                 self.count = self.count.saturating_add(added_len);
-                if added_len > 0 && at <= self.index {
+                if was_empty {
+                    self.index = 0;
+                } else if added_len > 0 && at <= self.index {
                     // Keep pointing at the same row: it shifted right.
                     self.index = self.index.saturating_add(added_len);
                 }
@@ -1007,6 +1108,10 @@ impl PlaybackView {
     }
 
     /// The anchor position as reported by the core (no extrapolation).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI client tests read this projection")
+    )]
     pub fn position(&self) -> f64 {
         self.anchor.position()
     }
@@ -1040,20 +1145,28 @@ impl PlaybackView {
         self.retrying
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI client tests read this projection")
+    )]
     pub fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI client tests read this projection")
+    )]
     pub fn queue_rev(&self) -> u64 {
         self.queue_rev
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI client tests read this projection")
+    )]
     pub fn last_seq(&self) -> u64 {
         self.last_seq
-    }
-
-    pub fn anchor(&self) -> PlaybackState {
-        self.anchor
     }
 
     // --- internals --------------------------------------------------------
@@ -1148,9 +1261,6 @@ impl PlaybackClient {
     pub fn toggle_mute(&self) {
         self.send(PlayerOp::ToggleMute);
     }
-    pub fn set_muted(&self, muted: bool) {
-        self.send(PlayerOp::SetMuted(muted));
-    }
     pub fn seek(&self, seconds: f64) {
         self.send(PlayerOp::Seek(seconds.max(0.0)));
     }
@@ -1200,12 +1310,6 @@ impl PlaybackClient {
     pub fn shuffle_queue_order(&self) {
         self.send(PlayerOp::ShuffleQueueOrder);
     }
-    pub fn set_track_favorite(&self, song_id: &str, favorite: bool) {
-        self.send(PlayerOp::SetTrackFavorite {
-            id: song_id.to_string(),
-            favorite,
-        });
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1231,6 +1335,10 @@ impl AppPlayer {
         self.view.apply_state(state);
     }
 
+    pub fn reset_for_reconnect(&mut self) {
+        self.view.reset_for_reconnect();
+    }
+
     pub fn apply_delta(&mut self, delta: QueueDelta) {
         self.view.apply_delta(delta);
     }
@@ -1245,10 +1353,6 @@ impl AppPlayer {
 
     pub fn take_resync(&mut self) -> bool {
         self.view.take_resync()
-    }
-
-    pub fn view(&self) -> &PlaybackView {
-        &self.view
     }
 
     pub fn state(&self) -> State {
@@ -1284,9 +1388,6 @@ impl AppPlayer {
     pub fn queue_snapshot(&self) -> Arc<Vec<Track>> {
         self.view.queue_snapshot()
     }
-    pub fn position(&self) -> f64 {
-        self.view.position()
-    }
     pub fn position_now(&self) -> f64 {
         self.view.position_now()
     }
@@ -1305,10 +1406,6 @@ impl AppPlayer {
     pub fn is_retrying(&self) -> bool {
         self.view.is_retrying()
     }
-    pub fn last_error(&self) -> Option<&str> {
-        self.view.last_error()
-    }
-
     pub fn toggle(&self) {
         self.client.toggle();
     }
@@ -1338,9 +1435,6 @@ impl AppPlayer {
     }
     pub fn toggle_mute(&self) {
         self.client.toggle_mute();
-    }
-    pub fn set_muted(&self, muted: bool) {
-        self.client.set_muted(muted);
     }
     pub fn seek(&self, seconds: f64) {
         self.client.seek(seconds);
@@ -1394,7 +1488,191 @@ impl AppPlayer {
     pub fn shuffle_queue_order(&self) {
         self.client.shuffle_queue_order();
     }
-    pub fn set_track_favorite(&self, song_id: &str, favorite: bool) {
-        self.client.set_track_favorite(song_id, favorite);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ipc_protocol::{Bye, StateWire, Welcome};
+
+    fn test_row(id: &str) -> WireTrack {
+        WireTrack {
+            id: id.to_string(),
+            title: format!("Title {id}"),
+            artist: "Artist".to_string(),
+            album: "Album".to_string(),
+            album_id: "album-1".to_string(),
+            favorite: false,
+            duration: 180.0,
+            cover_art: "cover-1".to_string(),
+            cover_url: String::new(),
+            cover_remote: String::new(),
+        }
+    }
+
+    #[test]
+    fn reconnect_resets_session_counters() {
+        let mut view = PlaybackView::new();
+        view.apply_delta(QueueDelta {
+            rev: 12,
+            op: QueueOp::Reset { count: 2 },
+        });
+        view.apply_rows(QueueRows {
+            rev: 12,
+            start: 0,
+            rows: vec![test_row("old-a"), test_row("old-b")],
+        });
+        view.apply_state(PlaybackState {
+            seq: 20,
+            index: 1,
+            state: StateWire::Playing as u8,
+            ..PlaybackState::default()
+        });
+        assert_eq!(view.last_seq(), 20);
+        assert_eq!(view.queue_rev(), 12);
+
+        // Reconnecting to a restarted daemon resets counters so rev=1 / seq=1 apply.
+        view.reset_for_reconnect();
+        assert_eq!(view.last_seq(), 0);
+        assert_eq!(view.queue_rev(), 0);
+        assert!(!view.take_resync());
+
+        view.apply_delta(QueueDelta {
+            rev: 1,
+            op: QueueOp::Reset { count: 1 },
+        });
+        view.apply_rows(QueueRows {
+            rev: 1,
+            start: 0,
+            rows: vec![test_row("new-a")],
+        });
+        view.apply_state(PlaybackState {
+            seq: 1,
+            index: 0,
+            state: StateWire::Paused as u8,
+            ..PlaybackState::default()
+        });
+        assert_eq!(view.queue_rev(), 1);
+        assert_eq!(view.last_seq(), 1);
+        assert_eq!(view.len(), 1);
+        assert_eq!(view.current().map(|t| t.id.as_str()), Some("new-a"));
+        assert!(!view.take_resync());
+    }
+
+    #[test]
+    fn insert_into_empty_queue_sets_index_zero() {
+        let mut view = PlaybackView::new();
+        assert!(view.is_empty());
+        assert_eq!(view.index(), 0);
+
+        view.apply_delta(QueueDelta {
+            rev: 1,
+            op: QueueOp::Insert {
+                at: 0,
+                rows: vec![test_row("a"), test_row("b"), test_row("c")],
+            },
+        });
+        assert_eq!(view.len(), 3);
+        assert_eq!(view.index(), 0);
+        assert_eq!(view.current().map(|t| t.id.as_str()), Some("a"));
+    }
+
+    #[test]
+    fn bye_replaced_stops_reconnect() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let inner = Inner::new(tx);
+        let reaction = inner.handle(Message::Bye(Bye {
+            reason: ByeReason::Replaced,
+        }));
+        assert!(matches!(reaction, Reaction::Shutdown));
+        assert!(inner.stopping.load(Ordering::Acquire));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn coalescing_preserves_seek_accumulates_relative_and_waits_for_welcome() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        let inner = Inner::new(tx);
+        let (write_half, mut read_half) = UnixStream::pair().expect("unix pair");
+        read_half
+            .set_nonblocking(true)
+            .expect("nonblocking read_half");
+
+        // Queue commands before Welcome arrives.
+        inner.send_player(PlayerOp::Seek(42.5));
+        inner.send_player(PlayerOp::SetVolume(80.0));
+        inner.send_player(PlayerOp::SetVolume(35.0));
+        inner.send_player(PlayerOp::SeekRelative(5.0));
+        inner.send_player(PlayerOp::SeekRelative(10.0));
+        inner.send_player(PlayerOp::SeekRelative(-2.5));
+        inner.send_request("refresh_header", serde_json::json!({}));
+
+        // Before Welcome (`connected == false`), drain_outbound must write nothing.
+        inner
+            .drain_outbound(&write_half)
+            .expect("pre-welcome drain");
+        let mut buf = [0u8; 16];
+        assert_eq!(
+            io::Read::read(&mut read_half, &mut buf)
+                .expect_err("no bytes before welcome")
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+
+        // Simulate mid-drain write failure after Welcome by closing a broken socket pair.
+        let reaction = inner.handle(Message::Welcome(Welcome {
+            proto: VERSION,
+            core_version: "test".to_string(),
+            session: 7,
+            features: UI_FEATURES,
+        }));
+        assert!(matches!(reaction, Reaction::Continue));
+        assert!(inner.connected.load(Ordering::Acquire));
+
+        let (broken_write, broken_read) = UnixStream::pair().expect("broken pair");
+        drop(broken_read);
+        assert!(inner.drain_outbound(&broken_write).is_err());
+
+        // Now drain onto the live socket and verify all coalesced/requeued frames arrive.
+        read_half
+            .set_nonblocking(false)
+            .expect("blocking read_half");
+        inner
+            .drain_outbound(&write_half)
+            .expect("post-welcome drain");
+        drop(write_half);
+
+        let mut decoded = Vec::new();
+        while let Some(frame) =
+            ipc_protocol::read_frame_blocking(&mut read_half).expect("read frame")
+        {
+            decoded.push(Message::decode(&frame).expect("decode message"));
+        }
+        assert_eq!(decoded.len(), 4);
+        assert!(matches!(
+            &decoded[0],
+            Message::PlayerRequest(PlayerRequest {
+                op: PlayerOp::SetVolume(v),
+                ..
+            }) if (*v - 35.0).abs() < 1e-6
+        ));
+        assert!(matches!(
+            &decoded[1],
+            Message::PlayerRequest(PlayerRequest {
+                op: PlayerOp::Seek(s),
+                ..
+            }) if (*s - 42.5).abs() < 1e-6
+        ));
+        assert!(matches!(
+            &decoded[2],
+            Message::PlayerRequest(PlayerRequest {
+                op: PlayerOp::SeekRelative(d),
+                ..
+            }) if (*d - 12.5).abs() < 1e-6
+        ));
+        assert!(matches!(
+            &decoded[3],
+            Message::Request(RequestJson { method, .. }) if method == "refresh_header"
+        ));
     }
 }

@@ -94,8 +94,7 @@ impl Bridge {
         let offline = self.offline();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            let tracks = match crate::radio::tracks(&dbs, &seed_kind, &seed_id, 0, offline).await
-            {
+            let tracks = match crate::radio::tracks(&dbs, &seed_kind, &seed_id, 0, offline).await {
                 Ok((tracks, _)) => tracks,
                 Err(err) => {
                     _ = tx.send(Event::Error(format!(
@@ -138,10 +137,7 @@ impl Bridge {
                 .flatten();
             let (descriptor, row_kind) = match artist_id {
                 Some(artist_id) => (
-                    crate::model::PageDescriptor::new(
-                        crate::model::PageKind::Artist,
-                        artist_id,
-                    ),
+                    crate::model::PageDescriptor::new(crate::model::PageKind::Artist, artist_id),
                     crate::model::RowKind::Album,
                 ),
                 // No artist mapping: keep the album reachable.
@@ -199,10 +195,7 @@ impl Bridge {
             let result = async {
                 let id = crate::download_command::resolve_named_id(&dbs, scope, &query).await?;
                 _ = tx.send(Event::OpenPage {
-                    descriptor: crate::model::PageDescriptor::radio(
-                        kind.clone(),
-                        id.clone(),
-                    ),
+                    descriptor: crate::model::PageDescriptor::radio(kind.clone(), id.clone()),
                 });
                 crate::radio::tracks(&dbs, &kind, &id, start_index as i64, offline)
                     .await

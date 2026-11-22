@@ -54,14 +54,6 @@ pub fn write_atomic(dir: &Path, file: &str, bytes: &[u8]) -> Result<PathBuf> {
     Ok(final_path)
 }
 
-/// Decodes a legacy UI payload, falling back to the type default and a debug log.
-pub(crate) fn parse_or_default<T: serde::de::DeserializeOwned + Default>(text: &str) -> T {
-    serde_json::from_str(text).unwrap_or_else(|_err| {
-        crate::debug_log!("payload: could not decode: {_err}");
-        T::default()
-    })
-}
-
 /// Deletes rows matched by one static `DELETE` statement and one bound key.
 pub async fn delete_by<'e, E>(executor: E, sql: &'static str, key: &str) -> Result<()>
 where
@@ -81,17 +73,48 @@ pub fn push_in_list<S: AsRef<str>>(builder: &mut sqlx::QueryBuilder<sqlx::Sqlite
     separated.push_unseparated(")");
 }
 
-/// Deletes rows matched by an `... IN (` prefix and the bound ids.
-pub async fn delete_in<'e, E>(executor: E, sql: &'static str, ids: &[String]) -> Result<()>
-where
-    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
-{
-    if ids.is_empty() {
-        return Ok(());
+/// Anything that owns or borrows one SQLite connection, so a maintenance
+/// helper can run several statements on it.
+///
+/// sqlx 0.9 dropped the `Executor` impls for `Transaction`/`PoolConnection`
+/// (callers must dereference to the bare connection), so this trait keeps
+/// [`delete_in`] usable from pools, transactions and bare connections alike.
+pub trait SqliteConn {
+    fn sqlite_conn(&mut self) -> &mut sqlx::SqliteConnection;
+}
+
+impl SqliteConn for sqlx::SqliteConnection {
+    fn sqlite_conn(&mut self) -> &mut sqlx::SqliteConnection {
+        self
     }
-    let mut builder = sqlx::QueryBuilder::new(sql);
-    push_in_list(&mut builder, ids);
-    builder.build().execute(executor).await?;
+}
+
+impl SqliteConn for sqlx::Transaction<'_, sqlx::Sqlite> {
+    fn sqlite_conn(&mut self) -> &mut sqlx::SqliteConnection {
+        self.as_mut()
+    }
+}
+
+impl SqliteConn for sqlx::pool::PoolConnection<sqlx::Sqlite> {
+    fn sqlite_conn(&mut self) -> &mut sqlx::SqliteConnection {
+        self.as_mut()
+    }
+}
+
+/// Deletes rows matched by an `... IN (` prefix and the bound ids.
+///
+/// The ids are bound in [`IN_BATCH`] chunks. A large queue snapshot or
+/// download set used to bind every id in one statement, which can exceed
+/// SQLite's bound-parameter limit (N-06).
+pub async fn delete_in<C>(conn: &mut C, sql: &'static str, ids: &[String]) -> Result<()>
+where
+    C: SqliteConn + ?Sized,
+{
+    for chunk in ids.chunks(IN_BATCH) {
+        let mut builder = sqlx::QueryBuilder::new(sql);
+        push_in_list(&mut builder, chunk);
+        builder.build().execute(conn.sqlite_conn()).await?;
+    }
     Ok(())
 }
 

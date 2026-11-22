@@ -23,6 +23,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use pipewire as pw;
 
@@ -79,20 +80,42 @@ pub(crate) fn list_output_devices() -> Result<Vec<OutputDevice>, String> {
         .register();
 
     let done = Rc::new(Cell::new(false));
+    let core_error: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let pending = core.sync(0).map_err(|error| error.to_string())?;
-    let quit = mainloop.clone();
-    let finished = Rc::clone(&done);
+    let quit_done = mainloop.clone();
+    let finished_done = Rc::clone(&done);
+    let quit_err = mainloop.clone();
+    let finished_err = Rc::clone(&done);
+    let recorded_error = Rc::clone(&core_error);
     let _core_listener = core
         .add_listener_local()
         .done(move |id, seq| {
             if id == pw::core::PW_ID_CORE && seq == pending {
-                finished.set(true);
-                quit.quit();
+                finished_done.set(true);
+                quit_done.quit();
             }
+        })
+        .error(move |_id, _seq, res, message| {
+            *recorded_error.borrow_mut() = Some(format!("PipeWire core error ({res}): {message}"));
+            finished_err.set(true);
+            quit_err.quit();
         })
         .register();
 
-    mainloop.run();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !done.get() && Instant::now() < deadline {
+        if mainloop
+            .loop_()
+            .iterate(pw::loop_::Timeout::Finite(Duration::from_millis(100)))
+            < 0
+        {
+            break;
+        }
+    }
+
+    if let Some(error) = core_error.borrow_mut().take() {
+        return Err(error);
+    }
 
     let mut list = devices.borrow().clone();
     list.sort_by_cached_key(|device| device.label.to_lowercase());

@@ -37,7 +37,9 @@
 //!   derivative cache (`MUSIKA_UI_COVER_CACHE_DIR`, default under
 //!   `$XDG_CACHE_HOME/musika/cover-derivatives`). Later opens of the same
 //!   cover read a ~20-80 KB file instead of decoding the original again, and
-//!   the derivative decode skips resizing entirely.
+//!   the derivative decode skips resizing entirely. Derivatives are JPEG for
+//!   opaque covers (the common case); a source that decodes with transparency
+//!   keeps its alpha channel in a PNG derivative instead (U-17).
 //!
 //! All of this runs on the background executor (the cache calls it from a
 //! spawned task); the UI thread only builds the [`gpui::RenderImage`] handle.
@@ -53,7 +55,10 @@ use image::{Frame, ImageEncoder as _};
 /// Version tag mixed into derivative file names. Bump when the decoder
 /// output changes (filter, colour order, quality) so stale derivatives are
 /// not reused.
-const DERIVATIVE_VERSION: u32 = 1;
+///
+/// v2: transparent PNG/WebP sources keep their alpha channel in a PNG
+/// derivative instead of a JPEG (U-17).
+const DERIVATIVE_VERSION: u32 = 2;
 /// JPEG quality for display derivatives. The derivative is already painted
 /// at a few hundred pixels; 90 keeps photographic covers visually identical
 /// at ~20-80 KB per file.
@@ -180,16 +185,37 @@ fn decode_jpeg(bytes: &[u8], edge: u32) -> Result<Arc<RenderImage>, ImageCacheEr
         let (scaled_w, scaled_h) = decoder
             .scale(edge as u16, edge as u16)
             .map_err(decode_error)?;
-        let rgb = decoder.decode().map_err(decode_error)?;
-        let (target_w, target_h) = fit_dims(u32::from(scaled_w), u32::from(scaled_h), edge);
-        let rgb = resize_rgb(
-            rgb,
-            u32::from(scaled_w),
-            u32::from(scaled_h),
-            target_w,
-            target_h,
-        )?;
-        return render_bgra(rgb_to_bgra(&rgb), target_w, target_h);
+        let decoded = decoder.decode().map_err(decode_error)?;
+        let pixel_format = decoder
+            .info()
+            .map(|scaled_info| scaled_info.pixel_format)
+            .unwrap_or(info.pixel_format);
+        let (scaled_w, scaled_h) = (u32::from(scaled_w), u32::from(scaled_h));
+        let (target_w, target_h) = fit_dims(scaled_w, scaled_h, edge);
+        let bgra = match pixel_format {
+            jpeg_decoder::PixelFormat::RGB24 => {
+                let rgb = resize_rgb(decoded, scaled_w, scaled_h, target_w, target_h)?;
+                rgb_to_bgra(&rgb)
+            }
+            jpeg_decoder::PixelFormat::L8 => {
+                resize_bgra(l8_to_bgra(&decoded), scaled_w, scaled_h, target_w, target_h)?
+            }
+            jpeg_decoder::PixelFormat::CMYK32 => resize_bgra(
+                cmyk_to_bgra(&decoded),
+                scaled_w,
+                scaled_h,
+                target_w,
+                target_h,
+            )?,
+            jpeg_decoder::PixelFormat::L16 => resize_bgra(
+                l16_to_bgra(&decoded),
+                scaled_w,
+                scaled_h,
+                target_w,
+                target_h,
+            )?,
+        };
+        return render_bgra(bgra, target_w, target_h);
     }
 
     // Small enough to decode directly: zune-jpeg is SIMD accelerated and can
@@ -347,10 +373,54 @@ fn rgb_to_bgra(rgb: &[u8]) -> Vec<u8> {
     bgra
 }
 
-/// Decodes a display derivative. Derivatives are always JPEG and already at
-/// the requested bucket edge, so this is a direct BGRA decode with no resize.
+/// Expands an 8-bit grayscale (`L8`) buffer into opaque BGRA pixels.
+fn l8_to_bgra(gray: &[u8]) -> Vec<u8> {
+    let mut bgra = Vec::with_capacity(gray.len() * 4);
+    for &g in gray {
+        bgra.extend_from_slice(&[g, g, g, u8::MAX]);
+    }
+    bgra
+}
+
+/// Expands a 16-bit grayscale (`L16`) buffer into 8-bit opaque BGRA pixels.
+fn l16_to_bgra(gray16: &[u8]) -> Vec<u8> {
+    let mut bgra = Vec::with_capacity(gray16.len() / 2 * 4);
+    for sample in gray16.as_chunks::<2>().0 {
+        let g = (u16::from_ne_bytes(*sample) >> 8) as u8;
+        bgra.extend_from_slice(&[g, g, g, u8::MAX]);
+    }
+    bgra
+}
+
+/// Converts a JPEG/Adobe `CMYK32` buffer into opaque BGRA pixels.
+///
+/// `jpeg-decoder` outputs inverted CMYK components (255 = no ink, 0 = full ink)
+/// following the Adobe APP14 YCCK/CMYK convention used in JPEG files.
+fn cmyk_to_bgra(cmyk: &[u8]) -> Vec<u8> {
+    let mut bgra = Vec::with_capacity(cmyk.len());
+    for pixel in cmyk.as_chunks::<4>().0 {
+        let c = u16::from(pixel[0]);
+        let m = u16::from(pixel[1]);
+        let y = u16::from(pixel[2]);
+        let k = u16::from(pixel[3]);
+        let r = ((c * k + 127) / 255) as u8;
+        let g = ((m * k + 127) / 255) as u8;
+        let b = ((y * k + 127) / 255) as u8;
+        bgra.extend_from_slice(&[b, g, r, u8::MAX]);
+    }
+    bgra
+}
+
+/// Decodes a display derivative. A derivative is already at the requested
+/// bucket edge, so this is a direct decode with no resize: JPEG stays on the
+/// fast `zune-jpeg` BGRA path, and a PNG derivative (kept only when the source
+/// had transparency, U-17) decodes through `image` with its alpha intact.
 fn decode_derivative(path: &Path) -> Result<Arc<RenderImage>, ImageCacheError> {
     let bytes = std::fs::read(path).map_err(io_error)?;
+    if derivative_is_png(path) {
+        // `u32::MAX` never shrinks: the derivative is already display-sized.
+        return decode_raster(&bytes, image::ImageFormat::Png, u32::MAX);
+    }
     let options = zune_jpeg::zune_core::options::DecoderOptions::default()
         .jpeg_set_out_colorspace(zune_jpeg::zune_core::colorspace::ColorSpace::BGRA);
     let mut decoder = zune_jpeg::JpegDecoder::new_with_options(
@@ -366,7 +436,35 @@ fn decode_derivative(path: &Path) -> Result<Arc<RenderImage>, ImageCacheError> {
     render_bgra(bgra, width, height)
 }
 
+/// Whether a derivative file is the alpha-preserving PNG flavour.
+fn derivative_is_png(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+}
+
+/// Whether the decoded frame has any pixel the surface must composite.
+///
+/// Only transparent sources pay for this linear scan: the derivative encoder
+/// picks PNG when it finds one, and JPEG is byte-identical to the pre-U-17
+/// output for every opaque cover.
+fn has_transparent_pixels(image: &Arc<RenderImage>) -> bool {
+    let Some(bytes) = image.as_bytes(0) else {
+        return false;
+    };
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|pixel| pixel[3] != u8::MAX)
+}
+
 /// Writes the decoded display image to the derivative cache.
+///
+/// JPEG for opaque covers (the hot path), PNG when the frame carries alpha:
+/// a JPEG cannot represent transparency, and PNG/WebP sources would lose it
+/// (U-17). The extension travels in the file name so the decode path can pick
+/// the matching decoder.
 fn write_derivative(
     source: &Path,
     edge: u32,
@@ -379,15 +477,28 @@ fn write_derivative(
     let Some(bytes) = image.as_bytes(0) else {
         return Ok(());
     };
-    let mut rgb = Vec::with_capacity(bytes.len() / 4 * 3);
-    for pixel in bytes.as_chunks::<4>().0 {
-        rgb.extend_from_slice(&[pixel[2], pixel[1], pixel[0]]);
-    }
-    let mut encoded = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, DERIVATIVE_QUALITY)
-        .write_image(&rgb, width, height, image::ExtendedColorType::Rgb8)
-        .map_err(image_error)?;
-    let name = derivative_name(source, edge);
+    let (extension, encoded) = if has_transparent_pixels(image) {
+        let mut rgba = Vec::with_capacity(bytes.len());
+        for pixel in bytes.as_chunks::<4>().0 {
+            rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+        }
+        let mut encoded = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut encoded)
+            .write_image(&rgba, width, height, image::ExtendedColorType::Rgba8)
+            .map_err(image_error)?;
+        ("png", encoded)
+    } else {
+        let mut rgb = Vec::with_capacity(bytes.len() / 4 * 3);
+        for pixel in bytes.as_chunks::<4>().0 {
+            rgb.extend_from_slice(&[pixel[2], pixel[1], pixel[0]]);
+        }
+        let mut encoded = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, DERIVATIVE_QUALITY)
+            .write_image(&rgb, width, height, image::ExtendedColorType::Rgb8)
+            .map_err(image_error)?;
+        ("jpg", encoded)
+    };
+    let name = derivative_name(source, edge, extension);
     std::fs::create_dir_all(dir).map_err(io_error)?;
     crate::cache::write_atomic(dir, &name, &encoded).map_err(anyhow_error)?;
     Ok(())
@@ -402,8 +513,9 @@ fn derivative_dims(image: &Arc<RenderImage>) -> Option<(u32, u32)> {
     Some((u32::from(size.width).max(1), u32::from(size.height).max(1)))
 }
 
-/// File name of the cached derivative for `source` at `edge`.
-fn derivative_name(source: &Path, edge: u32) -> String {
+/// File name of the cached derivative for `source` at `edge`. The extension
+/// names the encoding: `jpg` for opaque covers, `png` when alpha was kept.
+fn derivative_name(source: &Path, edge: u32, extension: &str) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     source.hash(&mut hasher);
     if let Ok(metadata) = std::fs::metadata(source) {
@@ -416,13 +528,40 @@ fn derivative_name(source: &Path, edge: u32) -> String {
     }
     DERIVATIVE_VERSION.hash(&mut hasher);
     edge.hash(&mut hasher);
-    format!("cover-{:016x}-{edge}.jpg", hasher.finish())
+    format!("cover-{:016x}-{edge}.{extension}", hasher.finish())
 }
 
 /// Path of the cached derivative for `source` at `edge`, if one exists.
+///
+/// Both encodings are probed: the format is chosen from the decoded pixels, so
+/// the cache lookup cannot know it before the file exists.
 fn derivative_path(source: &Path, edge: u32, dir: &Path) -> Option<PathBuf> {
-    let path = dir.join(derivative_name(source, edge));
-    path.is_file().then_some(path)
+    ["jpg", "png"].into_iter().find_map(|extension| {
+        let path = dir.join(derivative_name(source, edge, extension));
+        path.is_file().then_some(path)
+    })
+}
+
+/// Deletes every cached display derivative (and the directory itself).
+///
+/// Called when the daemon wipes the covers (`Wiped { scope: "covers" }`): the
+/// source files are gone, so their derivatives are dead weight (U-17). Runs on
+/// the caller's background thread — the cache can hold thousands of files.
+pub(crate) fn clear_derivatives() {
+    let Some(root) = derivative_root() else {
+        return;
+    };
+    prune_derivative_dir(&root);
+}
+
+/// [`clear_derivatives`] for an explicit directory (tests and callers that
+/// already resolved the root).
+fn prune_derivative_dir(dir: &Path) {
+    if let Err(err) = std::fs::remove_dir_all(dir)
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!("[musika/cover] derivative prune failed: {err}");
+    }
 }
 
 /// Directory holding display derivatives, or `None` when no cache root is
@@ -489,6 +628,20 @@ mod tests {
         image
             .save_with_format(path, image::ImageFormat::Jpeg)
             .expect("save test jpeg");
+    }
+
+    /// A PNG fixture, optionally with the left half fully transparent.
+    fn write_test_png(path: &Path, width: u32, height: u32, transparent_left: bool) {
+        let image = image::RgbaImage::from_fn(width, height, |x, _| {
+            if transparent_left && x < width / 2 {
+                image::Rgba([0, 0, 0, 0])
+            } else {
+                image::Rgba([(x % 251) as u8, 90, 160, 255])
+            }
+        });
+        image
+            .save_with_format(path, image::ImageFormat::Png)
+            .expect("save test png");
     }
 
     fn display_edge(image: &Arc<RenderImage>) -> (u32, u32) {
@@ -610,6 +763,72 @@ mod tests {
         _ = std::fs::remove_dir_all(dir);
     }
 
+    /// U-17: a transparent PNG source must not lose its alpha channel to a
+    /// JPEG derivative. The alpha-preserving derivative is a PNG and the
+    /// second (cache-hit) decode still composites the same pixels.
+    #[test]
+    fn transparent_png_derivatives_stay_png_and_keep_alpha() {
+        let dir = temp_dir("alpha-derivative");
+        let path = dir.join("cover.png");
+        write_test_png(&path, 1200, 1200, true);
+
+        let first = decode_for_display_in(&path, 512, Some(&dir)).expect("first decode");
+        let derivative =
+            derivative_path(&path, quantize_edge(512), &dir).expect("derivative written");
+        assert_eq!(
+            derivative
+                .extension()
+                .and_then(|extension| extension.to_str()),
+            Some("png"),
+            "a transparent source keeps alpha in a PNG derivative"
+        );
+        let (width, height) = display_edge(&first);
+        assert_eq!((width, height), (512, 512));
+
+        let cached = decode_for_display_in(&path, 512, Some(&dir)).expect("cached decode");
+        let bytes = cached.as_bytes(0).expect("cached frame bytes");
+        // Inside the transparent half, far enough from the split that the
+        // resize cannot blend opaque pixels in.
+        let index = (((height / 2) * width + width / 8) as usize) * 4;
+        assert_eq!(
+            bytes[index + 3],
+            0,
+            "alpha survives the PNG derivative round trip"
+        );
+        _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Opaque sources keep the previous JPEG derivative behaviour (smaller
+    /// files, the fast zune-jpeg decode path).
+    #[test]
+    fn opaque_png_derivatives_stay_jpeg() {
+        let dir = temp_dir("opaque-png-derivative");
+        let path = dir.join("cover.png");
+        write_test_png(&path, 1200, 1200, false);
+
+        let _ = decode_for_display_in(&path, 512, Some(&dir)).expect("decode");
+        let derivative =
+            derivative_path(&path, quantize_edge(512), &dir).expect("derivative written");
+        assert_eq!(
+            derivative
+                .extension()
+                .and_then(|extension| extension.to_str()),
+            Some("jpg"),
+            "an opaque PNG does not need an alpha-capable derivative"
+        );
+        _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// U-17: `Wiped { scope: "covers" }` prunes the derivative directory.
+    #[test]
+    fn pruning_the_derivative_cache_removes_every_file() {
+        let dir = temp_dir("prune");
+        std::fs::write(dir.join("cover-1-512.jpg"), b"jpeg").expect("write derivative");
+        std::fs::write(dir.join("cover-2-512.png"), b"png").expect("write derivative");
+        prune_derivative_dir(&dir);
+        assert!(!dir.exists(), "the derivative directory is removed");
+    }
+
     #[test]
     fn derivative_is_keyed_on_the_source_mtime() {
         let dir = temp_dir("derivative-key");
@@ -625,6 +844,43 @@ mod tests {
             derivative_path(&path, quantize_edge(512), &dir),
             Some(original)
         );
+        _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn l8_grayscale_and_cmyk32_convert_to_bgra() {
+        // Direct L8 pixel expansion to BGRA.
+        let gray = [0u8, 128, 255];
+        assert_eq!(
+            l8_to_bgra(&gray),
+            vec![0, 0, 0, 255, 128, 128, 128, 255, 255, 255, 255, 255]
+        );
+
+        // Direct CMYK32 pixel conversion to BGRA (Adobe inverted CMYK: 255 = no ink).
+        // Pure red in inverted CMYK: C=255 (no cyan), M=0 (full magenta), Y=0 (full yellow), K=255 (no black) -> R=255, G=0, B=0 -> BGRA=[0, 0, 255, 255].
+        // Pure white: [255, 255, 255, 255] -> BGRA=[255, 255, 255, 255].
+        // 50% K on cyan-free channel: C=200, M=100, Y=50, K=128 -> R=100, G=50, B=25 -> BGRA=[25, 50, 100, 255].
+        let cmyk = [255u8, 0, 0, 255, 255, 255, 255, 255, 200, 100, 50, 128];
+        assert_eq!(
+            cmyk_to_bgra(&cmyk),
+            vec![0, 0, 255, 255, 255, 255, 255, 255, 25, 50, 100, 255]
+        );
+
+        // End-to-end DCT-scaled L8 grayscale JPEG (> 2x target edge).
+        let dir = temp_dir("l8-scaled");
+        let path = dir.join("gray.jpg");
+        let gray_img = image::GrayImage::from_fn(1200, 1200, |_, _| image::Luma([180u8]));
+        gray_img
+            .save_with_format(&path, image::ImageFormat::Jpeg)
+            .expect("save grayscale jpeg");
+        let decoded = decode_for_display_in(&path, 512, None).expect("decode scaled l8 jpeg");
+        assert_eq!(display_edge(&decoded), (512, 512));
+        let bytes = decoded.as_bytes(0).expect("l8 frame bytes");
+        let pixel = &bytes[..4];
+        assert!((pixel[0] as i32 - 180).abs() <= 4, "B: {pixel:?}");
+        assert_eq!(pixel[0], pixel[1]);
+        assert_eq!(pixel[1], pixel[2]);
+        assert_eq!(pixel[3], 255);
         _ = std::fs::remove_dir_all(dir);
     }
 }

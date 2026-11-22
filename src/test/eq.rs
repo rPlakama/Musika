@@ -1,7 +1,9 @@
 use std::f64::consts::PI;
 use std::sync::Arc;
 
-use crate::eq::{EqProfile, EqRuntime};
+use crate::eq::{
+    Biquad, BiquadState, EqFilter, EqProfile, EqRuntime, FilterKind, biquad_for, profile_path,
+};
 
 #[test]
 fn parses_parameric_filters_preamp_and_graphic_bands() {
@@ -28,6 +30,93 @@ fn rejects_unknown_directives_and_bad_filters() {
     assert!(EqProfile::parse("x", "Filter: ON XX Fc 100 Hz").is_err());
     assert!(EqProfile::parse("x", "Filter: ON PK Fc 0 Hz").is_err());
     assert!(EqProfile::parse("x", "GraphicEQ: 20").is_err());
+    assert!(EqProfile::parse("x", "Filter: ON PK Fc 1000 Hz Gain -3 dB Q").is_err());
+    assert!(EqProfile::parse("x", "Filter: ON PK Fc 1000 Hz stray").is_err());
+}
+
+#[test]
+fn low_shelf_and_high_shelf_match_rbj_cookbook_dc_and_nyquist_gain() {
+    let fs = 48_000.0;
+    let f0 = fs / 6.0;
+    let gain_db = 12.0;
+    let q = std::f64::consts::FRAC_1_SQRT_2;
+
+    let omega = 2.0 * PI * f0 / fs;
+    let sin = omega.sin();
+    let cos = omega.cos();
+    let alpha = sin / (2.0 * q);
+    let a = 10f64.powf(gain_db / 40.0);
+    let beta = 2.0 * a.sqrt() * alpha;
+    let linear_gain = 10f64.powf(gain_db / 20.0);
+
+    let ls = biquad_for(
+        &EqFilter {
+            kind: FilterKind::LowShelf,
+            freq: f0,
+            gain_db,
+            q,
+        },
+        fs,
+    );
+    let ls_a0 = (a + 1.0) + (a - 1.0) * cos + beta;
+    let expected_ls = Biquad {
+        b0: (a * ((a + 1.0) - (a - 1.0) * cos + beta)) / ls_a0,
+        b1: (2.0 * a * ((a - 1.0) - (a + 1.0) * cos)) / ls_a0,
+        b2: (a * ((a + 1.0) - (a - 1.0) * cos - beta)) / ls_a0,
+        a1: (-2.0 * ((a - 1.0) + (a + 1.0) * cos)) / ls_a0,
+        a2: ((a + 1.0) + (a - 1.0) * cos - beta) / ls_a0,
+    };
+    assert!((ls.b0 - expected_ls.b0).abs() < 1e-12);
+    assert!((ls.b1 - expected_ls.b1).abs() < 1e-12);
+    assert!((ls.b2 - expected_ls.b2).abs() < 1e-12);
+    assert!((ls.a1 - expected_ls.a1).abs() < 1e-12);
+    assert!((ls.a2 - expected_ls.a2).abs() < 1e-12);
+
+    let ls_dc = (ls.b0 + ls.b1 + ls.b2) / (1.0 + ls.a1 + ls.a2);
+    let ls_nyquist = (ls.b0 - ls.b1 + ls.b2) / (1.0 - ls.a1 + ls.a2);
+    assert!((ls_dc - linear_gain).abs() < 1e-12);
+    assert!((ls_nyquist - 1.0).abs() < 1e-12);
+
+    let hs = biquad_for(
+        &EqFilter {
+            kind: FilterKind::HighShelf,
+            freq: f0,
+            gain_db,
+            q,
+        },
+        fs,
+    );
+    let hs_a0 = (a + 1.0) - (a - 1.0) * cos + beta;
+    let expected_hs = Biquad {
+        b0: (a * ((a + 1.0) + (a - 1.0) * cos + beta)) / hs_a0,
+        b1: (-2.0 * a * ((a - 1.0) + (a + 1.0) * cos)) / hs_a0,
+        b2: (a * ((a + 1.0) + (a - 1.0) * cos - beta)) / hs_a0,
+        a1: (2.0 * ((a - 1.0) - (a + 1.0) * cos)) / hs_a0,
+        a2: ((a + 1.0) - (a - 1.0) * cos - beta) / hs_a0,
+    };
+    assert!((hs.b0 - expected_hs.b0).abs() < 1e-12);
+    assert!((hs.b1 - expected_hs.b1).abs() < 1e-12);
+    assert!((hs.b2 - expected_hs.b2).abs() < 1e-12);
+    assert!((hs.a1 - expected_hs.a1).abs() < 1e-12);
+    assert!((hs.a2 - expected_hs.a2).abs() < 1e-12);
+
+    let hs_dc = (hs.b0 + hs.b1 + hs.b2) / (1.0 + hs.a1 + hs.a2);
+    let hs_nyquist = (hs.b0 - hs.b1 + hs.b2) / (1.0 - hs.a1 + hs.a2);
+    assert!((hs_dc - 1.0).abs() < 1e-12);
+    assert!((hs_nyquist - linear_gain).abs() < 1e-12);
+
+    let mut denorm_state = BiquadState::default();
+    assert_eq!(denorm_state.process(&ls, 1e-20), 0.0);
+}
+
+#[test]
+fn profile_path_rejects_traversal() {
+    for bad in ["../etc/passwd", "a/b", "..", ".", "a\\b", "", "/etc/passwd"] {
+        assert!(
+            profile_path(bad).is_err(),
+            "profile_path({bad:?}) must return Err"
+        );
+    }
 }
 
 #[test]

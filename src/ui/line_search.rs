@@ -43,6 +43,10 @@ use std::ops::Range;
 /// The separator used by [`LineRow::search_text`]. A newline keeps the
 /// joined text stable while still preventing a query typed into the
 /// single-line bar from spanning two cells.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+)]
 pub const CELL_SEPARATOR: char = '\n';
 
 /// The rendered cells of one visible row plus search-only extras.
@@ -117,6 +121,10 @@ impl LineRow {
     }
 
     /// The three cells, in render order.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn cells(&self) -> [&str; 3] {
         [&self.title, &self.subtitle, &self.meta]
     }
@@ -133,6 +141,10 @@ impl LineRow {
     /// The cells joined by [`CELL_SEPARATOR`] — the stable text a highlight
     /// layout can run over. Use [`Self::cell_ranges`] when each cell is painted
     /// as its own text element.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn search_text(&self) -> String {
         let mut text = String::new();
         for (index, cell) in self.cells().iter().enumerate() {
@@ -160,6 +172,10 @@ impl LineRow {
     }
 
     /// Highlight ranges per painted cell, in `[title, subtitle, meta]` order.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn cell_ranges(&self, query: &str) -> [Vec<Range<usize>>; 3] {
         [
             match_ranges(query, &self.title),
@@ -179,18 +195,6 @@ pub struct LineTarget {
 impl LineTarget {
     pub fn new(rows: Vec<Option<LineRow>>) -> Self {
         Self { rows }
-    }
-
-    pub fn len(&self) -> usize {
-        self.rows.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.rows.is_empty()
-    }
-
-    pub fn row(&self, row: usize) -> Option<&LineRow> {
-        self.rows.get(row).and_then(Option::as_ref)
     }
 }
 
@@ -246,6 +250,10 @@ impl LineSearchState {
     /// Return to the closed, empty state. Like closing, this discards the
     /// query and ring; callers resetting *inside* an open session should call
     /// [`Self::set_query`] with the new query instead.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn reset(&mut self) {
         self.open = false;
         self.clear_session();
@@ -315,6 +323,10 @@ impl LineSearchState {
 
     /// Act on the current candidate: return it and make it the active target.
     /// `None` when the query has no matches (or no query is set).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn jump(&mut self) -> Option<LineHit> {
         let hit = self.current_hit();
         if let Some(hit) = hit {
@@ -415,6 +427,10 @@ struct Folded {
 /// is the only position the `/` bar's word-delete exposes. Mirrors
 /// `SearchInput.deleteWordBack` (which also keeps text after a mid-string
 /// cursor; `&mut String` alone cannot express that case).
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+)]
 pub fn delete_word_back(text: &mut String) {
     let mut start = text.len();
 

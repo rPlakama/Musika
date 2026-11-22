@@ -97,33 +97,33 @@ pub(crate) async fn library_rows(
                 .map(|artist| {
                     let local_image = artist_images.get(&artist.id).cloned();
                     Row {
-                    item: crate::model::ItemMeta {
-                        id: artist.id,
-                        title: artist.name,
-                        cover_url: local_image.unwrap_or_else(|| {
-                            crate::covers::url_for(artist.cover_art.as_deref(), &covers)
-                        }),
-                        cover_remote: artist
-                            .image_url
-                            .clone()
-                            .or_else(|| {
-                                artist
-                                    .cover_art
-                                    .as_deref()
-                                    .and_then(|id| remotes.get(id))
-                                    .cloned()
-                            })
-                            .unwrap_or_default(),
-                        album_id: String::new(),
-                    },
-                    track: String::new(),
-                    kind: RowKind::Artist,
-                    subtitle: albums_label(artist.album_count),
-                    meta: String::new(),
-                    song_id: String::new(),
-                    starred: artist.starred.is_some(),
-                    rating: 0,
-                }
+                        item: crate::model::ItemMeta {
+                            id: artist.id,
+                            title: artist.name,
+                            cover_url: local_image.unwrap_or_else(|| {
+                                crate::covers::url_for(artist.cover_art.as_deref(), &covers)
+                            }),
+                            cover_remote: artist
+                                .image_url
+                                .clone()
+                                .or_else(|| {
+                                    artist
+                                        .cover_art
+                                        .as_deref()
+                                        .and_then(|id| remotes.get(id))
+                                        .cloned()
+                                })
+                                .unwrap_or_default(),
+                            album_id: String::new(),
+                        },
+                        track: String::new(),
+                        kind: RowKind::Artist,
+                        subtitle: albums_label(artist.album_count),
+                        meta: String::new(),
+                        song_id: String::new(),
+                        starred: artist.starred.is_some(),
+                        rating: 0,
+                    }
                 })
                 .collect())
         }
@@ -274,9 +274,14 @@ pub(crate) async fn page_data(
                 albums.retain(|album| filter.contains_album(&album.id));
             }
             let shown_albums = albums.len() as i64;
-            let covers =
-                crate::covers::url_map_for(&dbs, albums.iter().map(|album| &album.cover_art))
-                    .await?;
+            let covers = crate::covers::url_map_for(
+                &dbs,
+                albums
+                    .iter()
+                    .map(|album| &album.cover_art)
+                    .chain(std::iter::once(&artist.cover_art)),
+            )
+            .await?;
             let remotes = crate::covers::remote_map_for(
                 &dbs,
                 albums
@@ -474,13 +479,6 @@ pub(crate) async fn queue_for_song(
     crate::queue::library_queue(&dbs, song_id, order, offline).await
 }
 
-pub(crate) fn unix_ms_for_cover() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default()
-}
-
 pub(crate) fn send_event(tx: &UnboundedSender<Event>, event: Event) {
     _ = tx.send(event);
 }
@@ -491,6 +489,24 @@ pub(crate) fn send_event(tx: &UnboundedSender<Event>, event: Event) {
 pub(crate) fn send_download_settled(tx: &UnboundedSender<Event>) {
     crate::offline::clear_cache();
     send_event(tx, Event::DownloadSettled);
+}
+
+/// RAII guard that guarantees [`send_download_settled`] is emitted when a
+/// download task exits on any branch (including early returns and cancellation).
+pub(crate) struct DownloadSettledGuard {
+    tx: UnboundedSender<Event>,
+}
+
+impl DownloadSettledGuard {
+    pub(crate) fn new(tx: UnboundedSender<Event>) -> Self {
+        Self { tx }
+    }
+}
+
+impl Drop for DownloadSettledGuard {
+    fn drop(&mut self) {
+        send_download_settled(&self.tx);
+    }
 }
 
 pub(crate) fn emit_queue(
@@ -538,17 +554,36 @@ pub(crate) fn thumbify(url: String) -> String {
     url.replacen(".jpg", ".thumb.jpg", 1)
 }
 
+fn html_tag_len(after_lt: &str) -> Option<usize> {
+    let mut chars = after_lt.chars();
+    let first = chars.next()?;
+    let valid_start = first.is_ascii_alphabetic()
+        || first == '!'
+        || (first == '/' && chars.next().is_some_and(|ch| ch.is_ascii_alphabetic()));
+    if !valid_start {
+        return None;
+    }
+    let close = after_lt.find('>')?;
+    if after_lt[..close].contains('<') {
+        return None;
+    }
+    Some(close + 1)
+}
+
 pub(crate) fn plain_notes(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
-    let mut in_tag = false;
-    for ch in raw.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => out.push(ch),
-            _ => {}
+    let mut rest = raw;
+    while let Some(lt) = rest.find('<') {
+        out.push_str(&rest[..lt]);
+        let after_lt = &rest[lt + 1..];
+        if let Some(tag_len) = html_tag_len(after_lt) {
+            rest = &after_lt[tag_len..];
+        } else {
+            out.push('<');
+            rest = after_lt;
         }
     }
+    out.push_str(rest);
     out.replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
@@ -557,4 +592,31 @@ pub(crate) fn plain_notes(raw: &str) -> String {
         .replace("&nbsp;", " ")
         .trim()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_notes_preserves_literal_angle_brackets_and_strips_valid_tags() {
+        assert_eq!(plain_notes("A <3 B and <b>bold</b>"), "A <3 B and bold");
+        assert_eq!(
+            plain_notes("Bio with trailing <unclosed tag"),
+            "Bio with trailing <unclosed tag"
+        );
+        assert_eq!(
+            plain_notes("<p>Hello <a href=\"https://example.test\">world</a> &amp; friends!</p>"),
+            "Hello world & friends!"
+        );
+    }
+
+    #[test]
+    fn download_settled_guard_emits_on_early_drop() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        {
+            let _guard = DownloadSettledGuard::new(tx);
+        }
+        assert!(matches!(rx.try_recv(), Ok(Event::DownloadSettled)));
+    }
 }

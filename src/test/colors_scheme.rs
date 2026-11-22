@@ -12,8 +12,22 @@ fn smart_thresholds_follow_colorfulness() {
 #[test]
 fn specs_produce_different_roles() {
     let seed = Rgb::new(58, 95, 205);
-    let (_, roles_2021) = build(seed, VariantChoice::TonalSpot, 0.0, 0.0, 0.0, Spec::Spec2021);
-    let (_, roles_2025) = build(seed, VariantChoice::TonalSpot, 0.0, 0.0, 0.0, Spec::Spec2025);
+    let (_, roles_2021) = build(
+        seed,
+        VariantChoice::TonalSpot,
+        0.0,
+        0.0,
+        0.0,
+        Spec::Spec2021,
+    );
+    let (_, roles_2025) = build(
+        seed,
+        VariantChoice::TonalSpot,
+        0.0,
+        0.0,
+        0.0,
+        Spec::Spec2025,
+    );
     let (_, roles_dms) = build(seed, VariantChoice::TonalSpot, 0.0, 0.0, 0.0, Spec::Dms);
     assert_ne!(roles_2021, roles_2025, "2021 and 2025 must differ");
     assert_ne!(roles_2025, roles_dms, "DMS raises the accent chroma");

@@ -6,10 +6,12 @@
 //! cover file is decoded once and every surface (row, player bar, page hero,
 //! fullscreen, collage pane) paints the same `Arc<RenderImage>` / GPU image.
 //!
-//! The element owns no identity cache itself: callers pass a stable `key`
+//! The element owns no decoded-pixel cache itself: callers pass a stable `key`
 //! derived from the cover identity (album/cover id, or the resolved source) and
-//! the cache de-duplicates by resource. A same-cover change therefore issues no
-//! new load; a different cover paints a different cached image.
+//! the cache de-duplicates by resource. It does keep the swap state of its own
+//! element id through `Window::with_element_state`: a same-cover change keeps
+//! painting the previous texture while the next one decodes, and a different
+//! cover paints a different cached image.
 
 use std::sync::{Arc, OnceLock};
 
@@ -33,26 +35,18 @@ pub(crate) struct CoverImage {
     scale: f32,
     fit: ObjectFit,
     radius: f32,
-    image: Option<Arc<RenderImage>>,
     /// Cheap thumbnail painted while `source` (the full-resolution copy)
     /// decodes. A hero appears within a frame instead of staying blank for a
     /// full-size JPEG decode; once the source lands it paints on the next
     /// frame and the preview goes stale.
     preview: Option<Arc<CoverSource>>,
-    preview_image: Option<Arc<RenderImage>>,
     /// Keeps this decoded cover in a warm slot across page changes.
     retained: bool,
-    /// Resource identity most recently requested. A changed key may keep the
-    /// previous pixels while the next cover decodes (remote -> local warm-up).
-    source_key: Option<String>,
-    /// When the source key last changed, bounding how long stale pixels can be
-    /// painted if the replacement never loads.
-    pending_since: Option<std::time::Instant>,
 }
 
-/// How long a cover surface may paint the previous image while a replacement
-/// resource is still decoding. Long enough for a thumbnail decode, short
-/// enough that a genuinely different row cannot keep stale art indefinitely.
+// How long a cover surface may paint the previous image while a replacement
+// resource is still decoding. Long enough for a thumbnail decode, short
+// enough that a genuinely different row cannot keep stale art indefinitely.
 const IMAGE_SWAP_GRACE: std::time::Duration = std::time::Duration::from_millis(600);
 
 /// Whether cover load tracing (`MUSIKA_LOAD_TRACE`) is enabled. Read once so
@@ -67,6 +61,85 @@ fn unix_epoch_ms() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_millis())
+}
+
+/// Per-element-id state that must survive the `CoverImage` value itself.
+///
+/// GPUI rebuilds every element from the render each frame, so the decoded
+/// textures and the swap timer can only persist through
+/// `Window::with_element_state`. Without it the swap grace never sees the
+/// previous texture (warm-up and edge upgrades flash blank) and the load trace
+/// fires once per frame instead of once per source.
+#[derive(Default)]
+struct CoverImageState {
+    image: Option<Arc<RenderImage>>,
+    preview_image: Option<Arc<RenderImage>>,
+    /// Resource identity most recently requested. A changed key may keep the
+    /// previous pixels while the next cover decodes (remote -> local warm-up).
+    source_key: Option<String>,
+    /// When the source key last changed, bounding how long stale pixels can be
+    /// painted if the replacement never loads.
+    pending_since: Option<std::time::Instant>,
+    /// Source key whose `[musika/cover] ready` trace line was already emitted.
+    traced_key: Option<String>,
+    /// Deadline of the scheduled wake-up that expires [`IMAGE_SWAP_GRACE`].
+    grace_wake: Option<std::time::Instant>,
+}
+
+/// The decoded textures `paint` should draw, resolved during `prepaint`.
+///
+/// Public like the other element `PrepaintState` types: the `Element` trait is
+/// public, and an implementation may not name a private associated type.
+#[derive(Default)]
+pub struct CoverImagePaint {
+    image: Option<Arc<RenderImage>>,
+    preview_image: Option<Arc<RenderImage>>,
+}
+
+/// Whether a cover must stop painting the previous texture because the
+/// replacement has been decoding for longer than [`IMAGE_SWAP_GRACE`].
+fn should_drop_stale_image(
+    has_image: bool,
+    pending_since: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> bool {
+    has_image
+        && pending_since
+            .is_some_and(|started| now.saturating_duration_since(started) > IMAGE_SWAP_GRACE)
+}
+
+/// Wakes the window once [`IMAGE_SWAP_GRACE`] expires.
+///
+/// Decodes no longer keep an animation-frame spin alive, so without this a
+/// cover whose replacement never arrives could paint stale art until the user
+/// happens to move the pointer. One timer per source transition replaces the
+/// per-frame grace check.
+fn schedule_grace_wake(
+    state: &mut CoverImageState,
+    started: std::time::Instant,
+    now: std::time::Instant,
+    window: &Window,
+    cx: &App,
+) {
+    let deadline = started + IMAGE_SWAP_GRACE;
+    let Some(remaining) = deadline.checked_duration_since(now) else {
+        return;
+    };
+    if state.grace_wake == Some(deadline) {
+        return;
+    }
+    state.grace_wake = Some(deadline);
+    window
+        .spawn(cx, async move |async_cx| {
+            // Wake strictly after the deadline so the next prepaint observes an
+            // expired grace even on a coarse monotonic clock.
+            async_cx
+                .background_executor()
+                .timer(remaining + std::time::Duration::from_millis(1))
+                .await;
+            _ = async_cx.update(|window, _| window.refresh());
+        })
+        .detach();
 }
 
 impl CoverImage {
@@ -95,12 +168,8 @@ impl CoverImage {
             scale,
             fit,
             radius,
-            image: None,
             preview: None,
-            preview_image: None,
             retained: false,
-            source_key: None,
-            pending_since: None,
         }
     }
 
@@ -108,7 +177,6 @@ impl CoverImage {
     /// has decoded, so a large cover never leaves a blank hero.
     pub(crate) fn with_preview(mut self, preview: Option<Arc<CoverSource>>) -> Self {
         self.preview = preview;
-        self.preview_image = None;
         self
     }
 
@@ -117,6 +185,126 @@ impl CoverImage {
     pub(crate) fn retained(mut self) -> Self {
         self.retained = true;
         self
+    }
+
+    /// Resolves the textures for one frame, reading and updating the state that
+    /// persists across frames for this element id.
+    fn prepaint_cover(
+        &self,
+        state: &mut CoverImageState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> CoverImagePaint {
+        let trace = load_trace_enabled();
+        let now = std::time::Instant::now();
+        let Some(source) = self.source.as_deref() else {
+            // No cover: forget the previous identity, textures and timer.
+            *state = CoverImageState::default();
+            return CoverImagePaint::default();
+        };
+        let source_key = source.key();
+        if state.source_key.as_deref() != Some(source_key.as_str()) {
+            // A changed identity keeps the previous pixels for a short grace
+            // while the replacement decodes (see `IMAGE_SWAP_GRACE`).
+            state.source_key = Some(source_key.clone());
+            state.pending_since = Some(now);
+        }
+        let resource = source.resource();
+        // Decode at the physical size this cover is painted at. The original
+        // cover file is untouched; a 400 pt hero decodes 400 px instead of a
+        // 4096 px (64 MiB) texture, which is what used to grow the renderer's
+        // texture pool on every album page.
+        let edge = display_edge_for(self.width.max(self.height), window.scale_factor());
+        let retained = self.retained;
+        let mut loaded_now = false;
+        let loaded = self.cache.update(cx, |cache, cx| {
+            if retained {
+                cache.load_display_retained(&resource, edge, window, cx)
+            } else {
+                cache.load_display(&resource, edge, window, cx)
+            }
+        });
+        let loaded_image = match loaded {
+            Some(Ok(image)) => Some(image),
+            Some(Err(_)) => source.remote_resource().and_then(|resource| {
+                self.cache
+                    .update(cx, |cache, cx| {
+                        if retained {
+                            cache.load_display_retained(&resource, edge, window, cx)
+                        } else {
+                            cache.load_display(&resource, edge, window, cx)
+                        }
+                    })
+                    .and_then(Result::ok)
+            }),
+            None => None,
+        };
+        if let Some(image) = loaded_image {
+            state.image = Some(image);
+            state.pending_since = None;
+            state.grace_wake = None;
+            loaded_now = true;
+        } else if should_drop_stale_image(state.image.is_some(), state.pending_since, now) {
+            // The replacement never decoded: do not keep painting art that may
+            // belong to a different row forever.
+            state.image = None;
+        } else if state.image.is_some()
+            && let Some(started) = state.pending_since
+        {
+            schedule_grace_wake(state, started, now, window, cx);
+        }
+        // Paint a cheap thumbnail while the source decodes: the thumbnail
+        // file is a few tens of KB, so the surface has real pixels within a
+        // frame instead of a blank rectangle for the source decode.
+        state.preview_image = None;
+        if state.image.is_none()
+            && let Some(preview) = self.preview.as_deref()
+        {
+            let preview_edge = edge.min(384);
+            let resource = preview.resource();
+            state.preview_image = match self.cache.update(cx, |cache, cx| {
+                cache.load_preview(&resource, preview_edge, window, cx)
+            }) {
+                Some(Ok(image)) => Some(image),
+                Some(Err(_)) => preview.remote_resource().and_then(|resource| {
+                    self.cache
+                        .update(cx, |cache, cx| {
+                            cache.load_preview(&resource, preview_edge, window, cx)
+                        })
+                        .and_then(Result::ok)
+                }),
+                None => None,
+            };
+            loaded_now |= state.preview_image.is_some();
+        }
+        // Diagnostic only, and gated: one line per source transition, so an
+        // external harness can time startup and album-page hero readiness from
+        // the UI log. `state=preview` is the fast placeholder; `state=full` is
+        // the sharp source.
+        let paint_state = if state.image.is_some() {
+            Some("full")
+        } else if state.preview_image.is_some() {
+            Some("preview")
+        } else {
+            None
+        };
+        if trace
+            && loaded_now
+            && let Some(paint_state) = paint_state
+            && state.traced_key.as_deref() != Some(source_key.as_str())
+        {
+            state.traced_key = Some(source_key);
+            eprintln!(
+                "[musika/cover] ready id={} index={} epoch_ms={} edge={edge} state={paint_state}",
+                self.id_name,
+                self.index,
+                unix_epoch_ms(),
+            );
+        }
+        CoverImagePaint {
+            image: state.image.clone(),
+            preview_image: state.preview_image.clone(),
+        }
     }
 }
 
@@ -130,7 +318,7 @@ impl IntoElement for CoverImage {
 
 impl Element for CoverImage {
     type RequestLayoutState = ();
-    type PrepaintState = ();
+    type PrepaintState = CoverImagePaint;
 
     fn id(&self) -> Option<ElementId> {
         Some(ElementId::named_usize(self.id_name, self.index))
@@ -155,117 +343,23 @@ impl Element for CoverImage {
 
     fn prepaint(
         &mut self,
-        _id: Option<&GlobalElementId>,
+        id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         _bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
         window: &mut Window,
         cx: &mut App,
-    ) {
-        let Some(source) = self.source.as_deref() else {
-            self.image = None;
-            self.preview_image = None;
-            self.source_key = None;
-            self.pending_since = None;
-            return;
+    ) -> Self::PrepaintState {
+        let Some(global_id) = id else {
+            // An element rendered outside the tree has no id to key state on;
+            // fall back to one-frame state.
+            return self.prepaint_cover(&mut CoverImageState::default(), window, cx);
         };
-        let trace = load_trace_enabled();
-        let was_none = self.image.is_none();
-        let source_key = source.key();
-        if self.source_key.as_deref() != Some(source_key.as_str()) {
-            self.source_key = Some(source_key);
-            self.pending_since = Some(std::time::Instant::now());
-        }
-        let resource = source.resource();
-        // Decode at the physical size this cover is painted at. The original
-        // cover file is untouched; a 400 pt hero decodes 400 px instead of a
-        // 4096 px (64 MiB) texture, which is what used to grow the renderer's
-        // texture pool on every album page.
-        let edge = display_edge_for(
-            self.width.max(self.height),
-            window.scale_factor(),
-        );
-        let retained = self.retained;
-        let loaded = self.cache.update(cx, |cache, cx| {
-            if retained {
-                cache.load_display_retained(&resource, edge, window, cx)
-            } else {
-                cache.load_display(&resource, edge, window, cx)
-            }
-        });
-        let loaded_image = match loaded {
-            Some(Ok(image)) => Some(image),
-            Some(Err(_)) => source.remote_resource().and_then(|resource| {
-                self.cache
-                    .update(cx, |cache, cx| {
-                        if retained {
-                            cache.load_display_retained(&resource, edge, window, cx)
-                        } else {
-                            cache.load_display(&resource, edge, window, cx)
-                        }
-                    })
-                    .and_then(Result::ok)
-            }),
-            None => None,
-        };
-        if let Some(image) = loaded_image {
-            self.image = Some(image);
-            self.pending_since = None;
-        } else if self.image.is_some()
-            && self
-                .pending_since
-                .is_some_and(|started| started.elapsed() > IMAGE_SWAP_GRACE)
-        {
-            // The replacement never decoded: do not keep painting art that may
-            // belong to a different row forever.
-            self.image = None;
-        }
-        // Paint a cheap thumbnail while the source decodes: the thumbnail
-        // file is a few tens of KB, so the surface has real pixels within a
-        // frame instead of a blank rectangle for the source decode.
-        self.preview_image = None;
-        if self.image.is_none()
-            && let Some(preview) = self.preview.as_deref()
-        {
-            let preview_edge =
-                display_edge_for(self.width.max(self.height), window.scale_factor()).min(384);
-            let resource = preview.resource();
-            self.preview_image = match self.cache.update(cx, |cache, cx| {
-                cache.load_preview(&resource, preview_edge, window, cx)
-            }) {
-                Some(Ok(image)) => Some(image),
-                Some(Err(_)) => preview.remote_resource().and_then(|resource| {
-                    self.cache
-                        .update(cx, |cache, cx| {
-                            cache.load_preview(&resource, preview_edge, window, cx)
-                        })
-                        .and_then(Result::ok)
-                }),
-                None => None,
-            };
-        }
-        // Diagnostic only, and gated: one line the first time this element
-        // has an image to paint, so an external harness can time startup and
-        // album-page hero readiness from the UI log. `state=preview` is the
-        // fast placeholder; `state=full` is the sharp source.
-        let state = if self.image.is_some() {
-            Some("full")
-        } else if self.preview_image.is_some() {
-            Some("preview")
-        } else {
-            None
-        };
-        if trace
-            && was_none
-            && let Some(state) = state
-        {
-            eprintln!(
-                "[musika/cover] ready id={} index={} epoch_ms={} edge={edge} state={state}",
-                self.id_name,
-                self.index,
-                unix_epoch_ms(),
-            );
-        }
+        window.with_element_state::<CoverImageState, _>(global_id, |state, window| {
+            let mut state = state.unwrap_or_default();
+            let paint = self.prepaint_cover(&mut state, window, cx);
+            (paint, state)
+        })
     }
 
     fn paint(
@@ -274,7 +368,7 @@ impl Element for CoverImage {
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
-        _: &mut Self::PrepaintState,
+        paint: &mut Self::PrepaintState,
         window: &mut Window,
         _: &mut App,
     ) {
@@ -287,7 +381,7 @@ impl Element for CoverImage {
         window.paint_quad(
             fill(bounds, rgb(palette::surface_container_highest())).corner_radii(corners),
         );
-        let Some(image) = self.image.as_ref().or(self.preview_image.as_ref()) else {
+        let Some(image) = paint.image.as_ref().or(paint.preview_image.as_ref()) else {
             return;
         };
         let scaled = self.scale.max(1.0);
@@ -322,5 +416,34 @@ mod tests {
         let a = CoverSource::Path(std::path::PathBuf::from("/same.jpg"));
         let b = CoverSource::Path(std::path::PathBuf::from("/same.jpg"));
         assert_eq!(a.key(), b.key());
+    }
+
+    #[test]
+    fn swap_grace_keeps_the_previous_texture_for_a_bounded_time() {
+        let now = std::time::Instant::now();
+        assert!(
+            !should_drop_stale_image(false, Some(now), now),
+            "there is no previous texture to keep"
+        );
+        assert!(
+            !should_drop_stale_image(true, Some(now), now),
+            "the replacement may still decode"
+        );
+        assert!(
+            !should_drop_stale_image(true, Some(now), now + std::time::Duration::from_millis(100)),
+            "a normal decode keeps the old art without a blank frame"
+        );
+        assert!(
+            !should_drop_stale_image(true, None, now),
+            "a loaded source has no pending swap to expire"
+        );
+        assert!(
+            should_drop_stale_image(
+                true,
+                Some(now),
+                now + IMAGE_SWAP_GRACE + std::time::Duration::from_millis(1)
+            ),
+            "stale art is dropped once the grace has expired"
+        );
     }
 }

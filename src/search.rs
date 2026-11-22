@@ -89,9 +89,25 @@ pub(crate) async fn insert_search_rows(
 /// opening the search transaction (tens of MB on a large library). Keyset
 /// pagination on the primary key keeps the same transaction but holds only one
 /// page (plus the insert batch) at once.
+///
+/// N-16: the post-sync rebuild runs even when the sync changed nothing. The
+/// library revision recorded by `library::apply` is compared against the
+/// revision this table was last built from; an unchanged revision with a
+/// matching row count skips the rebuild entirely.
 pub async fn rebuild_from_library(pool: &SqlitePool) -> Result<()> {
     /// Rows per keyset page; the insert helper batches again at 32.
     const PAGE: i64 = 500;
+
+    // Read the revision *before* the rows: if a sync lands while this rebuild
+    // runs, the recorded revision is the older one, so the next sync rebuilds
+    // again instead of marking stale rows fresh.
+    let revision = crate::library::library_revision(pool).await?;
+    if let Some(revision) = revision
+        && read_revision(pool, "search_rev").await? == Some(revision)
+        && indexed_row_count_matches(pool).await?
+    {
+        return Ok(());
+    }
 
     let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM song_search")
@@ -117,7 +133,42 @@ pub async fn rebuild_from_library(pool: &SqlitePool) -> Result<()> {
     }
 
     tx.commit().await?;
+    if let Some(revision) = revision {
+        write_revision(pool, "search_rev", revision).await?;
+    }
     Ok(())
+}
+
+/// One integer-valued `meta` row; malformed/missing values count as absent.
+async fn read_revision(pool: &SqlitePool, key: &str) -> Result<Option<i64>> {
+    let value: Option<String> = sqlx::query_scalar("SELECT value FROM meta WHERE key = ?1")
+        .bind(key)
+        .fetch_optional(pool)
+        .await?;
+    Ok(value.and_then(|value| value.trim().parse().ok()))
+}
+
+async fn write_revision(pool: &SqlitePool, key: &str, revision: i64) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(key)
+    .bind(revision.to_string())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// The revision alone is not enough to trust an existing table: a wipe that
+/// preserved `meta` (or an interrupted rebuild) must still be repaired when
+/// the indexed row count no longer matches the library.
+async fn indexed_row_count_matches(pool: &SqlitePool) -> Result<bool> {
+    let (songs, indexed): (i64, i64) =
+        sqlx::query_as("SELECT (SELECT COUNT(*) FROM songs), (SELECT COUNT(*) FROM song_search)")
+            .fetch_one(pool)
+            .await?;
+    Ok(songs == indexed)
 }
 
 /// Full-text search over song title, artist and album.

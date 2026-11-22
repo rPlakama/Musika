@@ -1,9 +1,11 @@
 //! CLI entry for the `musika` binary.
 
-fn load_dotenv() {
-    let Ok(text) = std::fs::read_to_string(".env") else {
-        return;
-    };
+fn is_allowed_dotenv_key(key: &str) -> bool {
+    key.starts_with("MUSIKA_") && !matches!(key, "MUSIKA_UI_BIN" | "MUSIKA_KEY_FILE")
+}
+
+fn parse_allowed_dotenv(text: &str) -> Vec<(String, String)> {
+    let mut entries = Vec::new();
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -15,16 +17,71 @@ fn load_dotenv() {
         };
         let key = key.trim();
         let value = value.trim().trim_matches(['"', '\'']);
-        if !key.is_empty() && std::env::var_os(key).is_none() {
-            // SAFETY: `set_var` is unsafe because the process environment is
-            // global and must not be mutated while another thread reads it.
-            // TODO(safety): the call site (`init_backend`) already started the
-            // audio warm-up thread and startup instrumentation before
-            // `load_dotenv`, so the single-threaded invariant is not currently
-            // established; moving dotenv loading ahead of `warm_native()` would
-            // make it sound.
-            unsafe {
-                std::env::set_var(key, value);
+        if !key.is_empty() && is_allowed_dotenv_key(key) {
+            entries.push((key.to_string(), value.to_string()));
+        }
+    }
+    entries
+}
+
+fn is_owner_only_file(path: &std::path::Path) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !meta.file_type().is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: `geteuid(2)` takes no pointers, has no preconditions, and
+        // always succeeds returning the effective user ID.
+        let euid = unsafe { libc::geteuid() };
+        meta.uid() == euid && (meta.mode() & 0o022) == 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn dotenv_candidates(
+    config_dir: Option<&std::path::Path>,
+    allow_cwd: bool,
+) -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+    if allow_cwd {
+        paths.push(std::path::PathBuf::from(".env"));
+    }
+    if let Some(dir) = config_dir {
+        paths.push(dir.join("env"));
+    }
+    paths
+}
+
+fn read_safe_dotenv_entries(path: &std::path::Path) -> Vec<(String, String)> {
+    if !is_owner_only_file(path) {
+        return Vec::new();
+    }
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    parse_allowed_dotenv(&text)
+}
+
+fn load_dotenv() {
+    let config_dir = crate::db::config_dir().ok();
+    let candidates = dotenv_candidates(config_dir.as_deref(), cfg!(debug_assertions));
+    for path in candidates {
+        for (key, value) in read_safe_dotenv_entries(&path) {
+            if std::env::var_os(&key).is_none() {
+                // SAFETY: `load_dotenv` is called at the start of `init_backend`
+                // strictly before `player::warm_native()` or the tokio runtime
+                // spawns any background threads, so the process is still
+                // single-threaded when `set_var` mutates the environment.
+                unsafe {
+                    std::env::set_var(&key, &value);
+                }
             }
         }
     }
@@ -44,6 +101,7 @@ pub fn run() {
     }
 
     let args: Vec<String> = std::env::args().skip(1).collect();
+    crate::db::warn_legacy_xdg_config_once();
     if args.iter().any(|arg| arg == "--daemon") {
         crate::daemon::run();
     }
@@ -79,10 +137,17 @@ fn exec_ui() -> ! {
 }
 
 /// Non-Unix fallback: the project targets Linux; keep a buildable stub.
-#[cfg(not(unix))]
+#[cfg(all(not(unix), feature = "gpuui"))]
 fn exec_ui() -> ! {
     crate::ui::run();
     std::process::exit(0);
+}
+
+/// Non-Unix fallback without GPUI: exit cleanly when built headless.
+#[cfg(all(not(unix), not(feature = "gpuui")))]
+fn exec_ui() -> ! {
+    eprintln!("musika: built without UI support (gpuui feature disabled)");
+    std::process::exit(1);
 }
 
 /// Default `musika` invocation: connect to the existing core (or start it),
@@ -102,7 +167,12 @@ fn launch_or_show() {
             std::process::exit(1);
         }
     }
-    if !wait_for_path(&crate::ipc::daemon_socket_path(), std::time::Duration::from_secs(3)) {
+    // Probe by connecting: an existing but stale socket file must not count as
+    // ready (D-26).
+    if !wait_for_socket(
+        &crate::ipc::daemon_socket_path(),
+        std::time::Duration::from_secs(3),
+    ) {
         eprintln!("musika: the core UI socket is not ready");
         std::process::exit(1);
     }
@@ -114,17 +184,6 @@ fn launch_or_show() {
     }
     eprintln!("musika: could not ask the core to show the window");
     std::process::exit(1);
-}
-
-fn wait_for_path(path: &std::path::Path, timeout: std::time::Duration) -> bool {
-    let deadline = std::time::Instant::now() + timeout;
-    while std::time::Instant::now() < deadline {
-        if path.exists() {
-            return true;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(40));
-    }
-    false
 }
 
 fn wait_for_socket(path: &std::path::Path, timeout: std::time::Duration) -> bool {
@@ -139,7 +198,9 @@ fn wait_for_socket(path: &std::path::Path, timeout: std::time::Duration) -> bool
 }
 
 fn daemon_log_path() -> Option<std::path::PathBuf> {
-    crate::db::config_dir().ok().map(|dir| dir.join("musika-daemon.log"))
+    crate::db::config_dir()
+        .ok()
+        .map(|dir| dir.join("musika-daemon.log"))
 }
 
 fn spawn_detached_daemon() {
@@ -155,7 +216,10 @@ fn spawn_detached_daemon() {
         if let Some(parent) = log.parent() {
             _ = std::fs::create_dir_all(parent);
         }
-        if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&log)
+        if let Ok(file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log)
             && let Ok(file2) = file.try_clone()
         {
             command.stdout(std::process::Stdio::from(file));
@@ -191,13 +255,15 @@ fn spawn_detached_daemon() {
     }
 }
 
-/// Initializes the shared backend: startup instrumentation, native audio
-/// warm-up, dotenv, the account data root, and the database set.
+/// Initializes the shared backend: startup instrumentation, dotenv, legacy
+/// XDG config check, native audio warm-up, the account data root, and the
+/// database set.
 pub(crate) fn init_backend() -> bool {
     crate::startup::start();
-    crate::startup::trace("main");
-    crate::player::warm_native();
     load_dotenv();
+    crate::startup::trace("main");
+    crate::db::warn_legacy_xdg_config_once();
+    crate::player::warm_native();
 
     let data_root = match crate::accounts::startup_data_root() {
         Ok(root) => root,
@@ -227,4 +293,89 @@ pub(crate) fn init_backend() -> bool {
     // thread is demoted and only issues kernel readahead.
     crate::db::warm_startup();
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dotenv_allows_only_safe_musika_keys() {
+        let text = "\
+            # comment\n\
+            MUSIKA_UI_BIN=/tmp/evil\n\
+            MUSIKA_KEY_FILE=/tmp/evil-key\n\
+            LD_PRELOAD=/tmp/evil.so\n\
+            LD_LIBRARY_PATH=/tmp/evil-lib\n\
+            PATH=/tmp/evil-bin\n\
+            XDG_CONFIG_HOME=/tmp/evil-cfg\n\
+            DATABASE_URL=\"sqlite:app.db\"\n\
+            export MUSIKA_STARTUP_TRACE=\"1\"\n\
+            MUSIKA_OUTPUT_BACKEND='alsa'\n\
+            MUSIKA_SEARCH_ENGINE=fts\n";
+
+        let entries = parse_allowed_dotenv(text);
+        assert_eq!(
+            entries,
+            vec![
+                ("MUSIKA_STARTUP_TRACE".to_string(), "1".to_string()),
+                ("MUSIKA_OUTPUT_BACKEND".to_string(), "alsa".to_string()),
+                ("MUSIKA_SEARCH_ENGINE".to_string(), "fts".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn dotenv_candidates_excludes_cwd_when_disallowed() {
+        let cfg = std::path::Path::new("/tmp/musika-cfg");
+        assert_eq!(dotenv_candidates(Some(cfg), false), vec![cfg.join("env")]);
+        assert_eq!(
+            dotenv_candidates(Some(cfg), true),
+            vec![std::path::PathBuf::from(".env"), cfg.join("env")]
+        );
+        assert!(dotenv_candidates(None, false).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dotenv_rejects_symlinks_and_group_or_world_writable_files() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let dir = std::env::temp_dir().join(format!(
+            "musika-entry-dotenv-{}-{}",
+            std::process::id(),
+            crate::consts::now_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let safe_file = dir.join("env");
+        std::fs::write(
+            &safe_file,
+            "MUSIKA_UI_BIN=/evil\nMUSIKA_STARTUP_TRACE=1\nLD_PRELOAD=/evil.so\n",
+        )
+        .expect("write safe env");
+        std::fs::set_permissions(&safe_file, std::fs::Permissions::from_mode(0o600))
+            .expect("chmod 600");
+
+        assert_eq!(
+            read_safe_dotenv_entries(&safe_file),
+            vec![("MUSIKA_STARTUP_TRACE".to_string(), "1".to_string())]
+        );
+
+        let link = dir.join("env.link");
+        symlink(&safe_file, &link).expect("symlink");
+        assert!(
+            read_safe_dotenv_entries(&link).is_empty(),
+            "symlinks must be rejected"
+        );
+
+        std::fs::set_permissions(&safe_file, std::fs::Permissions::from_mode(0o666))
+            .expect("chmod 666");
+        assert!(
+            read_safe_dotenv_entries(&safe_file).is_empty(),
+            "group/world-writable files must be rejected"
+        );
+
+        _ = std::fs::remove_dir_all(&dir);
+    }
 }

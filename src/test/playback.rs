@@ -108,13 +108,17 @@ fn load_starts_playing_and_resets_repeat() {
 
     assert_eq!(core.state(), State::Playing);
     assert_eq!(core.index(), 0);
-    assert_eq!(core.repeat(), Repeat::Off);
+    assert_eq!(
+        core.repeat(),
+        Repeat::One,
+        "load preserves the user's repeat mode"
+    );
     assert_eq!(core.revision(), 1);
     assert!(outcome.queue_reset);
     assert!(outcome.changed);
     assert_eq!(
         load_url(&outcome),
-        ("file:///0.flac", Some("file:///1.flac"), false)
+        ("file:///0.flac", Some("file:///0.flac"), false)
     );
 }
 
@@ -244,9 +248,12 @@ fn gapless_next_follows_the_repeat_mode() {
     assert_eq!(core.repeat(), Repeat::One);
     assert_eq!(core.next_url().as_deref(), Some("file:///0.flac"));
 
-    // repeat All wraps at the end, repeat Off does not.
+    // Jump preserves the repeat mode; repeat All wraps at the end, repeat Off does not.
     core.apply(CoreCommand::Jump(2));
     assert_eq!(core.index(), 2);
+    assert_eq!(core.repeat(), Repeat::One);
+    assert_eq!(core.next_url().as_deref(), Some("file:///2.flac"));
+    core.apply(CoreCommand::SetRepeat(Repeat::Off));
     assert_eq!(core.next_url(), None);
     core.apply(CoreCommand::CycleRepeat); // One
     core.apply(CoreCommand::CycleRepeat); // All
@@ -474,7 +481,12 @@ fn a_retryable_open_failure_keeps_the_row_for_the_service_retry() {
         SECOND,
     );
 
-    assert!(outcome.failure.as_ref().is_some_and(PlaybackError::retryable));
+    assert!(
+        outcome
+            .failure
+            .as_ref()
+            .is_some_and(PlaybackError::retryable)
+    );
     assert!(core.retrying());
     assert_eq!(core.index(), 0, "the queue must not advance");
     assert_eq!(core.state(), State::Playing, "the transport is retrying");
@@ -513,7 +525,12 @@ fn a_paused_remote_preopen_failure_waits_for_the_play_attempt() {
         },
         2 * SECOND,
     );
-    assert!(failed.failure.as_ref().is_some_and(PlaybackError::retryable));
+    assert!(
+        failed
+            .failure
+            .as_ref()
+            .is_some_and(PlaybackError::retryable)
+    );
     assert!(core.retrying());
     assert_eq!(core.state(), State::Playing);
 }
@@ -571,9 +588,10 @@ fn boundary_advances_into_the_gapless_row() {
         5 * SECOND,
     );
     assert_eq!(core.index(), 1);
-    assert!(
-        outcome.audio.is_empty(),
-        "the worker already swapped decoders"
+    assert_eq!(
+        outcome.audio,
+        vec![AudioCommand::SetNextUrl(Some("file:///2.flac".to_string()))],
+        "boundary arms the following gapless track in the worker"
     );
     assert_eq!(core.state(), State::Playing);
     assert!((core.duration() - 42.5).abs() < 1e-9);
@@ -596,7 +614,10 @@ fn boundary_reports_the_crossfade_offset_as_the_new_position() {
         5 * SECOND,
     );
     assert_eq!(core.index(), 1);
-    assert!(outcome.audio.is_empty());
+    assert_eq!(
+        outcome.audio,
+        vec![AudioCommand::SetNextUrl(Some("file:///2.flac".to_string()))]
+    );
     assert!(
         (core.position_at(5 * SECOND) - 4.5).abs() < 1e-9,
         "the next row begins at the crossfade offset"
@@ -778,7 +799,7 @@ fn remove_many_matches_the_old_playhead_rules() {
     let outcome = core.apply(CoreCommand::RemoveMany(vec![0, 4]));
     assert_eq!(ids(&core), vec!["1", "2", "3"]);
     assert_eq!(core.index(), 2);
-    assert!(outcome.audio.is_empty());
+    assert_eq!(outcome.audio, vec![AudioCommand::SetNextUrl(None)]);
     assert_eq!(
         outcome.delta,
         Some(QueueDelta {
@@ -811,10 +832,10 @@ fn moving_rows_tracks_the_playhead_without_reloading() {
         })
     );
 
-    // Moving the current row itself moves the cursor with it.
+    // Moving the current row itself moves the cursor with it and updates gapless_next.
     let outcome = core.apply(CoreCommand::Move { from: 4, to: 9 });
     assert_eq!(core.index(), 9);
-    assert!(outcome.audio.is_empty());
+    assert_eq!(outcome.audio, vec![AudioCommand::SetNextUrl(None)]);
 }
 
 #[test]
@@ -982,7 +1003,10 @@ fn shuffle_queue_permutes_the_visible_queue_and_restarts() {
     let mut order: Vec<usize> = (0..before.len()).collect();
     crate::queue::shuffle_slice(&mut order, seed);
     let expected: Vec<String> = order.iter().map(|index| before[*index].clone()).collect();
-    assert_ne!(expected, before, "the seed must exercise a real permutation");
+    assert_ne!(
+        expected, before,
+        "the seed must exercise a real permutation"
+    );
 
     let outcome = core.apply(CoreCommand::ShuffleQueueOrder(seed));
     assert!(outcome.changed);
@@ -1020,7 +1044,10 @@ fn seek_clamps_and_rebases_the_anchor() {
 
     let outcome = core.apply_at(CoreCommand::Seek(30.0), t0);
     assert_eq!(outcome.audio, vec![AudioCommand::Seek(30.0)]);
-    assert!(core.snapshot(2, t0).loading(), "a seek buffers until first PCM");
+    assert!(
+        core.snapshot(2, t0).loading(),
+        "a seek buffers until first PCM"
+    );
     assert!((core.position_at(t0) - 30.0).abs() < 1e-6);
     core.snapshot(1, t0);
     assert!(
@@ -1298,7 +1325,6 @@ impl Model {
         match op {
             Op::Jump(index) => {
                 if *index < self.rows.len() {
-                    self.repeat = Repeat::Off;
                     self.index = *index;
                     self.playing = true;
                 }
@@ -1669,9 +1695,8 @@ fn engine_crossfade_reports_the_next_track_offset() {
     let (first_path, first_url) = wav_url("crossfade-a", 48_000 * 7);
     let (second_path, second_url) = wav_url("crossfade-b", 48_000 * 10);
     let (event_tx, event_rx) = std::sync::mpsc::channel();
-    let events: crate::player::engine::EventSink = std::sync::Arc::new(move |event| {
-        event_tx.send(event).is_ok()
-    });
+    let events: crate::player::engine::EventSink =
+        std::sync::Arc::new(move |event| event_tx.send(event).is_ok());
     let engine = Engine::new(events).expect("PipeWire engine");
     engine.send(AudioCommand::SetCrossfade(true));
     engine.send(AudioCommand::Load {
@@ -1685,9 +1710,7 @@ fn engine_crossfade_reports_the_next_track_offset() {
     while std::time::Instant::now() < deadline {
         match event_rx.recv_timeout(std::time::Duration::from_millis(100)) {
             Ok(EngineEvent::Boundary {
-                position,
-                duration,
-                ..
+                position, duration, ..
             }) => {
                 boundary = Some((position, duration));
                 break;
@@ -1718,9 +1741,8 @@ fn engine_pause_resume_keeps_progress_and_shuts_down() {
     use crate::player::engine::Engine;
     let (path, url) = wav_url("pause", 96_000 * 30);
     let (event_tx, event_rx) = std::sync::mpsc::channel();
-    let events: crate::player::engine::EventSink = std::sync::Arc::new(move |event| {
-        event_tx.send(event).is_ok()
-    });
+    let events: crate::player::engine::EventSink =
+        std::sync::Arc::new(move |event| event_tx.send(event).is_ok());
     let engine = Engine::new(events).expect("PipeWire engine");
     engine.send(AudioCommand::Load {
         url,
@@ -1832,6 +1854,16 @@ fn failure_classification_distinguishes_retryable_causes() {
     assert_eq!(auth.kind, ErrorKind::Auth);
     assert!(!auth.retryable());
 
+    let forbidden = PlaybackError::classify(crate::player::ErrorStage::Open, "HTTP 403 Forbidden");
+    assert_eq!(forbidden.kind, ErrorKind::Auth);
+    assert!(!forbidden.retryable());
+
+    let non_auth_digits = PlaybackError::classify(
+        crate::player::ErrorStage::Read,
+        "track_4012.flac: read error at offset 40300",
+    );
+    assert_ne!(non_auth_digits.kind, ErrorKind::Auth);
+
     let codec = PlaybackError::classify(
         crate::player::ErrorStage::Read,
         "decoder: invalid data found when processing input",
@@ -1859,9 +1891,18 @@ fn a_missing_remote_track_advances_instead_of_retrying() {
         SECOND,
     );
 
-    assert!(!outcome.failure.as_ref().is_some_and(PlaybackError::retryable));
+    assert!(
+        !outcome
+            .failure
+            .as_ref()
+            .is_some_and(PlaybackError::retryable)
+    );
     assert!(!core.retrying());
-    assert_eq!(core.index(), 1, "a permanent failure keeps the old advance path");
+    assert_eq!(
+        core.index(),
+        1,
+        "a permanent failure keeps the old advance path"
+    );
 }
 
 #[test]
@@ -1979,10 +2020,12 @@ fn crossfade_config_respects_album_only_and_publishes_the_allowed_flag() {
     let outcome = core.apply(CoreCommand::SetCrossfadeConfig(config));
     assert!(core.crossfade());
     assert!(outcome.changed);
-    assert!(outcome.audio.iter().any(|command| matches!(
-        command,
-        AudioCommand::SetCrossfadeAllowed(true)
-    )));
+    assert!(
+        outcome
+            .audio
+            .iter()
+            .any(|command| matches!(command, AudioCommand::SetCrossfadeAllowed(true)))
+    );
     assert!(outcome.audio.iter().any(|command| matches!(
         command,
         AudioCommand::SetCrossfadeConfig(config) if config.seconds == 3.0 && config.equal_power

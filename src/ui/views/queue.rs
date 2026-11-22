@@ -2,13 +2,41 @@
 
 use super::super::*;
 
+/// `AppRoot::hovered_row` is one plain `Option<usize>` shared by every list
+/// surface, so raw paint indices bleed between queue/search/library. Queue
+/// indices are tagged into the top bits; library rows keep plain indices and
+/// can therefore never equal a queue hover (and vice versa). The tag is local
+/// to this module: every comparison against it happens here.
+const QUEUE_HOVER_TAG: usize = 1 << (usize::BITS - 4);
+
+fn queue_hover_id(index: usize) -> usize {
+    QUEUE_HOVER_TAG | index
+}
+
+/// Drawer header position label. An empty queue must read `0 / 0`; the plain
+/// `current + 1` formula painted the off-by-one `1 / 0`.
+fn queue_position_label(current: usize, count: usize) -> String {
+    let position = if count == 0 {
+        0
+    } else {
+        current.saturating_add(1)
+    };
+    format!("{position} / {count}")
+}
+
 impl AppRoot {
-    pub(in crate::ui) fn queue_overlay(&self, cx: &Context<Self>, progress: f32) -> gpui::Div {
+    pub(in crate::ui) fn queue_overlay(
+        &self,
+        cx: &Context<Self>,
+        progress: f32,
+    ) -> gpui::AnyElement {
         let count = self.player.len();
         let current = self.player.index();
         let cursor = self.queue_list.cursor;
         let scroll = self.queue_scroll_modal.handle.clone();
+        let position = queue_position_label(current, count);
         div()
+            .id("queue-backdrop")
             .absolute()
             .inset_0()
             .size_full()
@@ -16,6 +44,10 @@ impl AppRoot {
             .justify_end()
             .bg(gpui::black().opacity(0.35 * progress))
             .opacity(progress)
+            // The drawer is modal: neither clicks nor wheel deltas may reach
+            // the page under the scrim.
+            .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
+            .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.stop_propagation()))
             .child(
                 div()
                     .h_full()
@@ -39,7 +71,7 @@ impl AppRoot {
                                 div()
                                     .text_size(px(11.0))
                                     .text_color(rgb(palette::on_surface_variant()))
-                                    .child(format!("{} / {}", current.saturating_add(1), count)),
+                                    .child(format!("{position} / {count}")),
                             ),
                     )
                     .child(div().h(px(1.0)).bg(rgb(palette::outline_variant())))
@@ -64,13 +96,16 @@ impl AppRoot {
                                         let selected = active
                                             || this.queue_list.selection.contains(cursor, index)
                                             || this
-                                                .queue_list.selection
+                                                .queue_list
+                                                .selection
                                                 .contains(this.queue_list.cursor, index);
                                         let playing = index == this.player.index();
-                                        let pending = this.marks.pending(&track.id, &track.album_id);
+                                        let pending =
+                                            this.marks.pending(&track.id, &track.album_id);
                                         let downloaded =
                                             this.marks.downloaded(&track.id, &track.album_id);
-                                        let hovered = this.hovered_row == Some(index);
+                                        let hovered =
+                                            this.hovered_row == Some(queue_hover_id(index));
                                         let active = selected || hovered;
                                         let (scale, text_scale) =
                                             this.row_emphasis(LineSurface::Queue, 0, index, active);
@@ -103,8 +138,11 @@ impl AppRoot {
                                                 .on_hover(cx.listener(
                                                     move |this, hovered: &bool, _, cx| {
                                                         if *hovered {
-                                                            this.hovered_row = Some(index);
-                                                        } else if this.hovered_row == Some(index) {
+                                                            this.hovered_row =
+                                                                Some(queue_hover_id(index));
+                                                        } else if this.hovered_row
+                                                            == Some(queue_hover_id(index))
+                                                        {
                                                             this.hovered_row = None;
                                                         }
                                                         cx.notify();
@@ -200,5 +238,31 @@ impl AppRoot {
                             ),
                     ),
             )
+            .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{QUEUE_HOVER_TAG, queue_hover_id, queue_position_label};
+
+    #[test]
+    fn empty_queue_header_reads_zero_of_zero() {
+        assert_eq!(queue_position_label(0, 0), "0 / 0");
+    }
+
+    #[test]
+    fn queue_header_is_one_based_for_a_playing_row() {
+        assert_eq!(queue_position_label(0, 3), "1 / 3");
+        assert_eq!(queue_position_label(2, 3), "3 / 3");
+    }
+
+    #[test]
+    fn queue_hover_ids_cannot_collide_with_plain_paint_indices() {
+        for index in [0, 1, 17, 9999] {
+            assert_ne!(queue_hover_id(index), index);
+        }
+        assert_eq!(queue_hover_id(0), QUEUE_HOVER_TAG);
+        assert_ne!(queue_hover_id(0), queue_hover_id(1));
     }
 }

@@ -30,23 +30,46 @@
         pname = "musika";
         version = (pkgs.lib.importTOML ./Cargo.toml).package.version;
 
-        # Keep build artefacts and local state out of the store copy.
+        # Whitelist the inputs the build actually reads. A denylist leaked
+        # third-party checkouts (DankMaterialShell/, noctalia/), local runtime
+        # state (*.db, .env) and editor leftovers into the store copy on every
+        # build; only Rust sources, manifests, migrations, vendored patches and
+        # the packaging assets are kept.
         src = pkgs.lib.cleanSourceWith {
           src = ./.;
           filter =
-            path: _type:
+            path: type:
             let
-              base = baseNameOf (toString path);
+              rel = pkgs.lib.removePrefix (toString ./. + "/") (toString path);
+              file = builtins.elem rel [
+                "Cargo.toml"
+                "Cargo.lock"
+                "build.rs"
+                "clippy.toml"
+                "musika.desktop"
+                "README.md"
+                "LICENSE"
+              ];
+              tree = [
+                "src"
+                "examples"
+                "scripts"
+                "vendor"
+                "migrations"
+                "migrations_artist_user"
+                "migrations_colors"
+                "migrations_covers"
+                "migrations_download"
+                "migrations_library"
+                "migrations_lyrics"
+                "migrations_media"
+                "migrations_playlist"
+                "migrations_search"
+              ];
+              inside = name: rel == name || pkgs.lib.hasPrefix (name + "/") rel;
+              keep = builtins.any inside tree;
             in
-            !(builtins.elem base [
-              ".git"
-              ".direnv"
-              "target"
-              "result"
-              "app.db"
-              "app.db-shm"
-              "app.db-wal"
-            ]);
+            (type == "directory" && keep) || (type == "regular" && (file || keep));
         };
 
         cargoLock.lockFile = ./Cargo.lock;
@@ -101,33 +124,38 @@
           sh scripts/check-icons.sh
         '';
 
-        # Wrap by hand: add the app font and certificate paths.
-
+        # Wrap by hand: add the app font, the certificate bundle and (for the
+        # GPUI child only) the Wayland/Vulkan runtime libraries.
+        #
+        # The headless `musika` core resolves PipeWire/FFmpeg/OpenSSL through its
+        # Nix rpath and never loads a GUI library itself; it only spawns the
+        # wrapped `musika-ui` sibling. Keeping the GPU/Wayland path on that UI
+        # wrapper alone avoids leaking a display stack into headless daemons.
         postInstall = ''
-          # The core daemon and its GPUI child share the runtime environment.
-          # musika-ui is spawned by the daemon as a sibling binary, so it needs
-          # the same wayland/vulkan/font/cert/asset wrapper as musika.
-          for bin in musika musika-ui; do
-            wrapProgram $out/bin/$bin \
-              --prefix XDG_DATA_DIRS : ${fontDataDirs} \
-              --prefix LD_LIBRARY_PATH : ${
-                pkgs.lib.makeLibraryPath [
-                  pkgs.wayland
-                  pkgs.libxkbcommon
-                  pkgs.libx11
-                  pkgs.libxcursor
-                  pkgs.libxrandr
-                  pkgs.libxi
-                  pkgs.libxcb
-                  pkgs.fontconfig
-                  pkgs.freetype
-                  pkgs.libglvnd
-                  pkgs.vulkan-loader
-                ]
-              } \
-              --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
-              --set-default MUSIKA_ASSET_DIR $out/share/musika
-          done
+          wrapProgram $out/bin/musika \
+            --prefix XDG_DATA_DIRS : ${fontDataDirs} \
+            --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
+            --set-default MUSIKA_ASSET_DIR $out/share/musika
+
+          wrapProgram $out/bin/musika-ui \
+            --prefix XDG_DATA_DIRS : ${fontDataDirs} \
+            --prefix LD_LIBRARY_PATH : ${
+              pkgs.lib.makeLibraryPath [
+                pkgs.wayland
+                pkgs.libxkbcommon
+                pkgs.libx11
+                pkgs.libxcursor
+                pkgs.libxrandr
+                pkgs.libxi
+                pkgs.libxcb
+                pkgs.fontconfig
+                pkgs.freetype
+                pkgs.libglvnd
+                pkgs.vulkan-loader
+              ]
+            } \
+            --set-default SSL_CERT_FILE ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
+            --set-default MUSIKA_ASSET_DIR $out/share/musika
 
           # Runtime SVG assets: icons resolve through MUSIKA_ASSET_DIR/icons,
           # not through the build directory.

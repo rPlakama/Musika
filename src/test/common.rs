@@ -31,36 +31,45 @@ pub(crate) async fn lock_offline_catalog() -> tokio::sync::MutexGuard<'static, (
 // Fixtures
 // ---------------------------------------------------------------------------
 
-/// A migrated in-memory pool for one schema.
+// A-03: production has exactly two physical schemas — `library.db`
+// (`migrations_library`) and `media.db` (`migrations_media`) — and every other
+// logical surface is an alias of one of them (see `db::init`). The fixtures
+// below use the same schema sets so a test can never pass against columns the
+// real database does not have.
+
+/// A migrated in-memory pool for the production library schema.
 pub(crate) async fn library_pool() -> SqlitePool {
     crate::test::memory_pool(sqlx::migrate!("./migrations_library")).await
 }
 
+/// A migrated in-memory pool for the production media schema.
 pub(crate) async fn media_pool() -> SqlitePool {
     crate::test::memory_pool(sqlx::migrate!("./migrations_media")).await
 }
 
+/// Production `artist_user` lives in the library file.
 pub(crate) async fn artist_user_pool() -> SqlitePool {
-    crate::test::memory_pool(sqlx::migrate!("./migrations_artist_user")).await
+    library_pool().await
 }
 
+/// Production `download` lives in the media file.
 pub(crate) async fn download_pool() -> SqlitePool {
-    crate::test::memory_pool(sqlx::migrate!("./migrations_download")).await
+    media_pool().await
 }
 
+/// Production `search` is the library file (a separate pool in `db::init`).
 pub(crate) async fn search_pool() -> SqlitePool {
-    crate::test::memory_pool(sqlx::migrate!("./migrations_search")).await
+    library_pool().await
 }
 
-/// The production status pool is an alias of the library file, so tests use
-/// the same schema tree instead of maintaining a second status-only migration
-/// set.
+/// Production status (`session_status`) lives in the library file.
 pub(crate) async fn status_pool() -> SqlitePool {
-    crate::test::memory_pool(sqlx::migrate!("./migrations_library")).await
+    library_pool().await
 }
 
+/// Production playlists live in the library file.
 pub(crate) async fn playlist_pool() -> SqlitePool {
-    crate::test::memory_pool(None).await
+    library_pool().await
 }
 
 /// Every surface on the same pool (radio/row-window-shaped tests).
@@ -140,27 +149,17 @@ pub(crate) fn playlist_dbs(library: &SqlitePool, playlist: &SqlitePool) -> Dbs {
     dbs_with_credentials(library, library, playlist)
 }
 
-/// Queue tests: isolated per-schema databases (credentials migrate separately
-/// and tolerate missing tables).
+/// The production shape for multi-surface tests: one library pool and one
+/// media pool, with every other [`Dbs`] surface aliased exactly like
+/// [`crate::db::init`] does.
 pub(crate) async fn isolated_dbs() -> Dbs {
-    let mut credential_migrations = sqlx::migrate!("./migrations");
-    credential_migrations.set_ignore_missing(true);
-    let credentials = crate::test::memory_pool(credential_migrations).await;
-    let library = crate::test::memory_pool(sqlx::migrate!("./migrations_library")).await;
-    let covers = crate::test::memory_pool(sqlx::migrate!("./migrations_covers")).await;
-    let download = crate::test::memory_pool(sqlx::migrate!("./migrations_download")).await;
-    Dbs {
-        credentials,
-        sync: library.clone(),
-        library,
-        search: crate::test::memory_pool(None).await,
-        covers,
-        media: crate::test::memory_pool(None).await,
-        lyrics: crate::test::memory_pool(None).await,
-        colors: crate::test::memory_pool(None).await,
-        status: crate::test::memory_pool(None).await,
-        artist_user: crate::test::memory_pool(None).await,
-        download,
-        playlist: crate::test::memory_pool(None).await,
-    }
+    let library = library_pool().await;
+    let media = media_pool().await;
+    let mut dbs = dbs_with_media(&library, &media);
+    // A-03 follows-up: the playlist surface is still its own empty pool
+    // because `recommend`/`queue` fixtures install a playlist-only schema and
+    // run `migrations_playlist` on it. Fold it into the library alias once
+    // those fixtures move to the production tables.
+    dbs.playlist = crate::test::memory_pool(None).await;
+    dbs
 }

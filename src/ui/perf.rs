@@ -129,7 +129,10 @@ pub(crate) fn record_frame(started: Instant, root: &AppRoot) {
         let mut raf_delta: Vec<(&'static str, u64)> = raf_now
             .iter()
             .map(|(site, count)| {
-                (*site, count.saturating_sub(*stats.last_raf.get(site).unwrap_or(&0)))
+                (
+                    *site,
+                    count.saturating_sub(*stats.last_raf.get(site).unwrap_or(&0)),
+                )
             })
             .filter(|(_, delta)| *delta > 0)
             .collect();
@@ -202,11 +205,6 @@ pub(crate) fn record_frame(started: Instant, root: &AppRoot) {
 thread_local! {
     static RAF_SITES: RefCell<std::collections::HashMap<&'static str, u64>> =
         RefCell::new(std::collections::HashMap::new());
-}
-
-#[cfg(test)]
-pub(crate) fn reset_raf_sites() {
-    RAF_SITES.with(|sites| sites.borrow_mut().clear());
 }
 
 /// Requests one frame, attributing it to `site` for the frame summary.

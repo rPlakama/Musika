@@ -114,11 +114,16 @@ impl AppRoot {
                     count,
                     cx.processor(move |this, range: std::ops::Range<usize>, window, cx| {
                         let row_h = this.library_scroll.row_h;
-                        let line_query: gpui::SharedString = this.line_search.query().to_string().into();
+                        let line_query: gpui::SharedString =
+                            this.line_search.query().to_string().into();
                         let mut items = Vec::with_capacity(range.len());
                         for index in range {
                             let selected = index == this.view.list.cursor
-                                || this.view.list.selection.contains(this.view.list.cursor, index);
+                                || this
+                                    .view
+                                    .list
+                                    .selection
+                                    .contains(this.view.list.cursor, index);
                             let hovered = this.hovered_row == Some(index);
                             let Some(row) = this.view.rows.get(index) else {
                                 // RowWindow blank slot: a waving grey placeholder
@@ -173,11 +178,7 @@ impl AppRoot {
                                     .h(px(row_h))
                                     .px_1()
                                     .rounded_sm()
-                                    .bg(if selected {
-                                        rgb(palette::secondary_container())
-                                    } else {
-                                        gpui::rgba(hover_fill)
-                                    })
+                                    .bg(row_bg_color(selected, hover_fill))
                                     .cursor_pointer()
                                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                                         target_row_hover_fill(
@@ -333,5 +334,57 @@ impl AppRoot {
             );
         }
         body.child(trailing).into_element()
+    }
+}
+
+/// Convert a row's `0x00RRGGBB` palette/hover fill into an opaque `gpui::Rgba`.
+///
+/// Using `rgb(...)` rather than `gpui::rgba(...)` is essential because palette
+/// and `ColorBehavior` colors are stored as `0x00RRGGBB` `u32` values (not
+/// `0xRRGGBBAA`).
+pub(super) fn row_bg_color(selected: bool, hover_fill: u32) -> gpui::Rgba {
+    rgb(if selected {
+        palette::secondary_container()
+    } else {
+        hover_fill
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn row_bg_color_treats_hover_fill_as_opaque_rgb() {
+        let mut clock = anim::Clock::new();
+        clock.now = 0.0;
+        let behavior = anim::ColorBehavior::new(row_base_fill(0));
+
+        // Even non-hovered row uses surface (0x00RRGGBB) as opaque RGB, not 0xRRGGBBAA.
+        let even_fill = row_hover_fill(&behavior, &clock, 0, false, false);
+        let even_bg = row_bg_color(false, even_fill);
+        assert_eq!(even_bg, rgb(palette::surface()));
+        assert!((even_bg.a - 1.0).abs() < f32::EPSILON);
+
+        // Odd non-hovered row uses surface_container_lowest as opaque RGB.
+        let odd_fill = row_hover_fill(&behavior, &clock, 1, false, false);
+        let odd_bg = row_bg_color(false, odd_fill);
+        assert_eq!(odd_bg, rgb(palette::surface_container_lowest()));
+        assert!((odd_bg.a - 1.0).abs() < f32::EPSILON);
+        assert_ne!(even_bg, odd_bg);
+
+        // Hovered unselected row uses the animated hover color as opaque RGB.
+        let mut hovered_behavior = anim::ColorBehavior::new(row_base_fill(0));
+        target_row_hover_fill(&mut hovered_behavior, &clock, 0, false, true);
+        clock.now = 1.0;
+        let hover_fill = row_hover_fill(&hovered_behavior, &clock, 0, false, true);
+        let hover_bg = row_bg_color(false, hover_fill);
+        assert_eq!(hover_bg, rgb(palette::surface_container_high()));
+        assert!((hover_bg.a - 1.0).abs() < f32::EPSILON);
+
+        // Selected row always uses secondary_container as opaque RGB.
+        let selected_bg = row_bg_color(true, hover_fill);
+        assert_eq!(selected_bg, rgb(palette::secondary_container()));
+        assert!((selected_bg.a - 1.0).abs() < f32::EPSILON);
     }
 }

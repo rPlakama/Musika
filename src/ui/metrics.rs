@@ -85,6 +85,10 @@ pub fn font_size(role: &str, reference_height: f32) -> f32 {
 /// Roles: `title` (.28h/.05w, 10..24), `subtitle` (.20h/.032w, 9..17),
 /// `meta` (.20h/.028w, 9..15). An unknown role mirrors legacy UI:
 /// `clamp(height * 0.20, 9, 18)`.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+)]
 pub fn row_font(role: &str, view_width: f32, row_height: f32) -> f32 {
     let (height_fraction, width_fraction, min, max) = match role {
         "title" => (0.28, 0.05, 10.0, 24.0),
@@ -127,6 +131,10 @@ pub fn adaptive_row(view_height: f32, ratio: f32, baseline: f32) -> f32 {
 /// surface. `row_height_scale` is applied after the adaptive floor, matching
 /// `ScrollContent.adaptiveRowFor`.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the GPUI unit tests exercise this profile")
+)]
 pub struct ScrollProfile {
     /// Nominal row fraction of the profile's reference height.
     pub row_ratio: f32,
@@ -134,6 +142,10 @@ pub struct ScrollProfile {
     pub row_height_scale: f32,
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the GPUI unit tests exercise this profile")
+)]
 impl ScrollProfile {
     /// Library lists: 10.5% of the panel body.
     pub const LIBRARY: Self = Self {
@@ -186,10 +198,18 @@ impl ScrollProfile {
 /// resize never recaptures them, so every row keeps the same 18%-shrink floor
 /// for the life of the surface.
 #[derive(Clone, Copy, Debug, Default)]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the GPUI unit tests exercise this profile")
+)]
 pub struct SurfaceMetrics {
     baseline: f32,
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the GPUI unit tests exercise this profile")
+)]
 impl SurfaceMetrics {
     pub const fn new() -> Self {
         Self { baseline: 0.0 }
@@ -511,6 +531,10 @@ pub struct PageLayout {
 }
 
 impl PageLayout {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn reference() -> Self {
         WindowLayout::reference().page()
     }

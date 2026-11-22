@@ -90,12 +90,48 @@ pub async fn get(pool: &SqlitePool, artist_id: &str) -> Result<Option<ArtistUser
 
 /// UI-60: every stored artist rating above zero (id -> 0..=5), for the row
 /// payloads' `rating` field.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "bulk rating map is only exercised by the artist_user tests"
+    )
+)]
 pub async fn ratings(pool: &SqlitePool) -> Result<std::collections::HashMap<String, i64>> {
     let rows: Vec<(String, i64)> =
         sqlx::query_as("SELECT artist_id, rating FROM artist_user WHERE rating > 0")
             .fetch_all(pool)
             .await?;
     Ok(rows.into_iter().collect())
+}
+
+/// Live `(starred, rating)` state for an explicit artist id list.
+///
+/// The bulk readers ([`ratings`]/[`starred_ids`]) load the entire overlay
+/// table; the search decoration does that on every keystroke although a page
+/// payload only carries a bounded id set (N-20). Chunked by
+/// [`crate::cache::IN_BATCH`], so a large page stays under SQLite's bound
+/// limit. Absent ids are simply missing from the map.
+pub async fn states_for(
+    pool: &SqlitePool,
+    artist_ids: &[&str],
+) -> Result<std::collections::HashMap<String, (bool, i64)>> {
+    if artist_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let mut states = std::collections::HashMap::with_capacity(artist_ids.len());
+    for chunk in artist_ids.chunks(crate::cache::IN_BATCH) {
+        let mut builder = sqlx::QueryBuilder::new(
+            "SELECT artist_id, starred, rating FROM artist_user WHERE artist_id IN (",
+        );
+        crate::cache::push_in_list(&mut builder, chunk);
+        let rows: Vec<(String, bool, i64)> = builder.build_query_as().fetch_all(pool).await?;
+        states.extend(
+            rows.into_iter()
+                .map(|(id, starred, rating)| (id, (starred, rating))),
+        );
+    }
+    Ok(states)
 }
 
 /// UI-60: imports the server's `userRating` snapshots after a library sync
@@ -138,6 +174,13 @@ pub async fn import_ratings(pool: &SqlitePool, ratings: &[(String, i64)]) -> Res
 }
 
 /// Every starred artist id, ordered for stable favourites listings.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "bulk starred list is only exercised by the artist_user tests"
+    )
+)]
 pub async fn starred_ids(pool: &SqlitePool) -> Result<Vec<String>> {
     let ids = sqlx::query_scalar(
         "SELECT artist_id FROM artist_user WHERE starred = 1 ORDER BY artist_id",
@@ -148,6 +191,13 @@ pub async fn starred_ids(pool: &SqlitePool) -> Result<Vec<String>> {
 }
 
 /// The legacy UI `artist_user` payload for one artist (defaults when unknown).
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "legacy JSON payload is only exercised by the artist_user tests"
+    )
+)]
 pub async fn payload(pool: &SqlitePool, artist_id: &str) -> String {
     let (starred, rating) = match get(pool, artist_id).await {
         Ok(Some(row)) => (row.starred, row.rating),

@@ -14,8 +14,8 @@ pub(crate) mod playback;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
@@ -25,11 +25,11 @@ use tokio::time::MissedTickBehavior;
 use crate::bridge::{Bridge, Event, SyncMode};
 use crate::ipc_command::{self, CommandTarget, CurrentTrack, IpcCommand, RadioSeed, ShuffleTarget};
 use crate::ipc_protocol::{
-    self as proto, ByeReason, Frame, Message, PlayerReply, ReplyJson, Role,
+    self as proto, ByeReason, ErrorCode, Frame, Message, PlayerReply, ReplyJson, Role,
 };
 use crate::model::PageDescriptor;
+use crate::player::Track;
 use crate::player::core::CoreCommand;
-use crate::player::{Track};
 
 use self::clients::{Outbox, ServerEvent};
 use self::playback::{PlaybackControl, PlaybackInput, PlaybackOutput, PlaybackService, Snapshot};
@@ -38,6 +38,26 @@ use self::playback::{PlaybackControl, PlaybackInput, PlaybackOutput, PlaybackSer
 /// flushes so a later UI session can reopen it. The typed descriptor is the
 /// single form in the daemon; only `status::{load,save}` speaks strings.
 type LastPage = Option<PageDescriptor>;
+
+/// Mirror of the loop-owned page hint so an account-switch task (which runs off
+/// the daemon loop) can flush the outgoing account's status row before the
+/// database set is swapped.
+static LAST_PAGE: OnceLock<Mutex<LastPage>> = OnceLock::new();
+
+fn page_slot() -> &'static Mutex<LastPage> {
+    LAST_PAGE.get_or_init(|| Mutex::new(None))
+}
+
+fn store_page(page: &LastPage) {
+    *page_slot().lock().unwrap_or_else(PoisonError::into_inner) = page.clone();
+}
+
+fn stored_page() -> LastPage {
+    page_slot()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
 
 #[derive(Clone, Copy, Debug)]
 enum Lifecycle {
@@ -81,13 +101,33 @@ struct Services {
 struct UiClient {
     role: Role,
     features: u32,
+    /// True while the per-client bootstrap task is still streaming the initial
+    /// playback/queue frames: broadcasts are held back so nothing can
+    /// interleave with the queue rows, but direct replies still work.
+    bootstrapping: bool,
     outbox: Outbox,
 }
 
+/// Completion notice from a per-client bootstrap task.
+enum BootstrapOutcome {
+    Done(u64),
+    Failed(u64),
+}
+
 pub fn run() -> ! {
-    let Some(_instance_lock) = acquire_instance_lock() else {
-        eprintln!("musika: the core daemon is already running");
-        std::process::exit(0);
+    crate::db::warn_legacy_xdg_config_once();
+    let instance_lock = match acquire_instance_lock() {
+        Ok(Some(lock)) => lock,
+        Ok(None) => {
+            eprintln!("musika: the core daemon is already running");
+            std::process::exit(0);
+        }
+        Err(error) => {
+            // A permission/read-only-filesystem failure must never look like a
+            // successful "already running" exit (D-17).
+            eprintln!("musika: cannot take the daemon instance lock: {error}");
+            std::process::exit(1);
+        }
     };
     if crate::ipc::daemon_is_running() {
         eprintln!("musika: the core daemon is already running");
@@ -97,6 +137,7 @@ pub fn run() -> ! {
         std::process::exit(1);
     }
     crate::app::runtime().block_on(run_async());
+    drop(instance_lock);
     std::process::exit(0)
 }
 
@@ -104,21 +145,44 @@ pub fn run() -> ! {
 /// simultaneous `musika` invocations could both decide to spawn a daemon and
 /// the second would unlink the live UI socket. The flock is held for the
 /// daemon's whole lifetime.
-fn acquire_instance_lock() -> Option<std::fs::File> {
+///
+/// `Ok(None)` means another daemon holds the lock. Every other failure
+/// (EACCES, EROFS, ENOSPC, ...) is returned as an error so the caller can exit
+/// non-zero with a diagnostic instead of pretending the daemon is running.
+fn acquire_instance_lock() -> std::io::Result<Option<std::fs::File>> {
     use std::os::fd::AsRawFd;
-    let dir = crate::db::config_dir().ok()?;
-    _ = std::fs::create_dir_all(&dir);
+    let dir = crate::db::config_dir()
+        .map_err(|error| std::io::Error::other(format!("no config dir: {error:#}")))?;
+    std::fs::create_dir_all(&dir).map_err(|error| {
+        std::io::Error::other(format!("cannot create {}: {error}", dir.display()))
+    })?;
     let path = dir.join("daemon.lock");
     let file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
-        .open(path)
-        .ok()?;
-    // SAFETY: flock only borrows the valid file descriptor.
+        .open(&path)
+        .map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("cannot open {}: {error}", path.display()),
+            )
+        })?;
+    // SAFETY: flock only borrows the valid file descriptor and does not touch
+    // any other memory; the file stays open for the lifetime of the caller.
     let locked = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    (locked == 0).then_some(file)
+    if locked == 0 {
+        return Ok(Some(file));
+    }
+    let error = std::io::Error::last_os_error();
+    if error.kind() == std::io::ErrorKind::WouldBlock {
+        return Ok(None);
+    }
+    Err(std::io::Error::new(
+        error.kind(),
+        format!("cannot lock {}: {error}", path.display()),
+    ))
 }
 
 async fn run_async() {
@@ -171,6 +235,15 @@ async fn run_async() {
         }
         _ => eprintln!("covers: oversized-original migration skipped (databases not ready)"),
     }
+    // Crash leftovers: a download row still marked `active` from a killed
+    // process must be reset before the UI can show phantom progress (N-05).
+    if let Some(dbs) = crate::app::dbs() {
+        match crate::media::reset_stale_downloads(&dbs).await {
+            Ok(0) => {}
+            Ok(recovered) => eprintln!("downloads: recovered {recovered} interrupted row(s)"),
+            Err(err) => eprintln!("downloads: could not recover interrupted rows: {err:#}"),
+        }
+    }
     crate::startup::trace("daemon.cap");
     crate::linux::malloc_trim();
 
@@ -182,12 +255,20 @@ async fn run_async() {
     );
     crate::startup::trace("daemon.socket");
 
-    crate::tray::start();
+    // Tray callbacks are in-process only: they push canonical command lines
+    // into the daemon loop instead of blocking the SNI thread on the socket.
+    let (tray_tx, mut tray_rx) = mpsc::unbounded_channel::<String>();
+    crate::tray::start(tray_tx);
     let (mpris_tx, mut mpris_rx) = mpsc::unbounded_channel::<String>();
     crate::mpris::init(mpris_tx);
+    // Clients stream their queue bootstrap in a task of their own (D-06); this
+    // channel tells the loop when the stream finished (or the client left).
+    let (bootstrapped_tx, mut bootstrapped_rx) = mpsc::unbounded_channel::<BootstrapOutcome>();
     crate::startup::trace("daemon.services");
 
-    let mut page: LastPage = None;
+    // Definite-assignment: the restore below always runs before the loop and
+    // the first use of `page` (avoids a dead `None` initializer).
+    let mut page: LastPage;
     let mut header: Option<Event> = None;
     let mut auth: Option<Event> = None;
     let mut connection: Option<Event> = None;
@@ -195,7 +276,7 @@ async fn run_async() {
     let mut settings_state: Option<Event> = None;
     let mut ui_clients: HashMap<u64, UiClient> = HashMap::new();
     let mut ui_child: Option<std::process::Child> = None;
-    let mut status_dirty = true;
+    let mut status_dirty = false;
     let status_inflight = Arc::new(AtomicBool::new(false));
     // A stored account means the shell is (or will be) a live session; a
     // logout clears this until the next successful login.
@@ -207,13 +288,23 @@ async fn run_async() {
     // not trigger another sync either.
     let startup_sync_owed = Arc::new(AtomicBool::new(connectivity_active));
     let restore_started = Instant::now();
-    restore_status(&playback_control, &mut page, bridge.is_offline()).await;
+    page = restore_status(
+        &playback_control,
+        restore_offline_mode(connectivity_active, bridge.is_offline()),
+    )
+    .await;
+    store_page(&page);
     // Apply after the restored queue so its `load` repeat reset does not wipe
     // the persisted mode. Future phases consume the rest of this document.
     let _ = playback_control.send(PlaybackInput::SetSettings(Box::new(
         playback_settings.clone(),
     )));
     crate::startup::trace_elapsed("status.restore", restore_started.elapsed());
+
+    // SIGTERM/SIGINT must reach the same graceful path as `quit`: flush the
+    // session, save settings, stop the tray/audio and remove the sockets
+    // (D-16). The handler task lives as long as the daemon loop.
+    install_shutdown_signals(services.lifecycle.clone());
 
     let mut ticker = tokio::time::interval(Duration::from_secs(1));
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -234,9 +325,13 @@ async fn run_async() {
                     Event::LoginRequired { .. } => {
                         auth = Some(event.clone());
                         connection = None;
+                        header = None;
+                        page = None;
+                        store_page(&page);
                         connectivity_active = false;
                         startup_sync_owed.store(false, Ordering::Release);
                         let _ = playback_control.send(PlaybackInput::SetOffline(true));
+                        reset_playback(&playback_control);
                     }
                     Event::LoggedIn { offline, .. } => {
                         auth = Some(event.clone());
@@ -253,19 +348,46 @@ async fn run_async() {
                             startup_sync_owed.store(false, Ordering::Release);
                             bridge.sync(SyncMode::Incremental);
                         }
+                        // An account switch: the switcher flushed the outgoing
+                        // status row before swapping the pools (D-07). Drop the
+                        // stale shell state and replay the incoming account's
+                        // session, telling attached clients which page it is.
+                        header = None;
+                        reset_playback(&playback_control);
+                        page = restore_status(&playback_control, *offline).await;
+                        store_page(&page);
+                        forward_restored_page(&mut ui_clients, &page);
                     }
                     Event::LoggedOut => {
                         auth = Some(event.clone());
                         connection = None;
+                        header = None;
+                        page = None;
+                        store_page(&page);
                         connectivity_active = false;
                         startup_sync_owed.store(false, Ordering::Release);
                         let _ = playback_control.send(PlaybackInput::SetOffline(true));
+                        reset_playback(&playback_control);
                     }
                     Event::AccountRemoved { next, .. } => {
                         auth = Some(event.clone());
                         connection = None;
+                        header = None;
                         connectivity_active = next.is_some();
                         startup_sync_owed.store(next.is_some(), Ordering::Release);
+                        if next.is_some() {
+                            // The bridge already swapped to the next account's
+                            // data root; restore its local session.
+                            reset_playback(&playback_control);
+                            page = restore_status(&playback_control, true).await;
+                        } else {
+                            // No account left: serve the login database only.
+                            page = None;
+                            reset_playback(&playback_control);
+                            let _ = playback_control.send(PlaybackInput::SetOffline(true));
+                        }
+                        store_page(&page);
+                        forward_restored_page(&mut ui_clients, &page);
                     }
                     Event::AuthError(_) => {
                         // A failed login is not a live session; a later
@@ -296,7 +418,7 @@ async fn run_async() {
                             op: CoreCommand::InsertMany { at: *at, tracks: tracks.clone() },
                         });
                     }
-                    Event::Restore { volume, muted, tracks, start, position, .. } => {
+                    Event::Restore { volume, muted, tracks, start, position, page: restored } => {
                         let _ = playback_control.send(PlaybackInput::Load {
                             tracks: tracks.clone(),
                             start: *start,
@@ -305,6 +427,16 @@ async fn run_async() {
                             volume: Some(*volume),
                             muted: Some(*muted),
                         });
+                        // The restored page is a UI event of its own: the
+                        // restore itself is applied core-side (D-07).
+                        if let Some(descriptor) = restored {
+                            update_page(&mut page, descriptor);
+                            let open = Event::OpenPage {
+                                descriptor: descriptor.clone(),
+                            };
+                            let dead = broadcast_event(&ui_clients, &open);
+                            drop_clients(&mut ui_clients, dead);
+                        }
                     }
                     // A favourite change made through a bridge action updates
                     // the database only; mirror it into the live queue so the
@@ -391,7 +523,7 @@ async fn run_async() {
                 Lifecycle::Show => show_window(&mut ui_clients, &mut ui_child),
             },
             Some(line) = ui_forward_rx.recv() => {
-                if ui_clients.is_empty() {
+                if !ui_clients.values().any(|client| client.role == Role::Ui) {
                     crate::debug_log!("daemon: presentation command with no UI attached: {line}");
                 } else {
                     let event = Event::Command(line);
@@ -403,6 +535,27 @@ async fn run_async() {
                 // MPRIS is not an IPC surface: no command echo toast.
                 let _ = dispatch_text(&services, &line, false);
             }
+            Some(line) = tray_rx.recv() => {
+                // Tray callbacks hand their canonical command lines over
+                // in-process; like MPRIS this is not a user-visible IPC echo.
+                let _ = dispatch_text(&services, &line, false);
+            }
+            Some(outcome) = bootstrapped_rx.recv() => match outcome {
+                BootstrapOutcome::Done(conn) => {
+                    if let Some(client) = ui_clients.get_mut(&conn) {
+                        client.bootstrapping = false;
+                        status_dirty = true;
+                    }
+                }
+                BootstrapOutcome::Failed(conn) => {
+                    if let Some(client) = ui_clients.remove(&conn) {
+                        crate::debug_log!(
+                            "daemon: client {conn} disappeared during its bootstrap"
+                        );
+                        client.outbox.close();
+                    }
+                }
+            },
             Some(output) = playback_rx.recv() => {
                 handle_playback_output(
                     &mut ui_clients,
@@ -417,19 +570,61 @@ async fn run_async() {
             Some(server_event) = server_rx.recv() => match server_event {
                 ServerEvent::Connected { conn, role, features, client, outbox } => {
                     crate::debug_log!("daemon: client {conn} ({client:?}, {role:?}) connected");
-                    let snapshot = playback_control.snapshot();
-                    bootstrap_client(
-                        &outbox,
-                        &snapshot,
-                        header.as_ref(),
-                        auth.as_ref(),
-                        connection.as_ref(),
-                        eq_state.as_ref(),
-                        settings_state.as_ref(),
-                        &page,
-                    );
-                    ui_clients.insert(conn, UiClient { role, features, outbox });
                     status_dirty = true;
+                    if role == Role::Control {
+                        // External tooling: handshake + replies only. It is
+                        // registered now so request acknowledgements find its
+                        // outbox, but it gets no playback/queue/page stream.
+                        ui_clients.insert(
+                            conn,
+                            UiClient {
+                                role,
+                                features,
+                                bootstrapping: false,
+                                outbox,
+                            },
+                        );
+                    } else {
+                        // Register right away (request replies must still find
+                        // the outbox) but hold broadcasts back until the
+                        // backpressured queue bootstrap task finished, so no
+                        // frame can interleave with the queue rows (D-06).
+                        let bootstrapping = UiClient {
+                            role,
+                            features,
+                            bootstrapping: true,
+                            outbox: outbox.clone(),
+                        };
+                        ui_clients.insert(conn, bootstrapping);
+                        let snapshot = playback_control.snapshot();
+                        let header = header.clone();
+                        let auth = auth.clone();
+                        let connection = connection.clone();
+                        let eq_state = eq_state.clone();
+                        let settings_state = settings_state.clone();
+                        let page = page.clone();
+                        let bootstrapped_tx = bootstrapped_tx.clone();
+                        tokio::spawn(async move {
+                            let outcome = if bootstrap_client(
+                                &outbox,
+                                &snapshot,
+                                header.as_ref(),
+                                auth.as_ref(),
+                                connection.as_ref(),
+                                eq_state.as_ref(),
+                                settings_state.as_ref(),
+                                &page,
+                                features,
+                            )
+                            .await
+                            {
+                                BootstrapOutcome::Done(conn)
+                            } else {
+                                BootstrapOutcome::Failed(conn)
+                            };
+                            _ = bootstrapped_tx.send(outcome);
+                        });
+                    }
                 }
                 ServerEvent::Gone { conn } => {
                     if ui_clients.remove(&conn).is_some() {
@@ -538,30 +733,116 @@ async fn run_async() {
         eprintln!("daemon: final playback settings save failed: {err:#}");
     }
     crate::tray::shutdown().await;
-    if let Some(mut child) = ui_child.take() {
-        _ = child.kill();
-        _ = child.wait();
-    }
+    crate::mpris::shutdown();
+    // The child window gets a SIGTERM first so GPUI can shut down cleanly; a
+    // window that ignores it is killed after a short grace period (D-16).
+    stop_ui_child(&mut ui_child).await;
     playback.shutdown();
     _ = std::fs::remove_file(crate::ipc::socket_path());
     _ = std::fs::remove_file(crate::ipc::daemon_socket_path());
     eprintln!("daemon: stopped");
 }
 
-fn update_page(page: &mut LastPage, descriptor: &PageDescriptor) {
-    *page = Some(descriptor.clone());
+/// Asks the child UI window to terminate and escalates to SIGKILL only when it
+/// does not exit within the grace period.
+async fn stop_ui_child(child: &mut Option<std::process::Child>) {
+    let Some(mut child) = child.take() else {
+        return;
+    };
+    // SAFETY: `child.id()` is the pid of our own child process and `kill` with
+    // SIGTERM is async-signal-safe; an already-exited child is ignored.
+    unsafe {
+        _ = libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            _ => break,
+        }
+    }
+    _ = child.kill();
+    _ = child.wait();
 }
 
-async fn restore_status(playback: &PlaybackControl, page: &mut LastPage, offline: bool) {
-    let Some(dbs) = crate::app::dbs() else {
+/// Installs SIGTERM/SIGINT handlers that feed the daemon's existing graceful
+/// shutdown path (`Lifecycle::Quit`) instead of letting the process die with a
+/// half-flushed session (D-16).
+fn install_shutdown_signals(lifecycle: mpsc::UnboundedSender<Lifecycle>) {
+    use tokio::signal::unix::{SignalKind, signal};
+    // Register the OS handlers synchronously so a signal that arrives in the
+    // first daemon-loop tick is already routed to the graceful path.
+    let Ok(mut terminate) = signal(SignalKind::terminate()) else {
+        eprintln!("daemon: cannot install the SIGTERM handler");
         return;
     };
+    let Ok(mut interrupt) = signal(SignalKind::interrupt()) else {
+        eprintln!("daemon: cannot install the SIGINT handler");
+        return;
+    };
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = terminate.recv() => crate::debug_log!("daemon: SIGTERM received"),
+            _ = interrupt.recv() => crate::debug_log!("daemon: SIGINT received"),
+        }
+        _ = lifecycle.send(Lifecycle::Quit);
+    });
+}
+
+fn update_page(page: &mut LastPage, descriptor: &PageDescriptor) {
+    *page = Some(descriptor.clone());
+    store_page(page);
+}
+
+/// Publishes a restored page so already-attached clients follow the account
+/// switch (bootstrap covers freshly connecting clients).
+fn forward_restored_page(ui_clients: &mut HashMap<u64, UiClient>, page: &LastPage) {
+    let Some(descriptor) = page.clone() else {
+        return;
+    };
+    let dead = broadcast_event(ui_clients, &Event::OpenPage { descriptor });
+    drop_clients(ui_clients, dead);
+}
+
+/// Stops the transport and drops the queue. An account switch, logout or last
+/// account removal must never leave the outgoing account's session playing.
+fn reset_playback(playback: &PlaybackControl) {
+    // An empty load stops the engine and publishes an empty queue reset.
+    let _ = playback.send(PlaybackInput::Load {
+        tracks: Vec::new(),
+        start: 0,
+        paused: true,
+        position: None,
+        volume: None,
+        muted: None,
+    });
+}
+
+/// Flushes the live session status before an account switch swaps the pools.
+/// The bridge calls this off-loop; the page mirror supplies the outgoing
+/// account's page hint. (D-07)
+pub(crate) async fn flush_status_for_account_switch(playback: &PlaybackControl) {
+    let page = stored_page();
+    flush_status_now(playback, &page).await;
+}
+
+fn restore_offline_mode(has_active_account: bool, bridge_offline: bool) -> bool {
+    !has_active_account && bridge_offline
+}
+
+/// Loads the stored session for the active data root and returns the restored
+/// page hint (if any), applying the queue/volume to the playback service.
+async fn restore_status(playback: &PlaybackControl, offline: bool) -> LastPage {
+    let dbs = crate::app::dbs()?;
     let Ok(Some(status)) = crate::status::load(&dbs.status).await else {
-        return;
+        return None;
     };
-    *page = PageDescriptor::from_stored_parts(&status.page_kind, &status.page_id);
+    let page = PageDescriptor::from_stored_parts(&status.page_kind, &status.page_id);
     let Ok(resume) = crate::queue::resume(&dbs, &status, offline).await else {
-        return;
+        return page;
     };
     if !resume.tracks.is_empty() {
         let _ = playback.send(PlaybackInput::Load {
@@ -580,6 +861,7 @@ async fn restore_status(playback: &PlaybackControl, page: &mut LastPage, offline
             op: CoreCommand::SetMuted(status.muted),
         });
     }
+    page
 }
 
 /// Executes one text command. Returns a reply for read-only query commands;
@@ -671,7 +953,11 @@ fn query_json(snapshot: &Snapshot, command: &IpcCommand) -> String {
             value.to_string()
         }
         IpcCommand::QueueQuery => {
-            let ids: Vec<&str> = snapshot.queue.iter().map(|track| track.id.as_str()).collect();
+            let ids: Vec<&str> = snapshot
+                .queue
+                .iter()
+                .map(|track| track.id.as_str())
+                .collect();
             serde_json::json!({
                 "rev": snapshot.queue_rev,
                 "index": state.index,
@@ -680,10 +966,31 @@ fn query_json(snapshot: &Snapshot, command: &IpcCommand) -> String {
             })
             .to_string()
         }
-        IpcCommand::OutputList => match crate::player::pipewire::list_output_devices() {
-            Ok(devices) => serde_json::json!({ "devices": devices }).to_string(),
-            Err(error) => serde_json::json!({ "error": error }).to_string(),
-        },
+        IpcCommand::OutputList => {
+            // The text-socket dispatcher invokes this from a synchronous
+            // callback. The PipeWire probe blocks on a private connection, so
+            // it runs on the blocking pool; only this callback thread parks
+            // while the pool works (D-18).
+            let discover = crate::player::pipewire::list_output_devices;
+            let result = match tokio::runtime::Handle::try_current() {
+                Ok(handle)
+                    if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread =>
+                {
+                    tokio::task::block_in_place(|| {
+                        handle
+                            .block_on(tokio::task::spawn_blocking(discover))
+                            .unwrap_or_else(|error| Err(format!("output discovery task: {error}")))
+                    })
+                }
+                // Tests and current-thread callers cannot block-in-place;
+                // discovery is short enough to run inline there.
+                _ => discover(),
+            };
+            match result {
+                Ok(devices) => serde_json::json!({ "devices": devices }).to_string(),
+                Err(error) => serde_json::json!({ "error": error }).to_string(),
+            }
+        }
         _ => "{}".to_string(),
     }
 }
@@ -717,14 +1024,12 @@ fn dispatch_core_bridge(services: &Services, command: &IpcCommand) {
             let _ = services.playback.send(PlaybackInput::CycleEq);
         }
         IpcCommand::Scrobble(enabled) => {
-            let _ = services
-                .playback
-                .send(PlaybackInput::SetScrobble(*enabled));
+            let _ = services.playback.send(PlaybackInput::SetScrobble(*enabled));
         }
         IpcCommand::Stream(change) => {
-            let _ = services.playback.send(PlaybackInput::ApplyStreamChange(
-                change.clone(),
-            ));
+            let _ = services
+                .playback
+                .send(PlaybackInput::ApplyStreamChange(change.clone()));
         }
         IpcCommand::ColorContrast(contrast) => {
             bridge.set_color_contrast(*contrast);
@@ -808,13 +1113,33 @@ fn dispatch_core_bridge(services: &Services, command: &IpcCommand) {
             bridge.download_request(request.clone(), wire);
         }
         IpcCommand::Shuffle {
-            target: ShuffleTarget::Album(Some(id)),
-        } => bridge.shuffle_album(id.clone()),
+            target: ShuffleTarget::Album(Some(query)),
+        } => bridge.shuffle_album_query(query.clone()),
         IpcCommand::Shuffle {
-            target: ShuffleTarget::Artist(Some(id)),
-        } => bridge.shuffle_artist(id.clone()),
-        IpcCommand::Shuffle { target } => {
-            eprintln!("daemon: shuffle target needs an id in daemon mode: {target:?}");
+            target: ShuffleTarget::Artist(Some(query)),
+        } => bridge.shuffle_artist_query(query.clone()),
+        IpcCommand::Shuffle {
+            target: ShuffleTarget::Album(None),
+        } => match current
+            .and_then(|track| (!track.album_id.is_empty()).then(|| track.album_id.clone()))
+        {
+            // The text surface names albums; with no name, the playing album is
+            // the only sensible target.
+            Some(album_id) => bridge.shuffle_album(album_id),
+            None => bridge.error("Shuffle album needs a playing album or an album name."),
+        },
+        IpcCommand::Shuffle {
+            target: ShuffleTarget::Artist(None),
+        } => match current.map(|track| track.artist.clone()) {
+            Some(artist) if !artist.is_empty() => bridge.shuffle_artist_query(artist),
+            _ => bridge.error("Shuffle artist needs a playing artist or an artist name."),
+        },
+        IpcCommand::Shuffle {
+            target: ShuffleTarget::Queue,
+        } => {
+            // `shuffle queue` is playback-owned; reaching here means the
+            // command classification drifted.
+            eprintln!("daemon: shuffle queue belongs to the playback core");
         }
         IpcCommand::Radio { seed } => {
             let (kind, id) = match seed {
@@ -825,17 +1150,25 @@ fn dispatch_core_bridge(services: &Services, command: &IpcCommand) {
                         return;
                     }
                 },
-                RadioSeed::Song(Some(id)) => ("song".to_string(), id.clone()),
-                RadioSeed::Album(Some(id)) => ("album".to_string(), id.clone()),
-                RadioSeed::Album(None) => match current.and_then(|track| {
-                    (!track.album_id.is_empty()).then(|| track.album_id.clone())
-                }) {
+                RadioSeed::Album(None) => match current
+                    .and_then(|track| (!track.album_id.is_empty()).then(|| track.album_id.clone()))
+                {
                     Some(id) => ("album".to_string(), id),
                     None => {
                         bridge.error("Radio album needs a playing album.");
                         return;
                     }
                 },
+                // Text-socket seeds are names (or ids); resolve them through
+                // the same search the UI's named requests use (D-13).
+                RadioSeed::Song(Some(query)) => {
+                    bridge.play_radio_query("song".to_string(), query.clone(), 0);
+                    return;
+                }
+                RadioSeed::Album(Some(query)) => {
+                    bridge.play_radio_query("album".to_string(), query.clone(), 0);
+                    return;
+                }
             };
             bridge.play_radio(kind, id, 0);
         }
@@ -858,6 +1191,25 @@ fn handle_client_message(
 ) {
     match message {
         Message::PlayerRequest(request) => {
+            if ui_clients
+                .get(&conn)
+                .is_some_and(|client| client.role == Role::Control)
+            {
+                // The typed transport surface belongs to the UI window;
+                // external tooling uses the JSON bridge requests instead.
+                let reply = PlayerReply {
+                    req: request.req,
+                    ok: false,
+                    code: ErrorCode::InvalidArgs,
+                    applied_seq: 0,
+                };
+                if let Some(client) = ui_clients.get(&conn) {
+                    let _ = client
+                        .outbox
+                        .send(&Frame::new(proto::KIND_PLAYER_REPLY, reply.encode()));
+                }
+                return;
+            }
             let input = if matches!(request.op, proto::PlayerOp::Resync) {
                 PlaybackInput::Resync {
                     conn,
@@ -886,15 +1238,11 @@ fn handle_client_message(
                 }
                 return;
             }
-            let handled = dispatch_bridge(&services.bridge, &request.method, &request.args);
-            let reply = if handled {
-                ReplyJson::ok(request.req)
-            } else {
-                ReplyJson::err(
-                    request.req,
-                    proto::ErrorCode::UnknownRequest,
-                    format!("unknown bridge method {}", request.method),
-                )
+            // A malformed or misnamed request is an error reply, never a
+            // successful no-op (D-08).
+            let reply = match dispatch_bridge(&services.bridge, &request.method, &request.args) {
+                Ok(()) => ReplyJson::ok(request.req),
+                Err((code, message)) => ReplyJson::err(request.req, code, message),
             };
             if let Ok(bytes) = proto::json_encode(&reply)
                 && let Some(client) = ui_clients.get(&conn)
@@ -962,6 +1310,8 @@ fn handle_playback_output(
             let dead: Vec<u64> = ui_clients
                 .iter()
                 .filter(|(_, client)| client.role == Role::Ui)
+                .filter(|(_, client)| !client.bootstrapping)
+                .filter(|(_, client)| client.features & proto::FEATURE_PLAYBACK_STREAM != 0)
                 .filter(|(_, client)| !client.outbox.send_latest(&frame))
                 .map(|(conn, _)| *conn)
                 .collect();
@@ -980,7 +1330,8 @@ fn handle_playback_output(
             for frame in playback::reset_frames(rev, &queue) {
                 let dead: Vec<u64> = ui_clients
                     .iter()
-                    .filter(|(_, client)| client.role == Role::Ui)
+                    .filter(|(_, client)| !client.bootstrapping)
+                    .filter(|(_, client)| wants_frame(client, proto::KIND_QUEUE_DELTA))
                     .filter(|(_, client)| !client.outbox.send_bytes(Arc::clone(&frame)))
                     .map(|(conn, _)| *conn)
                     .collect();
@@ -991,6 +1342,11 @@ fn handle_playback_output(
         PlaybackOutput::Error(message) => {
             eprintln!("daemon: playback error: {message}");
             let dead = broadcast_event(ui_clients, &Event::Error(message));
+            drop_clients(ui_clients, dead);
+        }
+        PlaybackOutput::Notice(message) => {
+            eprintln!("daemon: playback: {message}");
+            let dead = broadcast_event(ui_clients, &Event::IpcRan(message));
             drop_clients(ui_clients, dead);
         }
         PlaybackOutput::EngineUnavailable(message) => {
@@ -1026,10 +1382,27 @@ fn handle_playback_output(
 fn broadcast_frame(ui_clients: &HashMap<u64, UiClient>, frame: &Frame) -> Vec<u64> {
     ui_clients
         .iter()
-        .filter(|(_, client)| client.role == Role::Ui)
+        .filter(|(_, client)| !client.bootstrapping)
+        .filter(|(_, client)| wants_frame(client, frame.kind))
         .filter(|(_, client)| !client.outbox.send(frame))
         .map(|(conn, _)| *conn)
         .collect()
+}
+
+/// Whether one attached client asked for this frame kind. UI clients may
+/// advertise a subset of the streams in `Hello` (`UiClient.features`); the
+/// kinds that have a feature bit are only sent when that bit is set (D-15).
+fn wants_frame(client: &UiClient, kind: u8) -> bool {
+    if client.role != Role::Ui {
+        return false;
+    }
+    match kind {
+        proto::KIND_PLAYBACK_STATE => client.features & proto::FEATURE_PLAYBACK_STREAM != 0,
+        proto::KIND_QUEUE_DELTA | proto::KIND_QUEUE_ROWS => {
+            client.features & proto::FEATURE_QUEUE_STREAM != 0
+        }
+        _ => true,
+    }
 }
 
 fn broadcast_event(ui_clients: &HashMap<u64, UiClient>, event: &Event) -> Vec<u64> {
@@ -1048,11 +1421,18 @@ fn drop_clients(ui_clients: &mut HashMap<u64, UiClient>, dead: Vec<u64>) {
     }
 }
 
+/// Streams the initial session state to one freshly connected UI client.
+///
+/// The queue can be thousands of rows (`QueueRows` bootstrap frames), so this
+/// runs in a per-client task and waits for outbox capacity instead of
+/// overflowing the bounded queue and disconnecting a healthy client (D-06).
+/// `false` means the client went away (or rejected the backlog) mid-bootstrap
+/// and must not be registered.
 #[expect(
     clippy::too_many_arguments,
     reason = "the bootstrap frames are independent pieces of the session; a wrapper would restate them"
 )]
-fn bootstrap_client(
+async fn bootstrap_client(
     outbox: &Outbox,
     snapshot: &Snapshot,
     header: Option<&Event>,
@@ -1061,29 +1441,46 @@ fn bootstrap_client(
     eq: Option<&Event>,
     settings: Option<&Event>,
     page: &LastPage,
-) {
-    let mut state = snapshot.state;
-    state.seq = state.seq.max(1);
-    let _ = outbox.send(&Frame::new(proto::KIND_PLAYBACK_STATE, state.encode()));
-    for frame in playback::reset_frames(snapshot.queue_rev, &snapshot.queue) {
-        let _ = outbox.send_bytes(frame);
+    features: u32,
+) -> bool {
+    if features & proto::FEATURE_PLAYBACK_STREAM != 0 {
+        let mut state = snapshot.state;
+        state.seq = state.seq.max(1);
+        let frame = Frame::new(proto::KIND_PLAYBACK_STATE, state.encode());
+        if !outbox.send_await(&frame).await {
+            return false;
+        }
     }
+    if features & proto::FEATURE_QUEUE_STREAM != 0 {
+        for frame in playback::reset_frames(snapshot.queue_rev, &snapshot.queue) {
+            if !outbox.send_bytes_await(frame).await {
+                return false;
+            }
+        }
+    }
+    // Header/auth/connection/eq/settings/page are single events every UI
+    // client needs regardless of its stream feature bits.
     for event in [header, auth, connection, eq, settings]
         .into_iter()
         .flatten()
     {
-        if let Ok(frame) = proto::event_frame(event) {
-            let _ = outbox.send(&frame);
+        if let Ok(frame) = proto::event_frame(event)
+            && !outbox.send_await(&frame).await
+        {
+            return false;
         }
     }
     if let Some(descriptor) = page {
         let event = Event::OpenPage {
             descriptor: descriptor.clone(),
         };
-        if let Ok(frame) = proto::event_frame(&event) {
-            let _ = outbox.send(&frame);
+        if let Ok(frame) = proto::event_frame(&event)
+            && !outbox.send_await(&frame).await
+        {
+            return false;
         }
     }
+    true
 }
 
 fn publish_mpris(snapshot: &Snapshot) {
@@ -1127,7 +1524,11 @@ fn publish_mpris(snapshot: &Snapshot) {
 fn build_status(snapshot: &Snapshot, page: &LastPage) -> crate::status::SessionStatus {
     let account = crate::accounts::active_identity();
     let current = current_track(snapshot);
-    let queue: Vec<&str> = snapshot.queue.iter().map(|track| track.id.as_str()).collect();
+    let queue: Vec<&str> = snapshot
+        .queue
+        .iter()
+        .map(|track| track.id.as_str())
+        .collect();
     let queue = serde_json::to_string(&queue).unwrap_or_default();
     crate::status::SessionStatus {
         server_url: account
@@ -1138,9 +1539,8 @@ fn build_status(snapshot: &Snapshot, page: &LastPage) -> crate::status::SessionS
             .as_ref()
             .map(|account| account.username.clone())
             .unwrap_or_default(),
-        album_id: current.and_then(|track| {
-            (!track.album_id.is_empty()).then(|| track.album_id.clone())
-        }),
+        album_id: current
+            .and_then(|track| (!track.album_id.is_empty()).then(|| track.album_id.clone())),
         song_id: current.map(|track| track.id.clone()),
         page_kind: page
             .as_ref()
@@ -1159,11 +1559,7 @@ fn build_status(snapshot: &Snapshot, page: &LastPage) -> crate::status::SessionS
     }
 }
 
-fn spawn_status_flush(
-    playback: &PlaybackControl,
-    page: &LastPage,
-    inflight: Arc<AtomicBool>,
-) {
+fn spawn_status_flush(playback: &PlaybackControl, page: &LastPage, inflight: Arc<AtomicBool>) {
     let Some(dbs) = crate::app::dbs() else {
         inflight.store(false, Ordering::Release);
         return;
@@ -1187,7 +1583,10 @@ async fn flush_status_now(playback: &PlaybackControl, page: &LastPage) {
     }
 }
 
-fn show_window(ui_clients: &mut HashMap<u64, UiClient>, ui_child: &mut Option<std::process::Child>) {
+fn show_window(
+    ui_clients: &mut HashMap<u64, UiClient>,
+    ui_child: &mut Option<std::process::Child>,
+) {
     let ui_attached = ui_clients.values().any(|client| client.role == Role::Ui);
     if ui_attached {
         let frame = Frame::new(proto::KIND_ACTIVATE, Vec::new());
@@ -1261,25 +1660,44 @@ fn arg<T: DeserializeOwned>(args: &serde_json::Value, key: &str) -> Option<T> {
 
 /// Generate the core's request dispatcher from the shared bridge RPC table:
 /// each arm extracts the declared arguments from the request's JSON object and
-/// calls the matching `Bridge` handler. A request with missing or malformed
-/// arguments is consumed silently (handled), like the hand-written arms did.
+/// calls the matching `Bridge` handler.
+///
+/// Failures are typed `(ErrorCode, message)` so the caller can answer with an
+/// error reply instead of a bogus `ok: true` (D-08): a missing or mistyped
+/// argument is `InvalidArgs`, an unknown method is `UnknownRequest`.
 macro_rules! bridge_dispatch {
     ($( $name:ident ( $( $field:ident : $ty:ty ),* $(,)? ), )*) => {
-        fn dispatch_bridge(bridge: &Bridge, method: &str, args: &serde_json::Value) -> bool {
+        fn dispatch_bridge(
+            bridge: &Bridge,
+            method: &str,
+            args: &serde_json::Value,
+        ) -> Result<(), (ErrorCode, String)> {
             match method {
                 $(
                     stringify!($name) => {
                         $(
                             let Some($field) = arg::<$ty>(args, stringify!($field)) else {
-                                return true;
+                                return Err((
+                                    ErrorCode::InvalidArgs,
+                                    format!(
+                                        "{} requires argument `{}`",
+                                        stringify!($name),
+                                        stringify!($field)
+                                    ),
+                                ));
                             };
                         )*
                         let _ = bridge.$name($($field),*);
                     }
                 )*
-                _ => return false,
+                _ => {
+                    return Err((
+                        ErrorCode::UnknownRequest,
+                        format!("unknown bridge method {method}"),
+                    ));
+                }
             }
-            true
+            Ok(())
         }
     };
 }
@@ -1335,5 +1753,57 @@ mod tests {
             ipc_command::parse("quit").unwrap().target(),
             CommandTarget::Lifecycle
         );
+    }
+
+    #[test]
+    fn restore_offline_mode_preserves_queue_when_account_exists() {
+        assert!(!restore_offline_mode(true, true));
+        assert!(!restore_offline_mode(true, false));
+        assert!(restore_offline_mode(false, true));
+        assert!(!restore_offline_mode(false, false));
+    }
+
+    #[test]
+    fn dispatch_bridge_reports_invalid_args_instead_of_success() {
+        // D-08: a missing argument must be an `InvalidArgs` error reply, not a
+        // silent `ok: true`.
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let bridge = Bridge::new(tx);
+        let missing = dispatch_bridge(
+            &bridge,
+            "play_song",
+            &serde_json::json!({ "song_id": "s1" }),
+        );
+        let Err((code, message)) = missing else {
+            panic!("a missing argument must fail");
+        };
+        assert_eq!(code, ErrorCode::InvalidArgs);
+        assert!(message.contains("order"), "diagnostic names the argument");
+
+        let unknown = dispatch_bridge(&bridge, "not_a_method", &serde_json::json!({}));
+        let Err((code, _)) = unknown else {
+            panic!("an unknown method must fail");
+        };
+        assert_eq!(code, ErrorCode::UnknownRequest);
+        // Bridge::new queues a header refresh; drain it so the test leaves no
+        // task behind that could touch a database during teardown.
+        while rx.try_recv().is_ok() {}
+    }
+
+    #[test]
+    fn blocking_output_query_offloads_without_panicking() {
+        // Mirrors `query_json`'s `OutputList` path: the text-socket callback is
+        // synchronous, so the blocking probe runs on the blocking pool while
+        // only the callback thread parks (D-18).
+        let runtime = crate::app::runtime();
+        let value = runtime.block_on(async {
+            tokio::task::block_in_place(|| {
+                runtime
+                    .handle()
+                    .block_on(tokio::task::spawn_blocking(|| 7u32))
+                    .expect("blocking task joins")
+            })
+        });
+        assert_eq!(value, 7);
     }
 }

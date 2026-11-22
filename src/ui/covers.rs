@@ -75,11 +75,19 @@ impl CoverStore {
     }
 
     /// Number of cached row resolutions (successes and failures).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn row_len(&self) -> usize {
         self.rows.count()
     }
 
     /// Number of cached original resolutions (successes and failures).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn original_len(&self) -> usize {
         self.originals.count()
     }
@@ -171,6 +179,10 @@ impl<K: Eq + Hash + Clone, V> BoundedFifo<K, V> {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     fn count(&self) -> usize {
         self.entries.len()
     }
@@ -381,7 +393,11 @@ mod tests {
         let mut store = CoverStore::new(8);
         assert_eq!(store.original_path(&url), None);
         dir.file("late.jpg", 4 * 1024);
-        assert_eq!(store.original_path(&url), None, "a cached miss must not stat");
+        assert_eq!(
+            store.original_path(&url),
+            None,
+            "a cached miss must not stat"
+        );
         assert_eq!(store.original_len(), 1);
 
         store.clear();
@@ -442,7 +458,11 @@ mod tests {
             store.original_path(&format!("{base}#no-thumb")),
             Some(path.clone())
         );
-        assert_eq!(store.original_len(), 1, "the fragment is not part of the key");
+        assert_eq!(
+            store.original_len(),
+            1,
+            "the fragment is not part of the key"
+        );
         assert_eq!(store.original_path(&base), Some(path));
         assert_eq!(store.original_path("https://example.com/cover.jpg"), None);
         assert_eq!(store.original_len(), 2);

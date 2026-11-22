@@ -16,11 +16,11 @@
 
 //! Native MPRIS 2.2 service (Q-8 / roadmap "MPRIS node").
 //!
-//! The Qt thread publishes a [`Snapshot`] on every player sync; a zbus task
-//! owns `org.mpris.MediaPlayer2.musika` and answers panels, media keys and
+//! The playback service publishes a [`Snapshot`] on every player sync; a zbus
+//! task owns `org.mpris.MediaPlayer2.musika` and answers panels, media keys and
 //! `playerctl`. Controls travel back as plain command strings through a
-//! channel the backend drains on its tick, so every MPRIS action goes through
-//! the same dispatcher as keyboard/IPC input.
+//! channel the playback service drains on its tick, so every MPRIS action goes
+//! through the same dispatcher as keyboard/IPC input.
 //!
 //! Without a session bus this is a no-op.
 
@@ -41,12 +41,12 @@ pub const OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
 const PLAYER_INTERFACE: &str = "org.mpris.MediaPlayer2.Player";
 /// Don't emit PropertiesChanged faster than this (roadmap robustness rule).
 const RATE_LIMIT: std::time::Duration = std::time::Duration::from_millis(250);
-/// FIX-8: how many queued panel commands the 500 ms tick may have to drain
-/// before further sends are dropped.
+/// FIX-8: how many queued panel commands one playback-service tick may have
+/// to drain before further sends are dropped.
 const COMMAND_CAP: usize = 64;
 
-/// What the Qt thread publishes for the service to read.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// What the playback service publishes for the MPRIS task to read.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
     /// `Playing` | `Paused` | `Stopped`.
     pub playback_status: String,
@@ -64,6 +64,29 @@ pub struct Snapshot {
     pub can_next: bool,
     pub can_prev: bool,
     pub art_url: String,
+}
+
+/// The MPRIS defaults for a service with no player state yet: `playback_status`
+/// and `loop_status` are enum strings, so an empty `String` would be an invalid
+/// property value (D-25).
+impl Default for Snapshot {
+    fn default() -> Self {
+        Self {
+            playback_status: "Stopped".to_string(),
+            loop_status: "None".to_string(),
+            shuffle: false,
+            title: String::new(),
+            artist: String::new(),
+            album: String::new(),
+            track_id: String::new(),
+            duration_us: 0,
+            position_us: 0,
+            volume: 0.0,
+            can_next: false,
+            can_prev: false,
+            art_url: String::new(),
+        }
+    }
 }
 
 impl Snapshot {
@@ -87,13 +110,63 @@ impl Snapshot {
     }
 }
 
+/// MPRIS only defines these three playback states; a malformed publisher value
+/// reports as `Stopped` instead of exposing an invalid property.
+pub(crate) fn playback_status(value: &str) -> &str {
+    match value {
+        "Playing" | "Paused" | "Stopped" => value,
+        _ => "Stopped",
+    }
+}
+
+/// MPRIS only defines these three loop states; anything else reports as `None`.
+pub(crate) fn loop_status(value: &str) -> &str {
+    match value {
+        "None" | "Track" | "Playlist" => value,
+        _ => "None",
+    }
+}
+
+/// MPRIS `Volume` is `0.0..=1.0`; the core's `mpris_volume:` vocabulary is
+/// `0..=100`, so the payload is scaled by 100 (D-01). Non-finite values are
+/// rejected: `playerctl volume nan` must not reach the parser as `NaN`.
+pub(crate) fn volume_command(volume: f64) -> Option<String> {
+    volume
+        .is_finite()
+        .then(|| format!("mpris_volume:{:.2}", volume.clamp(0.0, 1.0) * 100.0))
+}
+
+/// Command for MPRIS `SetShuffle` (D-02). The persistent shuffle *mode* keeps
+/// the visible queue order; `shuffle queue` permutes and restarts the queue, so
+/// it must not be used here. Only send when the published mode disagrees.
+pub(crate) fn shuffle_command(current: bool, shuffle: bool) -> Option<String> {
+    (current != shuffle).then(|| {
+        if shuffle {
+            "mpris_shuffle:on".to_string()
+        } else {
+            "mpris_shuffle:off".to_string()
+        }
+    })
+}
+
+/// An absolute `SetPosition` target accepted by MPRIS 2.2: negative values are
+/// invalid, and a position past the track length (or any position when the
+/// track length is unknown) must be ignored.
+pub(crate) fn seeks_within_track(position: i64, duration_us: i64) -> Option<i64> {
+    (duration_us > 0 && (0..=duration_us).contains(&position)).then_some(position)
+}
+
 static SNAPSHOT: OnceLock<Mutex<Snapshot>> = OnceLock::new();
 static NOTIFY: OnceLock<Notify> = OnceLock::new();
 /// FIX-8: a *bounded* command channel — a D-Bus control burst between two
-/// 500 ms ticks coalesces by dropping instead of growing the queue; a full
+/// service ticks coalesces by dropping instead of growing the queue; a full
 /// buffer simply discards the excess (the newest panel intent matters, a
 /// stale `SetVolume`/`SetPosition` under a flood is harmless to lose).
 static COMMAND_TX: OnceLock<mpsc::Sender<String>> = OnceLock::new();
+/// D-16: graceful-shutdown half of the service. The emitter task watches this
+/// channel and drops the D-Bus connection (releasing the bus name) when the
+/// daemon stops.
+static SHUTDOWN: OnceLock<tokio::sync::watch::Sender<bool>> = OnceLock::new();
 
 fn snapshot() -> Snapshot {
     SNAPSHOT
@@ -114,7 +187,7 @@ pub fn publish(state: Snapshot) {
     }
 }
 
-/// Sends one control command to the Qt thread (`mpris_*` vocabulary).
+/// Sends one control command to the playback service (`mpris_*` vocabulary).
 /// FIX-8: `try_send` drops when the bounded queue is full.
 fn submit(command: String) {
     if let Some(tx) = COMMAND_TX.get() {
@@ -156,6 +229,8 @@ pub fn init(commands: mpsc::UnboundedSender<String>) {
     _ = COMMAND_TX.set(tx);
     _ = SNAPSHOT.set(Mutex::new(Snapshot::default()));
     _ = NOTIFY.set(Notify::new());
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    _ = SHUTDOWN.set(shutdown_tx);
     crate::app::runtime().spawn(async move {
         while let Some(command) = rx.recv().await {
             if commands.send(command).is_err() {
@@ -163,10 +238,22 @@ pub fn init(commands: mpsc::UnboundedSender<String>) {
             }
         }
     });
-    crate::app::runtime().spawn(serve());
+    crate::app::runtime().spawn(serve(shutdown_rx));
 }
 
-async fn serve() {
+/// Asks the MPRIS service to stop: the emitter task ends and drops its bus
+/// connection, which releases `org.mpris.MediaPlayer2.musika`. Idempotent, and
+/// a no-op if MPRIS was never initialised (D-16).
+pub fn shutdown() {
+    if let Some(tx) = SHUTDOWN.get() {
+        _ = tx.send(true);
+    }
+}
+
+async fn serve(mut shutdown: tokio::sync::watch::Receiver<bool>) {
+    if *shutdown.borrow() {
+        return;
+    }
     if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
         eprintln!("mpris: no session bus; native MPRIS disabled");
         return;
@@ -196,8 +283,14 @@ async fn serve() {
         }
     };
 
-    if let Some(notify) = NOTIFY.get() {
-        emit_changes(&connection, notify).await;
+    let Some(notify) = NOTIFY.get() else {
+        return;
+    };
+    tokio::select! {
+        () = emit_changes(&connection, notify) => {}
+        // Dropping the future above cancels the emitter; returning drops the
+        // connection, which releases the well-known name.
+        _ = shutdown.wait_for(|stop| *stop) => {}
     }
 }
 
@@ -217,22 +310,37 @@ async fn emit_changes(connection: &Connection, notify: &Notify) {
     };
 
     let mut last = String::new();
+    // Trailing-edge rate limit (D-25): the first change after a quiet period is
+    // published immediately; a burst is coalesced into one emission per
+    // RATE_LIMIT window so panels still see the final state promptly.
+    let mut last_emit: Option<tokio::time::Instant> = None;
     loop {
         notify.notified().await;
-        tokio::time::sleep(RATE_LIMIT).await;
+        if let Some(at) = last_emit {
+            let now = tokio::time::Instant::now();
+            if now < at + RATE_LIMIT {
+                tokio::time::sleep_until(at + RATE_LIMIT).await;
+            }
+        }
         let state = snapshot();
         let key = state.signal_key();
         if key == last {
             continue;
         }
         last = key;
+        last_emit = Some(tokio::time::Instant::now());
 
         let Ok(name) = InterfaceName::try_from(PLAYER_INTERFACE) else {
             return;
         };
         let mut changed: HashMap<&str, Value<'_>> = HashMap::new();
         changed.insert("Metadata", Value::from(metadata(&state)));
-        changed.insert("PlaybackStatus", Value::from(state.playback_status));
+        changed.insert(
+            "PlaybackStatus",
+            Value::from(playback_status(&state.playback_status)),
+        );
+        changed.insert("LoopStatus", Value::from(loop_status(&state.loop_status)));
+        changed.insert("Shuffle", Value::from(state.shuffle));
         changed.insert("Volume", Value::from(state.volume));
         changed.insert("CanGoNext", Value::from(state.can_next));
         changed.insert("CanGoPrevious", Value::from(state.can_prev));
@@ -353,18 +461,18 @@ struct MprisPlayer;
 impl MprisPlayer {
     #[zbus(property)]
     fn playback_status(&self) -> String {
-        snapshot().playback_status
+        playback_status(&snapshot().playback_status).to_string()
     }
 
     #[zbus(property)]
     fn loop_status(&self) -> String {
-        snapshot().loop_status
+        loop_status(&snapshot().loop_status).to_string()
     }
 
     #[zbus(property)]
     fn set_loop_status(&self, status: String) {
-        let state = snapshot().loop_status;
-        let current = match state.as_str() {
+        let published = snapshot().loop_status;
+        let current = match loop_status(&published) {
             "Track" => 1,
             "Playlist" => 2,
             _ => 0,
@@ -395,8 +503,10 @@ impl MprisPlayer {
 
     #[zbus(property)]
     fn set_shuffle(&self, shuffle: bool) {
-        if snapshot().shuffle != shuffle {
-            submit("shuffle queue".to_string());
+        // The persistent mode, not `shuffle queue` (which permutes/restarts the
+        // queue); only submit when the published mode disagrees (D-02).
+        if let Some(command) = shuffle_command(snapshot().shuffle, shuffle) {
+            submit(command);
         }
     }
 
@@ -412,7 +522,9 @@ impl MprisPlayer {
 
     #[zbus(property)]
     fn set_volume(&self, volume: f64) {
-        submit(format!("mpris_volume:{}", volume.clamp(0.0, 1.0)));
+        if let Some(command) = volume_command(volume) {
+            submit(command);
+        }
     }
 
     #[zbus(property)]
@@ -489,10 +601,15 @@ impl MprisPlayer {
         submit(track_command("previous"));
     }
 
-    async fn seek(&self, offset: i64, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>) {
+    fn seek(&self, offset: i64) {
+        // MPRIS 2.2: there is nothing to seek when the track length is unknown
+        // (`CanSeek` is false). The applied position is only authoritative in
+        // the core, which publishes it with the next snapshot, so an eager
+        // `Seeked` is not emitted from this possibly stale snapshot (D-25).
+        if snapshot().duration_us <= 0 {
+            return;
+        }
         submit(format!("mpris_seek:{offset}"));
-        let position = snapshot().position_us + offset;
-        _ = MprisPlayer::seeked(&emitter, position).await;
     }
 
     async fn set_position(
@@ -501,11 +618,19 @@ impl MprisPlayer {
         position: i64,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
     ) {
-        let expected = track_path(&snapshot().track_id);
-        if track_id.as_str() == expected {
-            submit(format!("mpris_position:{position}"));
-            _ = MprisPlayer::seeked(&emitter, position).await;
+        let state = snapshot();
+        let expected = track_path(&state.track_id);
+        if track_id.as_str() != expected {
+            return;
         }
+        // Negative, past-the-end or unknown-length positions are ignored per
+        // MPRIS 2.2; an accepted absolute position is what the core is asked to
+        // apply, so it is safe to announce right away (D-25).
+        let Some(position) = seeks_within_track(position, state.duration_us) else {
+            return;
+        };
+        submit(format!("mpris_position:{position}"));
+        _ = MprisPlayer::seeked(&emitter, position).await;
     }
 
     #[zbus(signal)]

@@ -55,7 +55,6 @@ pub struct SearchAlbum {
     pub artist: String,
     pub year: i64,
     pub song_count: i64,
-    pub duration: i64,
     pub cover: String,
     pub cover_remote: String,
     pub starred: bool,
@@ -248,7 +247,7 @@ impl SeedSong {
     }
 }
 
-async fn search_results_fts(
+pub(crate) async fn search_results_fts(
     dbs: &crate::db::Dbs,
     query: &str,
     offline: bool,
@@ -266,11 +265,12 @@ async fn search_results_fts(
     let most_played = cleaned.is_empty();
     let (artists, albums, mut songs) = if most_played {
         // The unified search's empty-query surface browses every scope, so
-        // artists and albums are full name-ordered lists (songs stay Most
-        // played, S-9).
+        // artists and albums are name-ordered bounded lists (N-20: the old
+        // code loaded the whole catalog and truncated afterwards); songs stay
+        // Most played (S-9).
         let (artists, albums, songs) = tokio::try_join!(
-            crate::library::artists(&dbs.library, "Name"),
-            crate::library::albums(&dbs.library, None, "Artist"),
+            crate::library::artists_limited(&dbs.library, "Name", fetch as i64),
+            crate::library::albums_limited(&dbs.library, None, "Artist", fetch as i64),
             crate::search::most_played(&dbs.search, fetch as i64),
         )?;
         (artists, albums, songs)
@@ -328,6 +328,7 @@ async fn search_results_fts(
     decorate(
         dbs,
         query,
+        offline,
         most_played,
         None,
         artists.into_iter().map(std::sync::Arc::new).collect(),
@@ -355,11 +356,12 @@ pub(crate) async fn search_results_index(
     };
     let (mut artists, mut albums, mut songs) = if most_played {
         // The unified search's empty-query surface browses every scope:
-        // artists and albums are full name-ordered lists, songs stay Most
-        // played (S-9).
+        // artists and albums are name-ordered *bounded* lists (N-20: the
+        // empty query used to load the whole artist/album catalog into RAM
+        // only to truncate it), songs stay Most played (S-9).
         let (artists, albums) = tokio::try_join!(
-            crate::library::artists(&dbs.library, "Name"),
-            crate::library::albums(&dbs.library, None, "Artist"),
+            crate::library::artists_limited(&dbs.library, "Name", fetch as i64),
+            crate::library::albums_limited(&dbs.library, None, "Artist", fetch as i64),
         )?;
         let artists = artists.into_iter().map(std::sync::Arc::new).collect();
         let albums = albums.into_iter().map(std::sync::Arc::new).collect();
@@ -380,7 +382,11 @@ pub(crate) async fn search_results_index(
         (
             results.artists,
             results.albums,
-            results.songs.iter().map(|hit| SeedSong::from_index(hit)).collect(),
+            results
+                .songs
+                .iter()
+                .map(|hit| SeedSong::from_index(hit))
+                .collect(),
         )
     };
     if let Some(filter) = &filter {
@@ -408,6 +414,7 @@ pub(crate) async fn search_results_index(
     decorate(
         dbs,
         query,
+        offline,
         most_played,
         album_context,
         artists,
@@ -416,6 +423,33 @@ pub(crate) async fn search_results_index(
         limit,
     )
     .await
+}
+
+/// Ids of the playlists that stay playable while offline: those with at least
+/// one downloaded entry. Same rule as [`crate::playlists::list_filtered`]; the
+/// playlist table lives in its own database, so the downloaded song ids are
+/// joined in on the playlist side with bounded `IN` chunks (the `song_id`
+/// index makes each chunk cheap). N-08: unified search used to show
+/// server-only playlists offline, and opening one gave an empty page.
+async fn playable_playlist_ids(dbs: &crate::db::Dbs) -> anyhow::Result<HashSet<String>> {
+    let downloaded = crate::download::downloaded_song_ids(dbs).await?;
+    let mut playable = HashSet::new();
+    if downloaded.is_empty() {
+        return Ok(playable);
+    }
+    let ids: Vec<String> = downloaded.into_iter().collect();
+    for chunk in ids.chunks(crate::cache::IN_BATCH) {
+        let mut builder = sqlx::QueryBuilder::new(
+            "SELECT DISTINCT playlist_id FROM playlist_song WHERE song_id IN (",
+        );
+        crate::cache::push_in_list(&mut builder, chunk);
+        let rows: Vec<String> = builder
+            .build_query_scalar()
+            .fetch_all(&dbs.playlist)
+            .await?;
+        playable.extend(rows);
+    }
+    Ok(playable)
 }
 
 /// Decorate the engine hits with the live library state that the index's
@@ -428,6 +462,7 @@ pub(crate) async fn search_results_index(
 async fn decorate(
     dbs: &crate::db::Dbs,
     query: &str,
+    offline: bool,
     most_played: bool,
     album_context: Option<String>,
     artists: Vec<std::sync::Arc<crate::library::ArtistRow>>,
@@ -436,6 +471,18 @@ async fn decorate(
     limit: usize,
 ) -> anyhow::Result<SearchResults> {
     let playlists = crate::playlists::search_rows(dbs, query, limit as i64).await?;
+    // N-08: offline search only lists playlists that actually have a downloaded
+    // row; the hit payload itself has no library ids to filter on, so the page
+    // keeps only the playable set.
+    let playlists = if offline {
+        let playable = playable_playlist_ids(dbs).await?;
+        playlists
+            .into_iter()
+            .filter(|playlist| playable.contains(&playlist.id))
+            .collect()
+    } else {
+        playlists
+    };
     let mut cover_ids: Vec<String> = albums
         .iter()
         .filter_map(|album| album.cover_art.clone())
@@ -445,38 +492,36 @@ async fn decorate(
     let covers = crate::covers::url_map_of(dbs, &cover_ids);
     let remotes = crate::covers::remote_map_of(dbs, &cover_ids);
     // UI-56: hearts/ratings are live library state, not the index's
-    // sync-time snapshot; read them for just this page.
+    // sync-time snapshot; read them for just this page. N-20: the artist
+    // overlay is a per-page-id lookup — the old code loaded the whole
+    // `artist_user` table on every keystroke.
     let song_ids: Vec<String> = songs.iter().map(|song| song.id.clone()).collect();
     let song_starred = crate::library::song_starred_ids(&dbs.library, &song_ids);
     let album_ids: Vec<String> = albums.iter().map(|album| album.id.clone()).collect();
     let album_states = crate::library::album_states(&dbs.library, &album_ids);
-    let user_starred = crate::artist_user::starred_ids(&dbs.artist_user);
-    let user_ratings = crate::artist_user::ratings(&dbs.artist_user);
-    let (covers, remotes, song_starred, album_states, user_starred, user_ratings) = tokio::try_join!(
-        covers,
-        remotes,
-        song_starred,
-        album_states,
-        user_starred,
-        user_ratings
-    )?;
-    let user_starred: HashSet<String> = user_starred.into_iter().collect();
+    let artist_ids: Vec<&str> = artists.iter().map(|artist| artist.id.as_str()).collect();
+    let artist_states = crate::artist_user::states_for(&dbs.artist_user, &artist_ids);
+    let (covers, remotes, song_starred, album_states, artist_states) =
+        tokio::try_join!(covers, remotes, song_starred, album_states, artist_states)?;
 
     let artist_rows = artists
         .iter()
-        .map(|artist| SearchArtist {
-            id: artist.id.clone(),
-            name: artist.name.clone(),
-            album_count: artist.album_count,
-            cover: crate::covers::url_for(artist.cover_art.as_deref(), &covers),
-            cover_remote: artist
-                .cover_art
-                .as_deref()
-                .and_then(|id| remotes.get(id))
-                .cloned()
-                .unwrap_or_default(),
-            starred: artist.starred.is_some() || user_starred.contains(&artist.id),
-            rating: user_ratings.get(&artist.id).copied().unwrap_or(0),
+        .map(|artist| {
+            let (starred, rating) = artist_states.get(&artist.id).copied().unwrap_or((false, 0));
+            SearchArtist {
+                id: artist.id.clone(),
+                name: artist.name.clone(),
+                album_count: artist.album_count,
+                cover: crate::covers::url_for(artist.cover_art.as_deref(), &covers),
+                cover_remote: artist
+                    .cover_art
+                    .as_deref()
+                    .and_then(|id| remotes.get(id))
+                    .cloned()
+                    .unwrap_or_default(),
+                starred: artist.starred.is_some() || starred,
+                rating,
+            }
         })
         .collect();
     let album_rows = albums
@@ -492,7 +537,6 @@ async fn decorate(
                 artist: album.artist.clone().unwrap_or_default(),
                 year: album.year.map(i64::from).unwrap_or(0),
                 song_count: album.song_count,
-                duration: album.duration,
                 cover: crate::covers::url_for(album.cover_art.as_deref(), &covers),
                 cover_remote: album
                     .cover_art
@@ -536,4 +580,3 @@ async fn decorate(
         playlists,
     })
 }
-

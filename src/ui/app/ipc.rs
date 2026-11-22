@@ -25,8 +25,8 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use ipc_command::{IpcCommand, QuickDirection, WipeScope};
         use crate::ipc_protocol::PlayerOp;
+        use ipc_command::{IpcCommand, QuickDirection, WipeScope};
         // Commands typed on the `:` line are echoed here (socket commands were
         // announced by the core). Announce before dispatch so an early return
         // cannot swallow it.
@@ -56,7 +56,8 @@ impl AppRoot {
                 PlayerOp::CycleNormalization => self.player.cycle_normalization(),
                 PlayerOp::ToggleCrossfade => self.player.toggle_crossfade(),
                 PlayerOp::SetNormalization(code) => {
-                    self.player.set_normalization(crate::player::Normalization::from_code(code));
+                    self.player
+                        .set_normalization(crate::player::Normalization::from_code(code));
                 }
                 PlayerOp::SetCrossfade(enabled) => self.player.set_crossfade(enabled),
                 PlayerOp::ShuffleQueue => self.player.shuffle_queue(),
@@ -92,7 +93,10 @@ impl AppRoot {
                 self.bridge.set_crossfade_change(change);
             }
             IpcCommand::EqNext => {
-                // Core bridge command, handled by the daemon.
+                // Mirror the daemon's core-bridge handling locally so a typed
+                // `:eq next` reaches the playback service through the bridge
+                // instead of being a silent no-op.
+                self.bridge.cycle_eq();
             }
             IpcCommand::Scrobble(enabled) => {
                 self.bridge.set_scrobble(enabled);
@@ -123,7 +127,6 @@ impl AppRoot {
                 if self.syncing {
                     self.push_toast(
                         "Wait for the sync to finish before wiping.".to_string(),
-                        ToastKind::Notice,
                         None,
                     );
                 } else {
@@ -154,7 +157,6 @@ impl AppRoot {
                     }
                     None => self.push_toast(
                         "Nothing is playing; playlist create needs a current track.".to_string(),
-                        ToastKind::Error,
                         None,
                     ),
                 }
@@ -168,11 +170,7 @@ impl AppRoot {
                     self.bridge
                         .playlist_add_selected(kind.to_string(), ids, playlist);
                 }
-                None => self.push_toast(
-                    "Nothing selected to add.".to_string(),
-                    ToastKind::Notice,
-                    None,
-                ),
+                None => self.push_toast("Nothing selected to add.".to_string(), None),
             },
             IpcCommand::PlaylistAddQueue { playlist } => {
                 let rows = self.player.queue();
@@ -182,19 +180,11 @@ impl AppRoot {
                     .filter(|id| !id.is_empty())
                     .collect();
                 if rows.is_empty() {
-                    self.push_toast(
-                        "The queue is empty; nothing to save.".to_string(),
-                        ToastKind::Notice,
-                        None,
-                    );
+                    self.push_toast("The queue is empty; nothing to save.".to_string(), None);
                 } else if ids.len() != rows.len() {
                     // Queue bodies arrive in bounded chunks; a placeholder row
                     // would silently drop tracks from the saved playlist.
-                    self.push_toast(
-                        "The queue is still loading; try again.".to_string(),
-                        ToastKind::Notice,
-                        None,
-                    );
+                    self.push_toast("The queue is still loading; try again.".to_string(), None);
                 } else {
                     self.bridge.playlist_add_ids(ids, playlist);
                 }
@@ -224,11 +214,7 @@ impl AppRoot {
                             self.bridge.save_radio(kind, id, name);
                         }
                     }
-                    _ => self.push_toast(
-                        "Open a radio page before saving it.".to_string(),
-                        ToastKind::Error,
-                        None,
-                    ),
+                    _ => self.push_toast("Open a radio page before saving it.".to_string(), None),
                 }
             }
             IpcCommand::Shuffle { target } => self.execute_shuffle(target),
@@ -251,7 +237,11 @@ impl AppRoot {
                 let current = -f32::from(modal.handle.0.borrow().base_handle.offset().y);
                 let next = current + if down { modal.row_h } else { -modal.row_h };
                 modal.on_wheel();
-                modal.set_offset_now(next.max(0.0));
+                // Clamp both ends: without the upper bound a scroll past the
+                // last row handed the offset to a value the list can never
+                // paint, leaving the surface stuck above its real max.
+                let max = f32::from(modal.handle.0.borrow().base_handle.max_offset().height);
+                modal.set_offset_now(next.clamp(0.0, max.max(0.0)));
             }
             IpcCommand::PageUp => self.on_page_up(&PageUp, window, cx),
             IpcCommand::PageDown => self.on_page_down(&PageDown, window, cx),
@@ -317,6 +307,7 @@ impl AppRoot {
             IpcCommand::SearchScopeNext => self.on_search_scope_next(&SearchScopeNext, window, cx),
             IpcCommand::SearchScopePrev => self.on_search_scope_prev(&SearchScopePrev, window, cx),
             IpcCommand::LineSearch => self.on_line_search(&LineSearch, window, cx),
+            IpcCommand::ShuffleMode { .. } => unreachable!("mapped above"),
             IpcCommand::PlayPause
             | IpcCommand::Play
             | IpcCommand::Pause
@@ -376,7 +367,13 @@ impl AppRoot {
                 self.alt_target = None;
                 self.animate_alt(0.0);
             }
-            IpcCommand::Show => window.activate_window(),
+            IpcCommand::Show => {
+                window.activate_window();
+                // GPUI's Linux activation is a no-op without a real input
+                // serial, so an explicit `show` also asks the compositor to
+                // focus us (best effort; the helper no-ops outside niri).
+                activate_niri_window();
+            }
             IpcCommand::RandomAlbum => {
                 self.bridge.play_random_album();
             }
@@ -397,13 +394,9 @@ impl AppRoot {
             _ = this.update(cx, |this, cx| {
                 match reply {
                     Some(text) => {
-                        this.push_toast(format!("{line} · {text}"), ToastKind::Notice, None);
+                        this.push_toast(format!("{line} · {text}"), None);
                     }
-                    None => this.push_toast(
-                        format!("{line}: the core did not answer."),
-                        ToastKind::Error,
-                        None,
-                    ),
+                    None => this.push_toast(format!("{line}: the core did not answer."), None),
                 }
                 cx.notify();
             });

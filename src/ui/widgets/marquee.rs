@@ -39,6 +39,30 @@ pub(crate) fn marquee_offset(overflow: f32, elapsed: f32) -> f32 {
     }
 }
 
+/// Seconds until the marquee offset next changes after `elapsed`, or `None`
+/// while the line is travelling (which needs every frame).
+///
+/// The ping-pong holds at the ends; during a hold nothing moves, so the owner
+/// can arm a timer for the next motion instead of spinning on vsync.
+pub(crate) fn marquee_next_change(overflow: f32, elapsed: f32) -> Option<f32> {
+    let overflow = overflow.max(0.0);
+    if overflow <= 0.0 {
+        return None;
+    }
+    let travel = overflow / SPEED;
+    let cycle = INITIAL_PAUSE + travel + END_PAUSE + travel;
+    let phase = elapsed.max(0.0) % cycle;
+    if phase < INITIAL_PAUSE {
+        Some(INITIAL_PAUSE - phase)
+    } else if phase < INITIAL_PAUSE + travel {
+        None
+    } else if phase < INITIAL_PAUSE + travel + END_PAUSE {
+        Some(INITIAL_PAUSE + travel + END_PAUSE - phase)
+    } else {
+        None
+    }
+}
+
 #[derive(Clone, PartialEq)]
 struct MarqueeKey {
     text: SharedString,
@@ -97,9 +121,12 @@ impl MarqueeCache {
         }
     }
 
+    fn elapsed_at(&self, now: Instant) -> f32 {
+        now.saturating_duration_since(self.started).as_secs_f32()
+    }
+
     fn offset_at(&self, now: Instant) -> f32 {
-        let elapsed = now.saturating_duration_since(self.started).as_secs_f32();
-        marquee_offset(self.overflow, elapsed)
+        marquee_offset(self.overflow, self.elapsed_at(now))
     }
 }
 
@@ -204,7 +231,7 @@ impl Element for MarqueeText {
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
         window: &mut Window,
-        _: &mut App,
+        cx: &mut App,
     ) -> Self::PrepaintState {
         let width = bounds.size.width.max(px(1.0));
         let key = MarqueeKey::new(&self.text, self.size, self.weight, self.color, width);
@@ -221,8 +248,33 @@ impl Element for MarqueeText {
                 Some(cache) if cache.key == key => cache,
                 _ => MarqueeCache::shape(key, window),
             };
-            if cache.overflow > 0.0 {
-                window.request_animation_frame();
+            let elapsed = cache.elapsed_at(now);
+            // An unfocused window has no visible motion to spend frames on; on
+            // reactivation AppRoot's activation observer repaints and the
+            // marquee resumes from its wall-clock phase.
+            if cache.overflow > 0.0 && window.is_window_active() {
+                match marquee_next_change(cache.overflow, elapsed) {
+                    // Travelling: the offset changes on every frame.
+                    None => super::super::perf::request_frame(window, "marquee"),
+                    // Held at an end: wake once for the next leg instead of
+                    // spinning on vsync through the pause.
+                    Some(delay) => {
+                        window
+                            .spawn(cx, async move |async_cx| {
+                                async_cx
+                                    .background_executor()
+                                    .timer(std::time::Duration::from_secs_f32(delay.max(0.001)))
+                                    .await;
+                                // `request_animation_frame` unwraps the
+                                // currently rendering view and panics when the
+                                // stack is empty (async task): refresh the
+                                // window instead, which schedules the redraw
+                                // from outside the draw phase.
+                                _ = async_cx.update(|window, _| window.refresh());
+                            })
+                            .detach();
+                    }
+                }
             }
             (
                 MarqueePaint {
@@ -278,6 +330,31 @@ mod tests {
         for step in 0..200 {
             let value = marquee_offset(120.0, step as f32 * 0.1);
             assert!((0.0..=120.0 + f32::EPSILON).contains(&value), "{value}");
+        }
+    }
+
+    #[test]
+    fn marquee_next_change_reports_end_holds() {
+        // No overflow: nothing moves at all.
+        assert_eq!(marquee_next_change(0.0, 0.0), None);
+        // Initial pause: schedule the first motion.
+        assert!((marquee_next_change(72.0, 0.0).unwrap() - INITIAL_PAUSE).abs() < 0.01);
+        // Travelling needs every frame (2 s at 36 px/s for 72 px).
+        assert_eq!(marquee_next_change(72.0, INITIAL_PAUSE + 0.5), None);
+        // End pause: schedule the return leg.
+        let end_pause_start = INITIAL_PAUSE + 2.0;
+        assert!((marquee_next_change(72.0, end_pause_start + 0.25).unwrap() - 0.75).abs() < 0.01);
+        // The hold timer always lands inside a phase boundary, never spinning.
+        for step in 0..200 {
+            let elapsed = step as f32 * 0.05;
+            if let Some(delay) = marquee_next_change(72.0, elapsed) {
+                let before = marquee_offset(72.0, elapsed);
+                let after = marquee_offset(72.0, elapsed + delay + 0.01);
+                assert!(
+                    (before - after).abs() > 0.0,
+                    "wake must land on a moving phase at {elapsed}"
+                );
+            }
         }
     }
 }

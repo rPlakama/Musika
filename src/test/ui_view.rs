@@ -38,7 +38,11 @@ mod gpuui {
     }
 
     fn rows(rev: u64, start: u32, tracks: Vec<WireTrack>) -> QueueRows {
-        QueueRows { rev, start, rows: tracks }
+        QueueRows {
+            rev,
+            start,
+            rows: tracks,
+        }
     }
 
     fn delta(rev: u64, op: QueueOp) -> QueueDelta {
@@ -301,5 +305,42 @@ mod gpuui {
         assert!(!move_block_allowed(5, 4, 1, 1));
         assert!(!move_block_allowed(5, 1, 2, 3));
         assert!(!move_block_allowed(5, 2, 1, -3));
+    }
+
+    #[test]
+    fn reconnect_resets_session_counters() {
+        let mut view = PlaybackView::new();
+        view.apply_delta(reset(15, 2));
+        view.apply_rows(rows(15, 0, vec![row("a", false), row("b", false)]));
+        view.apply_state(state(25, 1, StateWire::Playing, 1_000));
+        assert_eq!(view.queue_rev(), 15);
+        assert_eq!(view.last_seq(), 25);
+
+        view.reset_for_reconnect();
+        assert_eq!(view.queue_rev(), 0);
+        assert_eq!(view.last_seq(), 0);
+
+        view.apply_delta(reset(1, 1));
+        view.apply_rows(rows(1, 0, vec![row("fresh", true)]));
+        view.apply_state(state(1, 0, StateWire::Paused, 0));
+        assert_eq!(view.queue_rev(), 1);
+        assert_eq!(view.last_seq(), 1);
+        assert_eq!(view.current().map(|t| t.id.as_str()), Some("fresh"));
+        assert!(!view.take_resync());
+    }
+
+    #[test]
+    fn insert_into_empty_queue_sets_index_zero() {
+        let mut view = PlaybackView::new();
+        view.apply_delta(delta(
+            1,
+            QueueOp::Insert {
+                at: 0,
+                rows: vec![row("a", false), row("b", false)],
+            },
+        ));
+        assert_eq!(view.len(), 2);
+        assert_eq!(view.index(), 0);
+        assert_eq!(view.current().map(|t| t.id.as_str()), Some("a"));
     }
 }

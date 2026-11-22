@@ -8,11 +8,12 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+#[cfg(feature = "alsa-backend")]
 use super::alsa::AlsaSink;
 use super::sink::{PcmSink, Sink};
 use super::status::{Shared, SinkStatus};
-use crate::player::Normalization;
 use super::worker::Worker;
+use crate::player::Normalization;
 
 /// Buffered-byte thresholds for the loading-clear heuristic: a twentieth of the
 /// known stream size, clamped to the PCM ring.
@@ -37,8 +38,8 @@ impl Native {
             || (env_backend.is_none()
                 && settings.output_backend == crate::playback_settings::OutputBackend::Alsa);
         let sink: Arc<dyn PcmSink> = if want_alsa {
-            match AlsaSink::new(Arc::clone(&shared)) {
-                Ok(sink) => Arc::new(sink),
+            match open_alsa_sink(Arc::clone(&shared)) {
+                Ok(sink) => sink,
                 Err(error) => {
                     crate::debug_log!("alsa: unavailable, falling back to PipeWire: {error}");
                     Arc::new(Sink::new(Arc::clone(&shared))?)
@@ -51,7 +52,11 @@ impl Native {
         shared
             .clock_start
             .store(sink.played_frames(), Ordering::Release);
-        crate::startup::trace(if want_alsa { "engine.alsa" } else { "engine.pipewire" });
+        crate::startup::trace(if want_alsa {
+            "engine.alsa"
+        } else {
+            "engine.pipewire"
+        });
         Ok(Self {
             sink,
             worker,
@@ -74,9 +79,12 @@ impl Native {
             .load(url.to_string(), next_url, paused, generation);
     }
 
+    pub(crate) fn set_next_url(&self, next_url: Option<String>) {
+        self.worker.set_next_url(next_url);
+    }
+
     pub(crate) fn stop(&self) {
         self.worker.stop();
-        self.sink.set_paused(true);
         self.sink.ring().reset_underruns();
     }
 
@@ -130,14 +138,14 @@ impl Native {
         self.shared.set_crossfade_allowed(allowed);
     }
 
+    pub(crate) fn set_crossfade(&self, enabled: bool) {
+        self.shared.crossfade.store(enabled, Ordering::Release);
+    }
+
     pub(crate) fn set_normalization(&self, mode: Normalization) {
         self.shared
             .normalization
             .store(u32::from(mode.code()), Ordering::Release);
-    }
-
-    pub(crate) fn set_crossfade(&self, enabled: bool) {
-        self.shared.crossfade.store(enabled, Ordering::Release);
     }
 
     /// Descriptor the engine polls for boundary / stream-state / decoder
@@ -153,11 +161,10 @@ impl Native {
     /// Consumes a crossed gapless boundary, returning the next track's
     /// duration and stream size.
     pub(crate) fn take_boundary_event(&self) -> Option<(f64, u64, f64)> {
-        if !self.shared.boundary_active.load(Ordering::Acquire) {
-            return None;
-        }
-        let frame = self.shared.boundary_frame.load(Ordering::Acquire);
-        if self.sink.played_frames() < frame {
+        if !self
+            .shared
+            .boundary_reached(self.sink.epoch(), self.sink.read_frames())
+        {
             return None;
         }
         self.shared.boundary_active.store(false, Ordering::Release);
@@ -178,7 +185,9 @@ impl Native {
             status.stream_size = stream_size;
             status.loading = false;
         }
-        self.shared.clock_start.store(frame, Ordering::Release);
+        self.shared
+            .clock_start
+            .store(self.sink.played_frames(), Ordering::Release);
         *self
             .shared
             .clock_origin
@@ -273,6 +282,10 @@ impl Native {
         self.sink.played_frames()
     }
 
+    pub(crate) fn rate(&self) -> u32 {
+        self.sink.rate()
+    }
+
     pub(crate) fn buffered_frames(&self) -> u64 {
         self.sink.buffered_frames()
     }
@@ -280,8 +293,31 @@ impl Native {
     pub(crate) fn underruns(&self) -> u64 {
         self.sink.underruns()
     }
+}
 
-    pub(crate) fn failed(&self) -> bool {
-        self.sink.failed()
+#[cfg(feature = "alsa-backend")]
+fn open_alsa_sink(shared: Arc<Shared>) -> Result<Arc<dyn PcmSink>, String> {
+    Ok(Arc::new(AlsaSink::new(shared)?))
+}
+
+#[cfg(not(feature = "alsa-backend"))]
+fn open_alsa_sink(_shared: Arc<Shared>) -> Result<Arc<dyn PcmSink>, String> {
+    Err("direct ALSA backend is unavailable (built without `alsa-backend` feature)".to_string())
+}
+
+#[cfg(all(test, not(feature = "alsa-backend")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alsa_sink_returns_descriptive_error_when_feature_disabled() {
+        let err = match open_alsa_sink(Arc::new(Shared::new())) {
+            Ok(_) => panic!("expected open_alsa_sink to fail when alsa-backend is disabled"),
+            Err(err) => err,
+        };
+        assert!(
+            err.contains("alsa-backend"),
+            "unexpected error message: {err}"
+        );
     }
 }

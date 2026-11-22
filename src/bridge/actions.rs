@@ -70,14 +70,25 @@ impl Bridge {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            let artist = RowKind::from_api_kind(&kind) == Some(RowKind::Artist);
+            let Some(row_kind) =
+                RowKind::from_api_kind(&kind).filter(|kind| *kind != RowKind::Playlist)
+            else {
+                _ = tx.send(Event::Error(format!(
+                    "Could not rate: unknown rating kind: {kind}"
+                )));
+                return;
+            };
             let result = async {
                 let client = crate::session::client(&dbs).await?;
                 client.set_rating(&id, level).await?;
-                if artist {
-                    crate::artist_user::set_rating(&dbs.artist_user, &id, level).await
-                } else {
-                    crate::library::set_album_rating(&dbs.library, &id, level).await
+                match row_kind {
+                    RowKind::Artist => {
+                        crate::artist_user::set_rating(&dbs.artist_user, &id, level).await
+                    }
+                    RowKind::Album => {
+                        crate::library::set_album_rating(&dbs.library, &id, level).await
+                    }
+                    RowKind::Song | RowKind::Playlist => Ok(()),
                 }
             }
             .await;
@@ -85,11 +96,6 @@ impl Bridge {
                 _ = tx.send(Event::Error(format!("Could not rate: {err:#}")));
                 return;
             }
-            let row_kind = if artist {
-                RowKind::Artist
-            } else {
-                RowKind::Album
-            };
             _ = tx.send(Event::RowsPatched {
                 kind: row_kind,
                 id,
@@ -108,11 +114,32 @@ impl Bridge {
                 id: id.clone(),
                 on,
             });
+            let _settled = DownloadSettledGuard::new(tx.clone());
             let row_kind = RowKind::from_api_kind(&kind);
             if !on {
                 let result = if row_kind == Some(RowKind::Album) {
                     crate::media_actions::album_container_off(&dbs, &id).await;
-                    Ok(())
+                    let songs = crate::library::album_song_ids(&dbs.library, &id)
+                        .await
+                        .unwrap_or_default();
+                    let mut first_err = None;
+                    for song in &songs {
+                        if let Err(err) = crate::download::unmark(&dbs.download, song).await
+                            && first_err.is_none()
+                        {
+                            first_err = Some(err);
+                        }
+                    }
+                    if !songs.is_empty()
+                        && let Err(err) = crate::media::remove_songs_media(&dbs.media, &songs).await
+                        && first_err.is_none()
+                    {
+                        first_err = Some(err);
+                    }
+                    match first_err {
+                        Some(err) => Err(err),
+                        None => Ok(()),
+                    }
                 } else if row_kind == Some(RowKind::Song) {
                     let unmark = crate::download::unmark(&dbs.download, &id).await;
                     let media =
@@ -127,8 +154,6 @@ impl Bridge {
                 };
                 if let Err(err) = result {
                     _ = tx.send(Event::Error(format!("Could not remove download: {err:#}")));
-                } else {
-                    send_download_settled(&tx);
                 }
                 return;
             }
@@ -149,12 +174,35 @@ impl Bridge {
                 ));
                 return;
             }
-            for song in songs {
-                if let Err(err) = crate::media_actions::download_one(&dbs, &song).await {
+            if row_kind == Some(RowKind::Song) {
+                if let Err(err) = crate::media_actions::download_one(&dbs, &id).await {
                     _ = tx.send(Event::Error(format!("Download failed: {err:#}")));
                 }
+                return;
             }
-            send_download_settled(&tx);
+            let rule_id = if row_kind == Some(RowKind::Album) {
+                crate::media::set_rule(&dbs.media, "album", &id).await.ok()
+            } else {
+                None
+            };
+            let mut failed = 0usize;
+            let mut first_err: Option<String> = None;
+            for song in &songs {
+                if let Some(rule_id) = rule_id.as_deref() {
+                    _ = crate::download::mark_queued(&dbs.download, song, Some(rule_id)).await;
+                }
+                if let Err(err) = crate::media_actions::download_one(&dbs, song).await {
+                    failed += 1;
+                    if first_err.is_none() {
+                        first_err = Some(format!("{err:#}"));
+                    }
+                }
+            }
+            if let Some(first_err) = first_err {
+                _ = tx.send(Event::Error(format!(
+                    "{failed} track download(s) failed: {first_err}"
+                )));
+            }
         });
     }
 
@@ -164,11 +212,9 @@ impl Bridge {
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
             let queued = match RowKind::from_api_kind(&kind) {
-                Some(RowKind::Playlist) => {
-                    crate::queue::playlist_tracks(&dbs, &id, offline, 0)
-                        .await
-                        .map(|(tracks, _)| tracks)
-                }
+                Some(RowKind::Playlist) => crate::queue::playlist_tracks(&dbs, &id, offline, 0)
+                    .await
+                    .map(|(tracks, _)| tracks),
                 Some(row_kind) => {
                     crate::queue::quick_tracks(&dbs, row_kind.api_kind(), &id, offline).await
                 }

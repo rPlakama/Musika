@@ -48,10 +48,12 @@ PlaybackCore ─► AudioCommand ─► Engine ─► Native (sink + decode/prel
 
 The sink keeps all PipeWire objects on its loop thread. Commands (pause,
 volume, format change, shutdown) travel through a PipeWire channel; volume/mute
-are atomics read by the process callback. The decoder writes PCM with an epoch;
-reset/flush increments the epoch and the RT callback discards queued audio
-before the producer resumes, so stale writes can never leak across a load or
-seek.
+are atomics read by the process callback. The decoder writes PCM with an epoch.
+A `reset` (sink rebuild) increments the epoch so stale producer writes are
+rejected, while a `flush` (seek or format change) keeps it; the RT callback
+discards queued audio before the producer resumes and the flush also disarms an
+armed gapless boundary, so stale writes or stale boundary markers can never
+leak across a load or seek.
 
 ## Format-aware PCM pipeline
 
@@ -66,8 +68,11 @@ scales with it:
 - The worker reads in ~20 ms chunks (`rate / 50`, clamped), so seek/stop
   latency stays constant in time rather than in frames; its PCM scratch buffer
   is sized for the largest chunk (20 ms at 192 kHz).
-- The parking low-water mark is 2 s of frames at the current rate and the
-  parked/full threshold is 7/8 of the ring's rate-scaled usable capacity.
+- There is no periodic close/reopen of a healthy decoder: the worker simply
+  blocks in `Ring::write` on its eventfd when the ring is full (bounded by the
+  decoder's 120 s read timeout), so one HTTP response can serve a long track.
+  Only a pause longer than 30 s parks a seekable decoder and reopens it on
+  resume.
 - The sink rebuilds its PipeWire stream (F32LE, stereo) to the track's rate
   before the worker writes any PCM for it. A rebuild is used because changing
   the format of a connected `pw_stream` in place is not supported by the
@@ -82,8 +87,9 @@ A rate change flushes the queued PCM (it was produced at the previous rate).
 
 ## Buffer / latency notes
 
-- FFmpeg URL AVIO read-ahead: **32 MiB** (`buffer_size`), probe limited to
-  1 MiB/1 s with a defaults retry for exotic files.
+- FFmpeg URL AVIO read-ahead: **512 KiB** for local `file://` sources and
+  **2 MiB** for HTTP streams (`buffer_size`), probe limited to 1 MiB/1 s with a
+  defaults retry for exotic files.
 - HTTP I/O uses persistent connections for repeated requests and a **120 s**
   read/write timeout. Rapid skips discard superseded queued loads (a newer load
   generation is dropped before it reaches the decoder).
@@ -98,25 +104,26 @@ A rate change flushes the queued PCM (it was produced at the previous rate).
   is going to start audio sets the loading flag: the startup restore loads the
   saved queue paused, so the transport reads "Paused" from the first frame
   instead of spinning until a decoder that may never come reports ready.
-- For seekable streams, the decoder closes its HTTP response when the PCM ring
-  reaches roughly 7/8 of its rate-scaled usable capacity (about 9.5 s of queued
-  audio). It opens a fresh response and seeks to the decoded boundary when
-  playback drains the ring to roughly 2 s of frames at the current rate,
-  keeping long tracks from depending on one idle HTTP connection.
+- A seekable decoder is not periodically closed to refresh its HTTP response;
+  the producer blocks on the full ring and resumes as the sink drains. The
+  player only parks a decoder after a pause longer than 30 s, opening a fresh
+  response and seeking back to the paused position on resume.
 - Pause keeps a seekable decoder open and stops reading it; the ring keeps its
   buffered audio, so resume continues from the same sample without reopening or
   seeking. Non-seekable streams are interrupted on pause and reopened at the
-  paused position on resume, and a pause longer than 30 s also falls back to
-  reopen (an idle HTTP connection is not reliable).
+  paused position on resume.
 
 ## Gapless and clock
 
 When the current decoder reaches EOF and a preloaded decoder is ready, the
 worker swaps decoders without flushing the ring and records the absolute ring
-frame where the next track begins. The sink's RT callback writes the shared
-engine eventfd when the played-frame counter reaches that boundary, and the
-playback core advances the index and position only then, so short tracks and
-gapless transitions stay aligned with audible output. Without a preloaded
+frame where the next track begins. That marker lives in the ring's
+`write`/`read` frame space; the sink's RT callback writes the shared engine
+eventfd when the consumer's `read` counter reaches it (and the ring epoch still
+matches), and the playback core advances the index and position only then, so
+short tracks and gapless transitions stay aligned with audible output. A
+seek/format flush disarms the marker instead of letting it fire in the new
+timeline. Without a preloaded
 decoder the worker marks decode completion; the final advance waits until the
 sink drains the ring too.
 
@@ -191,6 +198,7 @@ printf 'status\n' | nc -U ~/.config/musika/ipc.sock
 ```sh
 # full tests (includes ignored PipeWire tests only when explicitly requested)
 cargo test --quiet
+cargo test --quiet --no-default-features
 cargo test --features io-uring --quiet
 # live PipeWire transport tests (require a running PipeWire session)
 cargo test --quiet player::pipewire::sink::tests -- --ignored
@@ -224,29 +232,31 @@ the audit"); the remaining roadmap phases are still plans.
 - An event-driven RT engine: the engine thread blocks on an eventfd written by
   the RT callback, the sink loop and the decode worker, with only a poll
   timeout as a safety net. There is no `pump()`/10 Hz poll.
-- FFmpeg demux/decode/resample with a **32 MiB** AVIO read-ahead, a 1 MiB/1 s
-  probe plus a defaults retry for exotic files, `+fastseek`, and a **120 s**
-  read/write timeout.
+- FFmpeg demux/decode/resample with a **512 KiB local / 2 MiB network** AVIO
+  read-ahead, a 1 MiB/1 s probe plus a defaults retry for exotic files,
+  `+fastseek`, and a **120 s** read/write timeout.
 - Local-first URLs: a cached media blob is handed to the decoder as a
   `file://` URL and only a cold row uses the provider stream URL.
 - Same-rate gapless handoff with a preloaded decoder; at a rate change the
   worker drains the ring and renegotiates the stream, which leaves the
   documented small gap.
 - Rate-scaled seek trimming; pause parking that keeps a seekable decoder open,
-  and reopen on resume for non-seekable streams or pauses over 30 s.
+  and reopen on resume for non-seekable streams or pauses over 30 s. A healthy
+  active decoder is no longer periodically closed/reopened.
 - A 20 ms output envelope fades pause/resume, seeks and fresh track starts
   (RT callback, no extra thread or allocation) so transitions do not click.
 - Optional 5 s equal-length crossfade: the next decoder is preloaded at the
   current pipeline rate, mixed with the outgoing track's tail, and the
   boundary carries the next track's already-played offset; off by default.
 - ReplayGain loudness normalization (off/track/album, off by default) reads
-  the `replaygain_track_gain` / `replaygain_album_gain` tags captured by the
-  decoder and applies the linear gain in the decode worker with clipping.
+  the `replaygain_track_gain` / `replaygain_album_gain` and peak tags captured
+  by the decoder, caps the applied gain so `gain * peak <= 1.0`, and soft-clamps
+  the F32 output to `[-1, 1]` instead of hard-clipping.
 - Sink failure drops and rebuilds the engine, then replays the current row at
   the same playhead (`CoreCommand::Recover`); ordinary decode/track failures
   are reported and the queue advances.
 - MPRIS 2.2 plus the IPC `status`/`queue` snapshots; a pure, deterministic
-  `PlaybackCore` policy model covered by 49 tests in `src/test/playback.rs`.
+  `PlaybackCore` policy model covered by tests in `src/test/playback.rs`.
 - Live PipeWire tests exist but are `#[ignore]`d, and CI runs
   `cargo test --lib` without an audio device.
 
@@ -255,15 +265,16 @@ the audit"); the remaining roadmap phases are still plans.
 **Network resilience.** A transient HTTP open/read failure used to skip the
 row. The service now classifies the failure and retries retryable network/5xx
 errors at the same position with 1/2/4 s backoff; only a genuinely unreachable
-server stops the transport and flips the app offline. Long tracks are still
-protected by the 7/8-to-2 s ring drain/reopen policy and the 120 s rw timeout.
+server stops the transport and flips the app offline. Long tracks no longer
+depend on periodic HTTP park/reopen cycles: the producer blocks on the ring and
+the 120 s read/write timeout bounds a stalled stream.
 
 **Buffering visibility.** The published snapshot exposes `loading` and
 `last_error` only (IPC `status` adds state/position/duration/volume/muted/
 engine_available/current). There is no buffered span, ring fill, decode lead,
-underrun/dropout count or first-PCM/seek latency exposed. `Status` carries
-`level`/`peak` internally for metering, but they do not reach the snapshot, UI
-or IPC.
+underrun/dropout count or first-PCM/seek latency exposed. The unused
+`Status::level`/`peak` metering fields were removed: the decoder does no level
+analysis, and the UI meters the published volume instead.
 
 **Stream quality/cache.** `/rest/stream` was always the original; the
 `stream` command now adds `maxBitRate`/`format`, and the first PCM of a remote
@@ -272,10 +283,12 @@ still not adaptive (no HLS), and streamed bytes are fetched in full in the
 background rather than teed from the live FFmpeg read.
 
 **Output/format.** The pipeline presents packed F32 stereo end-to-end
-(decode → ring → PipeWire), which removes the S16-only quantization/headroom
-limit. S24, a configurable resampler and dither remain absent; the sink has no
-S16 fallback negotiation yet — the graph is assumed to accept F32LE. PipeWire
-sinks are enumerated for the `output` command and a named target is persisted;
+(decode → ring), which removes the S16-only quantization/headroom limit; the
+PipeWire sink negotiates `F32LE` and the optional direct ALSA sink negotiates
+the first hardware-supported format from `FloatLE` → `S32_LE` → `S24_3LE` →
+`S16_LE`, converting the F32 ring samples at the sink. S24 on the PipeWire path,
+a configurable resampler and dither remain absent. PipeWire sinks are
+enumerated for the `output` command and a named target is persisted;
 follow-default also watches PipeWire's `default.audio.sink` metadata and
 rebuilds the stream when the graph's default moves.
 
@@ -297,14 +310,13 @@ remain visuals, not audio.
 `last_error: Option<String>`) rather than structured codes, and there are no
 playback counters for underruns, decode lead or transition gaps. Media demux
 paths have no fuzz harness. Audio cannot be exercised in CI: live PipeWire
-tests are ignored and `ci.yml` runs `cargo test --lib` on runners without an
-audio session, so graph-negotiation or RT regressions are only caught by
-manual runs.
+tests are ignored and `ci.yml` runs the headless/full-feature lib test matrices
+on runners without an audio session, so graph-negotiation or RT regressions are
+only caught by manual runs.
 
-**Fixed latency-config.** Ring capacity (16 MiB F32 / 2,097,152 frames), the ~20 ms
-worker chunk and the parking thresholds are compiled in. There is no
-configurable buffer size, target latency or clock policy for different
-machines and sinks.
+**Fixed latency-config.** Ring capacity (16 MiB F32 / 2,097,152 frames) and
+the ~20 ms worker chunk are compiled in. There is no configurable buffer size,
+target latency or clock policy for different machines and sinks.
 
 ### Recorded decisions (2026-11 questionnaire)
 
@@ -502,9 +514,10 @@ meant for `status` sampling and regression comparisons, not persistence.
   `output exclusive on` sets its `node.exclusive` request and
   `output bitperfect on` bypasses EQ, ReplayGain and crossfade. For a true
   direct path, `output backend alsa` (or `output alsa hw:0,0`) selects the
-  optional ALSA sink, which requires packed F32 at the track's exact rate and
-  falls back to PipeWire if the device cannot be configured. No S16 fallback
-  is negotiated.
+  optional ALSA sink, which opens the device at the track's exact rate,
+  negotiates `FloatLE` → `S32_LE` → `S24_3LE` → `S16_LE` and converts the F32
+  ring samples to the hardware format. It falls back to PipeWire if the device
+  cannot be configured.
 - **Multichannel/DSD:** the pipeline is packed F32 stereo end-to-end. DSD is a
   feasibility item, not a supported format; multichannel output is not wired
   through the ring or the sink.
@@ -514,8 +527,9 @@ meant for `status` sampling and regression comparisons, not persistence.
 - **Exclusive/bit-perfect:** the default mode is a PipeWire `node.exclusive`
   request plus a DSP bypass. The optional `alsa-backend` feature now provides a
   direct `PcmSink` implementation (`output backend alsa`, `output alsa
-  hw:0,0`): it opens a blocking ALSA PCM with `FloatLE`, two channels and the
-  track's exact rate, and falls back to PipeWire on any configuration error.
+  hw:0,0`): it opens a blocking ALSA PCM with two channels and the track's
+  exact rate, negotiating `FloatLE` → `S32_LE` → `S24_3LE` → `S16_LE`, and
+  falls back to PipeWire on any configuration error.
   The backend is chosen at engine construction, so `output backend` takes
   effect on the next engine start/restart.
 - **Multichannel:** multichannel sources are accepted and downmixed by

@@ -77,7 +77,7 @@ impl Render for AppRoot {
             // for that frame explicitly: otherwise the window can go idle right
             // after the navigation and hold the retired page's covers until the
             // user happens to touch the UI again.
-            perf::request_frame(window, "cover-release");
+            request_frame(window, "cover-release");
         }
         let resized = previous_size.is_some_and(|(width, height)| {
             (width - viewport_w).abs() > 0.5 || (height - viewport_h).abs() > 0.5
@@ -87,7 +87,7 @@ impl Render for AppRoot {
         if resized {
             // The list lays the new viewport out during this frame; re-center
             // on the next available frame instead of after a fixed delay.
-            perf::request_frame(window, "resize");
+            request_frame(window, "resize");
         }
         if recenter {
             self.recenter_after_resize();
@@ -100,11 +100,16 @@ impl Render for AppRoot {
         }
         palette::publish(self.palette_motion.value(&self.clock));
         if !self.palette_motion.settled(&self.clock) {
-            perf::request_frame(window, "palette");
+            request_frame(window, "palette");
         }
         // Cover identity first: the palette follows the identity's stable
         // cover-art id, so same-album track changes do not reset it.
         self.refresh_current_cover();
+        // `changed()` only starts the crossfade; keep the frame chain alive for
+        // its 120 ms window so the new cover reaches full opacity.
+        if self.current_cover.fade_active() {
+            request_frame(window, "cover-fade");
+        }
         self.sync_palette();
         let playback_index = self.player.index();
         if playback_index != self.last_player_index {
@@ -123,7 +128,8 @@ impl Render for AppRoot {
         }
         if self.login.is_some() {
             self.pending_ipc.clear();
-            // The login form is keyboard-only. Keep it inside the root key
+            // Keyboard remains the primary login path, but the fields/button
+            // also carry mouse listeners. Keep the form inside the root key
             // handler: returning the bare view here would bypass both
             // `track_focus` and `on_key_down`, leaving the fields uneditable.
             self.focus.focus(window);
@@ -133,7 +139,7 @@ impl Render for AppRoot {
                 .on_key_down(cx.listener(Self::on_key_down))
                 .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
                 .size_full()
-                .child(self.login_view(window));
+                .child(self.login_view(window, &*cx));
             #[cfg(debug_assertions)]
             let login = if debug::hud_enabled() {
                 login.child(self.frame_hud.view())
@@ -142,10 +148,10 @@ impl Render for AppRoot {
             };
             return login.into_any_element();
         }
-        let pending = std::mem::take(&mut self.pending_ipc);
-        for pending in pending {
-            self.execute_ipc_command(pending.command, pending.announce, window, cx);
-        }
+        // A-02: IPC/`:` commands are executed from a deferred task after this
+        // frame finishes, never from inside `render`, so they cannot mutate the
+        // view while it is being composed.
+        self.schedule_pending_ipc_drain(window, cx);
         let progress = self.search_anim.target(
             if self.search_open { 1.0 } else { 0.0 },
             anim::STANDARD_MS,
@@ -160,12 +166,12 @@ impl Render for AppRoot {
             self.search = None;
         }
         if self.search.is_some() && !self.search_anim.settled(&self.clock) {
-            perf::request_frame(window, "search-anim");
+            request_frame(window, "search-anim");
         }
         if self.search.as_ref().is_some_and(|search| search.loading)
             || self.search_denied_opacity() > 0.0
         {
-            perf::request_frame(window, "search-loading");
+            request_frame(window, "search-loading");
         }
         let line_progress = self.line_search_anim.target(
             if self.line_search.open { 1.0 } else { 0.0 },
@@ -178,7 +184,7 @@ impl Render for AppRoot {
             &self.clock,
         );
         if !self.line_search_anim.settled(&self.clock) || self.line_search_denied_opacity() > 0.0 {
-            perf::request_frame(window, "line-search");
+            request_frame(window, "line-search");
         }
         let line_overlay = (self.line_search.open || line_progress > 0.001)
             .then(|| self.line_search_overlay(window, line_progress));
@@ -191,14 +197,14 @@ impl Render for AppRoot {
         if !self.command_line_anim.settled(&self.clock)
             || self.command_line.denied_opacity(self.clock.now) > 0.0
         {
-            perf::request_frame(window, "command-line");
+            request_frame(window, "command-line");
         }
         let command_overlay = (self.command_line.is_open() || command_progress > 0.001)
             .then(|| self.command_line_overlay(window, command_progress));
         self.animate_alt(if self.alt.armed { 1.0 } else { 0.0 });
         let alt_progress = self.alt_spawn.value(&self.clock);
         if !self.alt_spawn.settled(&self.clock) {
-            perf::request_frame(window, "alt");
+            request_frame(window, "alt");
         }
         if !self.alt.armed && alt_progress <= 0.001 {
             self.alt_menu = None;
@@ -217,7 +223,7 @@ impl Render for AppRoot {
             &self.clock,
         );
         if !self.queue_anim.settled(&self.clock) {
-            perf::request_frame(window, "queue");
+            request_frame(window, "queue");
         }
         let fullscreen_progress = self.fullscreen_anim.target(
             if self.fullscreen { 1.0 } else { 0.0 },
@@ -230,7 +236,7 @@ impl Render for AppRoot {
             &self.clock,
         );
         if !self.fullscreen_anim.settled(&self.clock) {
-            perf::request_frame(window, "fullscreen");
+            request_frame(window, "fullscreen");
         }
         if self.fullscreen {
             self.request_current_lyrics();
@@ -244,7 +250,7 @@ impl Render for AppRoot {
             &self.clock,
         );
         if !self.lyrics_overlay_anim.settled(&self.clock) {
-            perf::request_frame(window, "lyrics-overlay");
+            request_frame(window, "lyrics-overlay");
         }
         let fullscreen_overlay = (self.fullscreen || fullscreen_progress > 0.001)
             .then(|| self.fullscreen_overlay(fullscreen_progress, window, cx));
@@ -254,33 +260,55 @@ impl Render for AppRoot {
         });
         self.toasts
             .retain(|toast| self.clock.now - toast.created_at < anim::TOAST_TTL_S);
-        if self
-            .toasts
-            .iter()
-            .any(|toast| self.clock.now - toast.created_at < anim::TOAST_TTL_S)
+        // A toast animates only while it pops in and while it fades out at the
+        // end of its TTL; the long static hold in between is a timer, not a
+        // vsync spin (so an idle Home with a toast on screen still sleeps).
+        let toast_entrance_s = f64::from(anim::TOAST_IN_MS) / 1000.0;
+        let mut toast_wake: Option<f64> = None;
+        let mut toast_animating = false;
+        for toast in &self.toasts {
+            let age = self.clock.now - toast.created_at;
+            let remaining = anim::TOAST_TTL_S - age;
+            if age < toast_entrance_s || remaining <= anim::TOAST_FADE_OUT_S {
+                toast_animating = true;
+            } else {
+                let delay = remaining - anim::TOAST_FADE_OUT_S;
+                toast_wake = Some(toast_wake.map_or(delay, |current: f64| current.min(delay)));
+            }
+        }
+        if toast_animating {
+            request_frame(window, "toast");
+        } else if let Some(delay) = toast_wake
+            && window.is_window_active()
         {
-            perf::request_frame(window, "toast");
+            wake_after(cx, std::time::Duration::from_secs_f64(delay.max(0.001)));
         }
         // The held-key counter refreshes itself on every repeat; its TTL is the
         // only authority on when it goes away, so a lost key-up cannot strand it.
         // It runs on `CLOCK_MONOTONIC` like the hold, because `clock.now` only
         // advances while frames render and an idle window would expire it at once.
         let now_ns = crate::linux::monotonic_ns();
-        if self
-            .hold_toast
-            .as_ref()
-            .is_some_and(|hold| hold.expired(now_ns))
-        {
-            self.hold_toast = None;
+        let mut hold_wake = None;
+        if let Some(hold) = self.hold_toast.as_ref() {
+            if hold.expired(now_ns) {
+                self.hold_toast = None;
+            } else {
+                hold_wake = Some(std::time::Duration::from_nanos(
+                    super::super::HOLD_TOAST_TTL_NS.saturating_sub(now_ns - hold.at_ns),
+                ));
+            }
         }
-        if self.hold_toast.is_some() {
-            perf::request_frame(window, "hold-toast");
+        if let Some(delay) = hold_wake
+            && window.is_window_active()
+        {
+            // The bubble is static after its pop-in; wake once at its TTL.
+            wake_after(cx, delay);
         }
         // Sticky mute bubble: no TTL, so it repaints only while popping in.
         if self.mute_toast.as_ref().is_some_and(|mute| {
             self.clock.now - mute.created_at < f64::from(anim::TOAST_IN_MS / 1000.0)
         }) {
-            perf::request_frame(window, "mute-toast");
+            request_frame(window, "mute-toast");
         }
         let reconnect_banner = self.reconnecting.clone().map(|notice| {
             div()
@@ -296,10 +324,9 @@ impl Render for AppRoot {
                 .child(notice)
                 .into_any_element()
         });
-        let toast_overlay = (!self.toasts.is_empty()
-            || self.hold_toast.is_some()
-            || self.mute_toast.is_some())
-        .then(|| self.toast_overlay(&*cx));
+        let toast_overlay =
+            (!self.toasts.is_empty() || self.hold_toast.is_some() || self.mute_toast.is_some())
+                .then(|| self.toast_overlay(&*cx));
         let queue_overlay = (self.queue_open || queue_progress > 0.001)
             .then(|| self.queue_overlay(&*cx, queue_progress));
         let overlay = self
@@ -309,7 +336,7 @@ impl Render for AppRoot {
         let description_overlay = self.description_overlay(&*cx);
         let settings_overlay = self.settings_overlay(&*cx);
         if let Some(started) = self.exiting {
-            perf::request_frame(window, "exiting");
+            request_frame(window, "exiting");
             if self.clock.now - started >= 0.200 {
                 self.bridge.shutdown_core();
                 window.remove_window();
@@ -345,9 +372,13 @@ impl Render for AppRoot {
             | self.queue_scroll_modal.apply(self.clock.now)
             | self.search_scroll.apply(self.clock.now);
         if following {
-            perf::request_frame(window, "follow");
+            request_frame(window, "follow");
         }
-        self.refresh_topbar_marquee(window);
+        if let Some(delay) = self.refresh_topbar_marquee(window) {
+            // The top-bar title is holding at an end of its ping-pong; a timer
+            // wakes it for the next leg instead of vsync frames during the hold.
+            wake_after(cx, delay);
+        }
         let top = self.top_bar(&*cx);
         let body = if self.page.is_some() {
             self.page_view(&*cx).into_any_element()
@@ -359,7 +390,7 @@ impl Render for AppRoot {
         }) || !self.library_hover_fill.settled(&self.clock)
             || !self.page_hover_fill.settled(&self.clock)
         {
-            perf::request_frame(window, "row-emphasis");
+            request_frame(window, "row-emphasis");
         }
         if !self.lyrics_shift.settled(&self.clock)
             || !self.lyrics_track_fade.settled(&self.clock)
@@ -376,19 +407,19 @@ impl Render for AppRoot {
                 .values()
                 .any(|color| !color.settled(&self.clock))
         {
-            perf::request_frame(window, "lyrics-behaviors");
+            request_frame(window, "lyrics-behaviors");
         }
         if self.player.state() == crate::player::State::Playing {
-            perf::request_frame(window, "playing");
+            request_frame(window, "playing");
         }
         if self.player.is_loading() || self.player.is_retrying() {
-            perf::request_frame(window, "loading");
+            request_frame(window, "loading");
         }
         if self.syncing
             || !self.sync_settle.settled(&self.clock)
             || !self.sync_fill.settled(&self.clock)
         {
-            perf::request_frame(window, "sync");
+            request_frame(window, "sync");
         }
         let status = self.player_bar();
         #[cfg(debug_assertions)]
@@ -399,15 +430,13 @@ impl Render for AppRoot {
         };
         let root = div()
             .track_focus(&self.focus)
-            .key_context(if self.command_line.is_open() {
-                "command-line"
-            } else if self.line_search.open {
-                "line-search"
-            } else if self.search.is_some() && self.search_open {
-                "search"
-            } else {
-                "main"
-            })
+            .key_context(root_key_context(
+                self.command_line.is_open(),
+                self.line_search.open,
+                self.search.is_some() && self.search_open,
+                self.settings_open,
+                self.description.is_some(),
+            ))
             .on_action(cx.listener(Self::on_quit))
             .on_action(cx.listener(Self::on_move_down))
             .on_action(cx.listener(Self::on_move_up))
@@ -553,7 +582,11 @@ impl AppRoot {
             .gap(px(6.0))
             .bg(rgb(palette::background()))
             .text_color(rgb(palette::on_surface()))
-            .child(div().text_size(px(18.0)).child("Waiting for the core daemon"))
+            .child(
+                div()
+                    .text_size(px(18.0))
+                    .child("Waiting for the core daemon"),
+            )
             .child(
                 div()
                     .text_size(px(12.0))
@@ -562,6 +595,58 @@ impl AppRoot {
             )
             .into_any_element()
     }
+}
+
+/// Requests the next frame only while the window is focused.
+///
+/// A hidden window has nothing visible to animate, so pausing the frame chain
+/// there keeps an unfocused UI at zero CPU. The activation observer notifies the
+/// root on focus-in, which resumes every animation from its wall-clock phase.
+pub(in crate::ui) fn request_frame(window: &gpui::Window, site: &'static str) {
+    if window.is_window_active() {
+        perf::request_frame(window, site);
+    }
+}
+
+thread_local! {
+    /// Deadline of the one pending idle wake-up for the root's timer-backed
+    /// static holds, so they coalesce onto a single timer.
+    static WAKE_DUE: std::cell::Cell<Option<std::time::Instant>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Repaints after `delay` without keeping the vsync loop alive in between.
+///
+/// For states that are visually static for a while (a toast's TTL hold, a
+/// marquee end pause) one timer replaces a per-frame repaint chain. Requests
+/// coalesce onto the earliest deadline; when the timer fires it ticks the clock
+/// and notifies the root, which re-schedules whatever is still static.
+pub(in crate::ui) fn wake_after(cx: &Context<AppRoot>, delay: std::time::Duration) {
+    let delay = delay.max(std::time::Duration::from_millis(1));
+    let due = std::time::Instant::now() + delay;
+    let already_armed = WAKE_DUE.with(|slot| {
+        if slot
+            .get()
+            .is_some_and(|armed| armed <= due + std::time::Duration::from_millis(20))
+        {
+            true
+        } else {
+            slot.set(Some(due));
+            false
+        }
+    });
+    if already_armed {
+        return;
+    }
+    cx.spawn(async move |this, cx| {
+        cx.background_executor().timer(delay).await;
+        WAKE_DUE.with(|slot| slot.set(None));
+        _ = this.update(cx, |this, cx| {
+            this.clock.tick();
+            cx.notify();
+        });
+    })
+    .detach();
 }
 
 /// One-frame resize settlement: returns `true` on the first stable frame after
@@ -579,9 +664,67 @@ pub(in crate::ui) fn resize_recenter_now(resized: bool, pending: &mut bool) -> b
     }
 }
 
+/// The root key context for one frame.
+///
+/// Each overlay surface owns a context so the `main` key map (the only set of
+/// `KeyBinding`s the app registers) cannot dispatch underneath it; `input.rs`
+/// handles an isolated context's own keys from the raw key stream. The
+/// command-line/line-search/search contexts already existed; U-24 adds the
+/// settings panel and the description reader, which used to fall through to
+/// `"main"` (j/k moved the hidden list, space toggled playback, Tab walked the
+/// top bar). The priority mirrors the paint order: the surfaces later in the
+/// root's child list own the keyboard.
+fn root_key_context(
+    command_line_open: bool,
+    line_search_open: bool,
+    search_open: bool,
+    settings_open: bool,
+    description_open: bool,
+) -> &'static str {
+    if command_line_open {
+        "command-line"
+    } else if line_search_open {
+        "line-search"
+    } else if search_open {
+        "search"
+    } else if settings_open {
+        "settings"
+    } else if description_open {
+        "description"
+    } else {
+        "main"
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::resize_recenter_now;
+    use super::{resize_recenter_now, root_key_context};
+
+    #[test]
+    fn settings_and_description_modals_own_the_key_context() {
+        // The two U-24 modals no longer resolve the main key map.
+        assert_eq!(
+            root_key_context(false, false, false, true, false),
+            "settings"
+        );
+        assert_eq!(
+            root_key_context(false, false, false, false, true),
+            "description"
+        );
+        assert_eq!(root_key_context(false, false, false, false, false), "main");
+        // The search/command surfaces are painted above the modals and keep
+        // their existing context priority.
+        assert_eq!(root_key_context(false, false, true, true, true), "search");
+        assert_eq!(
+            root_key_context(true, false, false, true, false),
+            "command-line"
+        );
+        // Both modals open at once: the later-painted settings panel wins.
+        assert_eq!(
+            root_key_context(false, false, false, true, true),
+            "settings"
+        );
+    }
 
     #[test]
     fn resize_settles_on_the_next_stable_frame() {

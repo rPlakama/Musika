@@ -1,5 +1,5 @@
-use super::common::*;
 use super::common::isolated_dbs as test_dbs;
+use super::common::*;
 use crate::queue::*;
 
 fn song_row(id: &str) -> crate::library::SongRow {
@@ -104,6 +104,9 @@ fn snapshot_start_survives_dropped_ids() {
 #[tokio::test]
 async fn offline_filter_keeps_only_downloaded_songs() {
     let _offline = lock_offline_catalog().await;
+    // The offline catalog is a process-global TTL cache; a sibling test may
+    // have populated it from its own database moments earlier.
+    crate::offline::clear_cache();
     let dbs = test_dbs().await;
     crate::download::set_state(&dbs.download, "s1", crate::download::DONE, None)
         .await
@@ -385,4 +388,73 @@ async fn playlist_queue_start_tracks_the_clicked_row() {
 
     let (_, start) = playlist_tracks(&dbs, "pl1", false, 0).await.unwrap();
     assert_eq!(start, 0);
+}
+
+/// N-20: the artist shuffle expands every album through one chunked batch,
+/// not one `album_songs` query per album. The batch must still group rows by
+/// the caller's album order and keep each album's disc/track order.
+#[tokio::test]
+async fn album_batch_preserves_album_order_and_tracklists() {
+    let dbs = test_dbs().await;
+    sqlx::raw_sql(
+        "INSERT INTO songs (id, album_id, artist_id, title, track, disc_number) VALUES
+             ('a1-t2', 'al1', 'ar1', 'Second', 2, 1),
+             ('a1-t1', 'al1', 'ar1', 'First', 1, 1),
+             ('a2-t1', 'al2', 'ar1', 'Other one', 1, 1),
+             ('a2-t2', 'al2', 'ar1', 'Other two', 2, 1),
+             ('b1-t1', 'al3', 'ar1', 'Elsewhere', 1, 1)",
+    )
+    .execute(&dbs.library)
+    .await
+    .expect("insert songs");
+
+    // Albums are shuffled before the batched load; the helper must follow the
+    // order it is handed, not the table's id order.
+    let albums = vec!["al2".to_string(), "al1".to_string()];
+    let songs = songs_of_albums(&dbs.library, &albums)
+        .await
+        .expect("batched album load");
+    assert_eq!(
+        songs
+            .iter()
+            .map(|song| song.id.as_str())
+            .collect::<Vec<_>>(),
+        ["a2-t1", "a2-t2", "a1-t1", "a1-t2"],
+        "album order follows the argument; track order follows the album"
+    );
+
+    // Empty and unknown inputs are empty, never an error (the caller already
+    // rejects an artist with no albums).
+    assert!(
+        songs_of_albums(&dbs.library, &[])
+            .await
+            .expect("empty batch")
+            .is_empty()
+    );
+    assert!(
+        songs_of_albums(&dbs.library, &["gone".to_string()])
+            .await
+            .expect("unknown album batch")
+            .is_empty()
+    );
+
+    // The offline filter still applies to the batched rows.
+    let _offline = lock_offline_catalog().await;
+    crate::offline::clear_cache();
+    crate::download::set_state(&dbs.download, "a1-t1", crate::download::DONE, None)
+        .await
+        .expect("mark downloaded");
+    let mut songs = songs_of_albums(&dbs.library, &albums)
+        .await
+        .expect("batched album load");
+    crate::offline::retain_songs(&dbs, true, &mut songs)
+        .await
+        .expect("offline filter");
+    assert_eq!(
+        songs
+            .iter()
+            .map(|song| song.id.as_str())
+            .collect::<Vec<_>>(),
+        ["a1-t1"]
+    );
 }

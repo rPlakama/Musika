@@ -28,6 +28,10 @@ pub struct Credentials {
     pub created_at: i64,
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the unit tests call this helper")
+)]
 pub async fn save_credentials(
     pool: &SqlitePool,
     username: &str,
@@ -60,6 +64,10 @@ pub async fn save_credentials(
     Ok(())
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the unit tests call this helper")
+)]
 pub async fn load_credentials(pool: &SqlitePool) -> Result<Option<Credentials>> {
     let row: Option<(String, String, String, String)> = sqlx::query_as(
         "SELECT username, password, serverURL, server_type

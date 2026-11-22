@@ -210,3 +210,71 @@ fn bench_fts_rebuild_peak() {
     );
     assert_eq!(rt.block_on(count(&pool)).unwrap(), 20_000);
 }
+
+/// N-16: the post-sync FTS rebuild short-circuits when the library revision
+/// has not moved since the table was last built; a real sync bumps the
+/// revision and the next rebuild picks the changes up.
+#[tokio::test]
+async fn rebuild_skips_an_unchanged_library_revision() {
+    let pool = crate::test::memory_pool(sqlx::migrate!("./migrations_library")).await;
+    sqlx::raw_sql(
+        "INSERT INTO songs (id, title, artist, album, duration, play_count) VALUES
+             ('s1', 'Original One', 'Artist', 'Album', 180, 0),
+             ('s2', 'Original Two', 'Artist', 'Album', 180, 0);
+         INSERT INTO meta (key, value) VALUES ('library_rev', '7');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    rebuild_from_library(&pool).await.unwrap();
+    assert_eq!(count(&pool).await.unwrap(), 2);
+    assert_eq!(search(&pool, "original", 10).await.unwrap().len(), 2);
+
+    // A write that did not go through the sync path (no revision bump) must
+    // not trigger a rebuild: the derived table is still the current one.
+    sqlx::query("UPDATE songs SET title = 'Changed' WHERE id = 's1'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    rebuild_from_library(&pool).await.unwrap();
+    assert!(
+        search(&pool, "changed", 10).await.unwrap().is_empty(),
+        "an unchanged revision must skip the rebuild"
+    );
+
+    // A sync bumps the revision; the next rebuild sees the new title.
+    sqlx::query("UPDATE meta SET value = '8' WHERE key = 'library_rev'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    rebuild_from_library(&pool).await.unwrap();
+    let hits = search(&pool, "changed", 10).await.unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].id, "s1");
+}
+
+/// N-16: the revision alone is not trusted forever — a matching revision with
+/// a mismatched row count (interrupted rebuild, preserved meta after a wipe)
+/// still rebuilds.
+#[tokio::test]
+async fn rebuild_repairs_a_row_count_mismatch() {
+    let pool = crate::test::memory_pool(sqlx::migrate!("./migrations_library")).await;
+    sqlx::raw_sql(
+        "INSERT INTO songs (id, title) VALUES ('s1', 'One'), ('s2', 'Two');
+         INSERT INTO meta (key, value) VALUES ('library_rev', '1');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    rebuild_from_library(&pool).await.unwrap();
+    assert_eq!(count(&pool).await.unwrap(), 2);
+
+    // Simulate a half-written table with the revision still current.
+    sqlx::query("DELETE FROM song_search WHERE song_id = 's2'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    rebuild_from_library(&pool).await.unwrap();
+    assert_eq!(count(&pool).await.unwrap(), 2);
+}

@@ -500,3 +500,53 @@ async fn download_tries_every_song_and_reports_failures() {
         Some(crate::download::ERROR)
     );
 }
+
+/// The bounded, sliding download pass must attempt the whole scope even when it
+/// is wider than [`crate::consts::DOWNLOAD_CONCURRENCY`] (N-19).
+///
+/// The fixture uses its own artist and song ids on purpose: the in-process
+/// download claim registry (N-05 `ONGOING_DOWNLOADS`) is global to the test
+/// process, so sharing song ids with the other download tests — which run in
+/// parallel — would make colliding fetches report "already in flight" instead
+/// of failing. No credentials are seeded, so every `download_one` fails before
+/// any network I/O; the assertion is that the concurrent runner reaches every
+/// song and that the completion-order failure summary accounts for all of them.
+#[tokio::test]
+async fn download_attempts_every_song_past_the_concurrency_window() {
+    let dbs = test_dbs().await;
+    sqlx::raw_sql(
+        "INSERT INTO artists (id, name, album_count) VALUES ('dcwar', 'Download Window', 2);
+         INSERT INTO albums (id, artist_id, name, artist, year, song_count)
+             VALUES ('dcwal1', 'dcwar', 'Window One', 'Download Window', 2001, 2),
+                    ('dcwal2', 'dcwar', 'Window Two', 'Download Window', 2002, 3);
+         INSERT INTO songs
+             (id, album_id, artist_id, title, artist, album, track, disc_number, duration)
+         VALUES
+             ('dcw1', 'dcwal1', 'dcwar', 'One', 'Download Window', 'Window One', 1, 1, 100),
+             ('dcw2', 'dcwal1', 'dcwar', 'Two', 'Download Window', 'Window One', 2, 1, 100),
+             ('dcw3', 'dcwal2', 'dcwar', 'Three', 'Download Window', 'Window Two', 1, 1, 100),
+             ('dcw4', 'dcwal2', 'dcwar', 'Four', 'Download Window', 'Window Two', 2, 1, 100),
+             ('dcw5', 'dcwal2', 'dcwar', 'Five', 'Download Window', 'Window Two', 3, 1, 100);",
+    )
+    .execute(&dbs.library)
+    .await
+    .expect("seed the download-window fixture");
+
+    let err = execute(
+        &dbs,
+        &path_request("Download Window", None, None, false),
+        None,
+    )
+    .await
+    .expect_err("every download fails without credentials");
+    let message = format!("{err:#}");
+    assert!(message.contains("No songs were downloaded"), "{message}");
+    assert!(message.contains("5/5 failed"), "{message}");
+    for song_id in ["dcw1", "dcw2", "dcw3", "dcw4", "dcw5"] {
+        assert_eq!(
+            download_state(&dbs, song_id).await.as_deref(),
+            Some(crate::download::ERROR),
+            "{song_id}"
+        );
+    }
+}

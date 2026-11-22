@@ -6,6 +6,10 @@
 //! distinct covers can be fitted without a hard cap.
 
 /// The golden ratio.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+)]
 pub const PHI: f32 = 1.618_034;
 
 /// Fraction of the longer side that receives the next cover.

@@ -13,8 +13,9 @@ async fn library_pool() -> SqlitePool {
 #[test]
 fn lrc_parsing_keeps_timestamps_and_skips_metadata() {
     let text = "[ar:Radiohead]\n[00:12.34]First line\n[01:02.5][01:04.00]Twice";
-    let (synced, lines) = parse_lrc(text);
+    let (synced, lines, offset_ms) = parse_lrc(text);
     assert!(synced);
+    assert_eq!(offset_ms, 0);
     assert_eq!(lines.len(), 3);
     assert_eq!(lines[0].start_ms, Some(12_340));
     assert_eq!(lines[0].value, "First line");
@@ -23,9 +24,80 @@ fn lrc_parsing_keeps_timestamps_and_skips_metadata() {
 }
 
 #[test]
+fn multi_tag_and_out_of_order_timestamps_are_sorted_stably() {
+    // Multi-tag line with its tags out of order, plus file lines out of order:
+    // the parser must emit playlist-order timestamps, not file order.
+    let text = "[00:10][00:05]chorus\n[00:09]verse\n[00:01]intro";
+    let (synced, lines, _) = parse_lrc(text);
+    assert!(synced);
+    let times: Vec<Option<i64>> = lines.iter().map(|line| line.start_ms).collect();
+    assert_eq!(
+        times,
+        vec![Some(1_000), Some(5_000), Some(9_000), Some(10_000)],
+        "sorted by start time, multi-tag line kept per-timestamp"
+    );
+    assert_eq!(lines[1].value, "chorus");
+    assert_eq!(lines[3].value, "chorus");
+}
+
+#[test]
+fn untimed_lines_are_preserved_after_the_timed_ones() {
+    let (synced, lines, _) = parse_lrc("plain credit\n[00:05]timed\nanother credit");
+    assert!(synced);
+    assert_eq!(lines[0].start_ms, Some(5_000));
+    assert_eq!(lines[1].value, "plain credit");
+    assert_eq!(lines[1].start_ms, None);
+    assert_eq!(lines[2].value, "another credit");
+}
+
+#[test]
+fn lrc_offset_tag_shifts_every_timestamp() {
+    let text = "[offset:+500]\n[00:01.00]first\n[00:02.00]second";
+    let (synced, lines, offset_ms) = parse_lrc(text);
+    assert!(synced);
+    assert_eq!(offset_ms, 500);
+    assert_eq!(lines[0].start_ms, Some(1_500));
+    assert_eq!(lines[1].start_ms, Some(2_500));
+
+    // A negative offset pulls lines earlier but never before the track start.
+    let text = "[offset:-250]\n[00:01.00]first\n[00:00.10]intro";
+    let (_, lines, offset_ms) = parse_lrc(text);
+    assert_eq!(offset_ms, -250);
+    assert_eq!(
+        lines[0].start_ms,
+        Some(0),
+        "negative clamped to track start"
+    );
+    assert_eq!(lines[1].start_ms, Some(750));
+
+    let (_, lines, _) = parse_lrc("[offset:0]\n[00:03.00]line");
+    assert_eq!(lines[0].start_ms, Some(3_000));
+}
+
+#[test]
+fn corrupt_offset_and_timestamps_are_ignored_without_overflow() {
+    // Out-of-range offset tags are corruption, not a sync hint.
+    let (_, lines, offset_ms) = parse_lrc("[offset:99999999999999999999]\n[00:01.00]line");
+    assert_eq!(offset_ms, 0);
+    assert_eq!(lines[0].start_ms, Some(1_000));
+
+    // Oversized/negative timestamp tags must not parse (no wraparound).
+    assert_eq!(parse_timestamp("9223372036854775807:00.000"), None);
+    assert_eq!(parse_timestamp("999999999999999999999:00"), None);
+    assert_eq!(parse_timestamp("-1:00"), None);
+    assert_eq!(parse_timestamp("00:-5"), None);
+    assert_eq!(parse_timestamp("00:01.-5"), None);
+
+    let (synced, lines, _) = parse_lrc("[9223372036854775807:00.000]huge\nplain");
+    assert!(!synced, "an unparsable tag is metadata, not a timestamp");
+    assert!(lines.iter().all(|line| line.start_ms.is_none()));
+}
+
+#[test]
 fn plain_text_without_timestamps_is_unsynced() {
-    let (synced, lines) = parse_lrc("just words\nno timing here");
+    let (synced, lines, offset_ms) = parse_lrc("just words\nno timing here");
     assert!(!synced);
+    assert_eq!(offset_ms, 0);
     assert_eq!(lines.len(), 2);
     assert!(lines.iter().all(|line| line.start_ms.is_none()));
 }
@@ -65,7 +137,9 @@ fn structured_selection_prefers_synced_and_normalizes() {
     assert!(document.synced);
     assert_eq!(document.offset_ms, 250);
     assert_eq!(document.lines.len(), 2);
-    assert_eq!(document.lines[1].start_ms, Some(2_000));
+    // N-14: the provider offset is applied once to the reported line starts.
+    assert_eq!(document.lines[0].start_ms, Some(1_250));
+    assert_eq!(document.lines[1].start_ms, Some(2_250));
 }
 
 #[test]

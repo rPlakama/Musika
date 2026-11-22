@@ -28,6 +28,7 @@ impl AppRoot {
                 .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.stop_propagation()))
                 .child(
                     div()
+                        .id("description-card")
                         .w(relative(0.72))
                         .max_w(px(720.0))
                         .h_full()
@@ -37,6 +38,9 @@ impl AppRoot {
                         .flex()
                         .flex_col()
                         .gap_2()
+                        // Only the scrim closes the reader: clicks inside the
+                        // card must not bubble out to the backdrop.
+                        .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
                         .child(
                             div()
                                 .text_size(px(24.0))
@@ -79,22 +83,28 @@ impl AppRoot {
         .map(|overlay| overlay.into_any_element())
     }
 
-    pub(in crate::ui) fn settings_overlay(
-        &self,
-        _cx: &Context<Self>,
-    ) -> Option<gpui::AnyElement> {
+    pub(in crate::ui) fn settings_overlay(&self, cx: &Context<Self>) -> Option<gpui::AnyElement> {
         if !self.settings_open {
             return None;
         }
         let rows = self.settings_rows();
+        // The panel is taller than a short window: bound it to the viewport
+        // (minus the window margins) and let the list scroll instead of
+        // painting past the bottom edge.
+        let max_h = (self.win_h - 48.0).max(160.0);
         let mut panel = div()
+            .id("settings-panel")
             .w(px(440.0))
+            .max_w(relative(1.0))
+            .max_h(px(max_h))
+            .overflow_y_scroll()
             .rounded_md()
             .bg(gpui::black().opacity(0.86))
             .p_4()
             .flex()
             .flex_col()
             .gap_1()
+            .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
             .child(
                 div()
                     .text_size(px(18.0))
@@ -116,11 +126,18 @@ impl AppRoot {
                     .px_2()
                     .py_1()
                     .rounded_sm()
+                    .cursor_pointer()
                     .flex()
                     .justify_between()
                     .when(selected, |row| {
                         row.bg(rgb(palette::surface_container_high()))
                     })
+                    // Mouse parity with the keyboard: a click selects the row
+                    // and applies it (same handler as Enter).
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.settings_cursor = index;
+                        this.on_enter(&Enter, window, cx);
+                    }))
                     .child(
                         div()
                             .text_size(px(13.0))
@@ -149,6 +166,13 @@ impl AppRoot {
                 .items_center()
                 .justify_center()
                 .bg(gpui::black().opacity(0.35))
+                // A modal scrim: a click outside the panel dismisses, and the
+                // wheel never reaches the surface beneath.
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.settings_open = false;
+                    cx.notify();
+                }))
+                .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.stop_propagation()))
                 .child(panel)
                 .into_any_element(),
         )
@@ -569,7 +593,7 @@ impl AppRoot {
             .flex_col()
             .items_end()
             .gap_2()
-            .children(self.toasts.iter().map(|toast| {
+            .children(self.toasts.iter().enumerate().map(|(index, toast)| {
                 let age = (self.clock.now - toast.created_at) as f32;
                 // Pop in with a slight bezier overshoot; the fade-out at the
                 // end of the lifetime stays a plain fade.
@@ -577,7 +601,16 @@ impl AppRoot {
                 let fade_out = ((anim::TOAST_TTL_S - f64::from(age)) / anim::TOAST_FADE_OUT_S)
                     .clamp(0.0, 1.0) as f32;
                 let opacity = fade * fade_out;
-                self.toast_bubble(&toast.message, None, opacity, rise, toast.retry, cx)
+                // Each retry button needs its own element id: a shared static
+                // id would route every click to the first toast in the stack.
+                self.toast_bubble(
+                    &toast.message,
+                    None,
+                    opacity,
+                    rise,
+                    toast.retry.map(|retry| (retry, index)),
+                    cx,
+                )
             }))
             .when_some(self.hold_toast.as_ref(), |this, hold| {
                 this.child(self.toast_bubble(&hold.message, hold.icon, 1.0, 0.0, None, cx))
@@ -591,14 +624,15 @@ impl AppRoot {
 
     /// One toast card. Shared by the queued toasts, the held-key counter and the
     /// sticky mute bubble so they all read as the same surface. `rise` is the
-    /// entrance offset below the resting position (0 when not animating).
+    /// entrance offset below the resting position (0 when not animating) and
+    /// `retry` carries the action plus a per-stack element id seed.
     fn toast_bubble(
         &self,
         message: &str,
         icon_name: Option<&str>,
         opacity: f32,
         rise: f32,
-        retry: Option<RetryAction>,
+        retry: Option<(RetryAction, usize)>,
         cx: &Context<Self>,
     ) -> gpui::Div {
         div()
@@ -628,10 +662,10 @@ impl AppRoot {
                     .whitespace_normal()
                     .child(message.to_string()),
             )
-            .when_some(retry, |this, retry| {
+            .when_some(retry, |this, (retry, retry_id)| {
                 this.child(
                     div()
-                        .id("toast-retry")
+                        .id(("toast-retry", retry_id))
                         .px_3()
                         .py_1()
                         .rounded_md()
@@ -648,7 +682,7 @@ impl AppRoot {
             })
     }
 
-    pub(in crate::ui) fn login_view(&self, window: &gpui::Window) -> gpui::Div {
+    pub(in crate::ui) fn login_view(&self, window: &gpui::Window, cx: &Context<Self>) -> gpui::Div {
         #[expect(
             clippy::expect_used,
             reason = "the render path calls login_view only inside `if self.login.is_some()`"
@@ -659,7 +693,11 @@ impl AppRoot {
             ("Username", &login.username, 1, false),
             ("Password", &login.password, 2, true),
         ];
-        let field_w = (self.win_w * 0.224 - 26.0).max(1.0);
+        // Bare `relative(0.224)` collapsed to an unusable sliver on narrow
+        // windows; clamp the form to a real minimum (and a sensible maximum
+        // on very wide ones), then derive the text width from that column.
+        let panel_w = (self.win_w * 0.224).clamp(280.0, 420.0);
+        let field_w = (panel_w - 26.0).max(1.0);
         div()
             .size_full()
             .bg(rgb(palette::background()))
@@ -668,99 +706,132 @@ impl AppRoot {
             .flex()
             .items_center()
             .justify_center()
+            .p_6()
             .child(
+                // Short windows: the form is taller than the viewport, so the
+                // centered column lives in its own bounded scroll surface
+                // instead of being clipped at both ends.
                 div()
+                    .id("login-scroll")
+                    .max_h(relative(1.0))
+                    .overflow_y_scroll()
                     .flex()
                     .flex_col()
-                    .w(relative(0.224))
-                    .gap_3()
+                    .items_center()
                     .child(
                         div()
-                            .text_size(px(26.0))
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(rgb(palette::primary()))
-                            .text_center()
-                            .child("MUSIKA"),
-                    )
-                    .children(fields.into_iter().map(|(label, input, index, mask)| {
-                        let active = login.field == index;
-                        div()
-                            .h(px(52.0))
-                            .px_3()
                             .flex()
-                            .items_center()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(rgb(if active {
-                                palette::primary()
-                            } else {
-                                palette::outline_variant()
+                            .flex_col()
+                            .flex_shrink_0()
+                            .w(px(panel_w))
+                            .min_w(px(240.0))
+                            .gap_3()
+                            .child(
+                                div()
+                                    .text_size(px(26.0))
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_color(rgb(palette::primary()))
+                                    .text_center()
+                                    .child("MUSIKA"),
+                            )
+                            .children(fields.into_iter().map(|(label, input, index, mask)| {
+                                let active = login.field == index;
+                                div()
+                                    .id(("login-field", index))
+                                    .h(px(52.0))
+                                    .px_3()
+                                    .flex()
+                                    .items_center()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(rgb(if active {
+                                        palette::primary()
+                                    } else {
+                                        palette::outline_variant()
+                                    }))
+                                    .bg(rgb(palette::surface_container_highest()))
+                                    // Mouse parity: a click moves the focused
+                                    // field (Tab still walks them; the caret
+                                    // stays at the field's text end).
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        let Some(login) = this.login.as_mut() else {
+                                            return;
+                                        };
+                                        login.field = index;
+                                        cx.notify();
+                                    }))
+                                    .child(input.render(
+                                        window,
+                                        TextBoxStyle {
+                                            placeholder: label,
+                                            text_size: 14.0,
+                                            caret_h: 20.0,
+                                            max_width: field_w,
+                                            caret: active,
+                                            mask,
+                                        },
+                                    ))
                             }))
-                            .bg(rgb(palette::surface_container_highest()))
-                            .child(input.render(
-                                window,
-                                TextBoxStyle {
-                                    placeholder: label,
-                                    text_size: 14.0,
-                                    caret_h: 20.0,
-                                    max_width: field_w,
-                                    caret: active,
-                                    mask,
-                                },
-                            ))
-                    }))
-                    .child(
-                        div()
-                            .h(px(52.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_md()
-                            .bg(rgb(palette::primary_container()))
-                            .text_size(px(14.0))
-                            .text_color(rgb(palette::on_primary_container()))
-                            .child(if login.busy {
-                                "Working…"
-                            } else if login.mode == LoginMode::AddAccount {
-                                "Add account"
-                            } else {
-                                "Log in"
-                            }),
-                    )
-                    .child(
-                        div()
-                            .min_h(px(52.0))
-                            .w_full()
-                            .px_2()
-                            .py_2()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_md()
-                            .when(login.error.is_some(), |this| {
-                                this.border_1()
-                                    .border_color(rgb(palette::error()))
-                                    .bg(rgb(palette::error_container()))
-                            })
-                            .text_size(px(11.0))
-                            .text_color(rgb(if login.error.is_some() {
-                                palette::on_error_container()
-                            } else {
-                                palette::on_surface_variant()
-                            }))
-                            .text_center()
-                            .whitespace_normal()
-                            .child(login.error.clone().unwrap_or_else(|| {
-                                if login.mode == LoginMode::AddAccount {
-                                    "Tab moves · Enter adds account · Esc cancels".to_string()
-                                } else if login.offline_available {
-                                    "Tab moves · Enter logs in · F2 offline".to_string()
-                                } else {
-                                    "Tab moves · Enter logs in".to_string()
-                                }
-                            })),
+                            .child(
+                                div()
+                                    .id("login-submit")
+                                    .h(px(52.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded_md()
+                                    .bg(rgb(palette::primary_container()))
+                                    .text_size(px(14.0))
+                                    .text_color(rgb(palette::on_primary_container()))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.login_submit(cx);
+                                    }))
+                                    .child(if login.busy {
+                                        "Working…"
+                                    } else if login.mode == LoginMode::AddAccount {
+                                        "Add account"
+                                    } else {
+                                        "Log in"
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .min_h(px(52.0))
+                                    .w_full()
+                                    .px_2()
+                                    .py_2()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded_md()
+                                    .when(login.error.is_some(), |this| {
+                                        this.border_1()
+                                            .border_color(rgb(palette::error()))
+                                            .bg(rgb(palette::error_container()))
+                                    })
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(if login.error.is_some() {
+                                        palette::on_error_container()
+                                    } else {
+                                        palette::on_surface_variant()
+                                    }))
+                                    .text_center()
+                                    .whitespace_normal()
+                                    .child(login.error.clone().unwrap_or_else(|| {
+                                        if login.mode == LoginMode::AddAccount {
+                                            "Tab moves · Enter adds account · Esc cancels"
+                                                .to_string()
+                                        } else if login.offline_available {
+                                            "Tab moves · Enter logs in · F2 offline".to_string()
+                                        } else {
+                                            "Tab moves · Enter logs in".to_string()
+                                        }
+                                    })),
+                            ),
                     ),
             )
     }

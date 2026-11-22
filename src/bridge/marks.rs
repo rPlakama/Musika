@@ -13,7 +13,7 @@ impl Bridge {
                     _ = tx.send(Event::Marks { generation, result });
                 }
                 Err(err) => {
-                    crate::debug_log!("GPUI: mark window failed: {err:#}");
+                    crate::debug_log!("bridge: mark window failed: {err:#}");
                 }
             }
         });

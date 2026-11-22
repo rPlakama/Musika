@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
 
 /// Largest accepted command line. Commands are tiny; a longer line is a client
 /// bug and is dropped instead of growing the daemon's memory.
@@ -42,6 +42,13 @@ const MAX_COMMAND_BYTES: usize = 64 * 1024;
 /// How long a text client may take to send one line before the connection is
 /// dropped (keeps a stalled `nc` from parking a reader thread forever).
 const COMMAND_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long a reply write may block before the client is dropped (D-18).
+const REPLY_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Backoff after a transient `accept()` error, so a damaged listener cannot
+/// spin the runtime at 100% CPU (D-18).
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 
 /// Path of the core/UI control socket (`MUSIKA_DAEMON_SOCKET` overrides).
 pub fn daemon_socket_path() -> PathBuf {
@@ -82,6 +89,10 @@ pub fn send_line(line: &str) -> bool {
 
 /// Sends one line and reads a single reply line (for `status`-style queries).
 /// Bounded by a short read timeout; `None` when the core is absent or silent.
+#[cfg_attr(
+    not(feature = "gpuui"),
+    expect(dead_code, reason = "consumed by the GPUI front end")
+)]
 pub fn send_query(line: &str) -> Option<String> {
     let mut stream = UnixStream::connect(socket_path()).ok()?;
     stream
@@ -93,7 +104,10 @@ pub fn send_query(line: &str) -> Option<String> {
     writeln!(stream, "{}", line.trim()).ok()?;
     let mut reader = BufReader::new(stream);
     let mut reply = String::new();
-    reader.read_line(&mut reply).ok()?;
+    // Bounded like the daemon-side reader: a silent/stuck core must not grow
+    // this process's allocation without limit (S-10).
+    let mut limited = std::io::Read::take(&mut reader, (MAX_COMMAND_BYTES + 1) as u64);
+    BufRead::read_line(&mut limited, &mut reply).ok()?;
     let reply = reply.trim().to_string();
     (!reply.is_empty()).then_some(reply)
 }
@@ -103,16 +117,87 @@ pub fn remove_stale_socket(path: &Path) {
     _ = std::fs::remove_file(path);
 }
 
-/// Binds a socket with owner-only permissions, creating the parent directory.
-pub fn bind_private(path: &Path) -> std::io::Result<UnixListener> {
-    if let Some(parent) = path.parent() {
+/// Creates the socket's parent directory and tightens its permissions only
+/// when it is one Musika owns.
+///
+/// `MUSIKA_IPC_SOCKET` / `MUSIKA_DAEMON_SOCKET` may point at a shared
+/// directory (including `/tmp`); chmod'ing such a parent to `0700` would break
+/// every other user of it, so custom parents are left untouched (S-14). The
+/// socket file itself is still created `0600`.
+pub(crate) fn prepare_socket_parent(path: &Path) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if !parent.as_os_str().is_empty() {
         _ = std::fs::create_dir_all(parent);
+    }
+    if is_musika_owned_socket_dir(parent) {
         _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
     }
+}
+
+/// True when `dir` is a directory Musika itself owns (`config_dir()` or
+/// `$XDG_RUNTIME_DIR/musika`) and may therefore chmod (S-14).
+fn is_musika_owned_socket_dir(dir: &Path) -> bool {
+    if crate::db::config_dir().is_ok_and(|config| config == dir) {
+        return true;
+    }
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .is_some_and(|runtime| Path::new(&runtime).join("musika") == dir)
+}
+
+/// Binds a socket with owner-only permissions, creating the parent directory.
+pub fn bind_private(path: &Path) -> std::io::Result<UnixListener> {
+    prepare_socket_parent(path);
     remove_stale_socket(path);
     let listener = UnixListener::bind(path)?;
     _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
     Ok(listener)
+}
+
+/// Reads one newline-terminated line while allocating at most `cap` bytes.
+///
+/// Returns `Ok(None)` on EOF, `Ok(Some((line, false)))` for a complete line
+/// (newline stripped), and `Ok(Some((prefix, true)))` when the line exceeded
+/// `cap` bytes — the caller drops the connection, so the unread remainder does
+/// not matter (S-10).
+async fn read_line_capped<R>(reader: &mut R, cap: usize) -> std::io::Result<Option<(Vec<u8>, bool)>>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let mut line = Vec::new();
+    loop {
+        let available = match reader.fill_buf().await {
+            Ok(buffer) => buffer,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        if available.is_empty() {
+            return Ok((!line.is_empty()).then_some((line, false)));
+        }
+        match available.iter().position(|byte| *byte == b'\n') {
+            Some(end) => {
+                let room = cap.saturating_sub(line.len());
+                if end > room {
+                    line.extend_from_slice(&available[..room]);
+                    return Ok(Some((line, true)));
+                }
+                line.extend_from_slice(&available[..end]);
+                reader.consume(end + 1);
+                return Ok(Some((line, false)));
+            }
+            None => {
+                let room = cap.saturating_sub(line.len());
+                if available.len() > room {
+                    line.extend_from_slice(&available[..room]);
+                    return Ok(Some((line, true)));
+                }
+                line.extend_from_slice(available);
+                let taken = available.len();
+                reader.consume(taken);
+            }
+        }
+    }
 }
 
 /// True when the peer runs as the same user. Both sockets are user-private, so
@@ -198,20 +283,36 @@ where
             while let Some((line, writer)) = line_rx.recv().await {
                 if let Some(reply) = handler(line) {
                     let mut writer = writer.lock().await;
-                    if writer.write_all(reply.as_bytes()).await.is_ok()
-                        && writer.write_all(b"\n").await.is_ok()
-                        && writer.flush().await.is_err()
-                    {
-                        // Client went away between the write and the flush;
-                        // the reader task will observe EOF and exit.
+                    // A peer that stops reading must not wedge the dispatcher
+                    // forever (D-18); the reply is short, so this is generous.
+                    let written = tokio::time::timeout(REPLY_WRITE_TIMEOUT, async {
+                        writer.write_all(reply.as_bytes()).await?;
+                        writer.write_all(b"\n").await?;
+                        writer.flush().await
+                    })
+                    .await;
+                    match written {
+                        Ok(Ok(())) => {}
+                        Ok(Err(_)) | Err(_) => {
+                            // Slow/dead reader: its connection task observes
+                            // the failure and exits on the next read/write.
+                        }
                     }
                 }
             }
         });
 
         loop {
-            let Ok((stream, _addr)) = listener.accept().await else {
-                continue;
+            let stream = match listener.accept().await {
+                Ok((stream, _addr)) => stream,
+                Err(error) => {
+                    // A transient accept error (EMFILE, EINTR, a peer that
+                    // vanished between poll and accept) must not kill the
+                    // listener or hot-loop the runtime (D-18).
+                    eprintln!("ipc: accept failed: {error}");
+                    tokio::time::sleep(ACCEPT_BACKOFF).await;
+                    continue;
+                }
             };
             if !same_uid(&stream) {
                 eprintln!("ipc: refused a connection from another user");
@@ -223,18 +324,22 @@ where
             tokio::spawn(async move {
                 let mut reader = AsyncBufReader::new(read_half);
                 loop {
-                    let mut line = String::new();
-                    match tokio::time::timeout(COMMAND_READ_TIMEOUT, reader.read_line(&mut line))
-                        .await
-                    {
-                        Ok(Ok(0)) | Err(_) => break,
-                        Ok(Ok(_)) => {}
-                        Ok(Err(_)) => break,
-                    }
-                    if line.len() > MAX_COMMAND_BYTES {
+                    let read = tokio::time::timeout(
+                        COMMAND_READ_TIMEOUT,
+                        read_line_capped(&mut reader, MAX_COMMAND_BYTES),
+                    )
+                    .await;
+                    let (line, oversized) = match read {
+                        Ok(Ok(Some(line))) => line,
+                        Ok(Ok(None)) | Ok(Err(_)) | Err(_) => break,
+                    };
+                    if oversized {
                         eprintln!("ipc: dropped an oversized command line");
                         break;
                     }
+                    let Ok(line) = String::from_utf8(line) else {
+                        break;
+                    };
                     let command = line.trim();
                     if command.is_empty() {
                         continue;

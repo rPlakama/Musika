@@ -59,13 +59,17 @@ pub(crate) enum Command {
         next_url: Option<String>,
         paused: bool,
         generation: u64,
+        fade_out: bool,
     },
+    SetNextUrl(Option<String>),
     Pause,
     Resume {
         position: f64,
     },
     Seek(f64),
-    Stop,
+    Stop {
+        fade_out: bool,
+    },
     Shutdown,
 }
 
@@ -184,22 +188,26 @@ impl Worker {
         self.shared.boundary_active.store(false, Ordering::Release);
         self.shared.decode_done.store(false, Ordering::Release);
         self.shared.first_pcm.store(false, Ordering::Release);
-        if was_playing && !paused {
-            // A manual track change cuts the old stream; fade it out before the
-            // reset instead of clicking. The decoded position is already stale
-            // for the new row, so this only smooths the transition.
+        let fade_out = was_playing && !paused;
+        if fade_out {
             self.sink.request_fade_out();
-            std::thread::sleep(Duration::from_millis(20));
         }
         interrupt_current(&self.shared);
-        self.sink.reset();
-        self.sink.set_paused(paused);
+        self.sink.close_writes();
         _ = tx.send(Command::Load {
             url,
             next_url,
             paused,
             generation,
+            fade_out,
         });
+    }
+
+    pub(crate) fn set_next_url(&self, next_url: Option<String>) {
+        let Some(tx) = self.tx.as_ref() else {
+            return;
+        };
+        _ = tx.send(Command::SetNextUrl(next_url));
     }
 
     pub(crate) fn set_paused(&self, paused: bool, position: f64) {
@@ -252,21 +260,12 @@ impl Worker {
             .clock_origin
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = seconds;
+        let paused = self.paused.load(Ordering::Acquire);
         // A seek while paused must not leave the engine reporting `loading`
         // forever: nothing decodes until the worker is resumed.
-        self.shared.lock().loading = !self.paused.load(Ordering::Acquire);
-        if !self.paused.load(Ordering::Acquire) {
-            // Let the old audio fade out before the seek discards the queue;
-            // the new position fades in below. This is deliberately short and
-            // runs on the decode-worker thread, never the RT thread.
+        self.shared.lock().loading = !paused;
+        if !paused {
             self.sink.request_fade_out();
-            std::thread::sleep(Duration::from_millis(25));
-        }
-        self.sink.flush();
-        // A seek cuts the queued old audio; fade the new position's PCM in
-        // instead of starting it with a hard discontinuity.
-        if !self.paused.load(Ordering::Acquire) {
-            self.sink.request_fade_in();
         }
         _ = tx.send(Command::Seek(seconds));
     }
@@ -294,12 +293,15 @@ impl Worker {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = 0.0;
         if was_playing {
             self.sink.request_fade_out();
-            std::thread::sleep(Duration::from_millis(20));
+            self.sink.close_writes();
+        } else {
+            self.sink.reset();
+            self.sink.close_writes();
+            self.sink.set_paused(true);
         }
-        self.sink.reset();
-        self.sink.close_writes();
-        self.sink.set_paused(true);
-        _ = tx.send(Command::Stop);
+        _ = tx.send(Command::Stop {
+            fade_out: was_playing,
+        });
     }
 }
 
@@ -362,7 +364,6 @@ struct Current {
     /// Pipeline rate (Hz) currently configured in the sink. PCM written for
     /// this decoder is at this rate.
     rate: u32,
-    parked_url: Option<String>,
     next_url: Option<String>,
     preload_requested: bool,
     preload_token: u64,
@@ -399,7 +400,11 @@ struct CrossfadeState {
     next_eq: Option<crate::eq::EqRuntime>,
     eq_epoch: u64,
     equal_power: bool,
-    /// Frames of `next` consumed by the fade so far.
+    /// Frames of the crossfade window mixed so far (advances with the outgoing
+    /// track so a short or failed incoming track still fades out smoothly).
+    played_frames: u64,
+    /// Frames of `next` consumed by the fade so far (used for the handoff
+    /// timeline offset).
     next_frames: u64,
     /// Total frames of the fade (the remaining duration when it started).
     total_frames: u64,
@@ -409,13 +414,12 @@ struct CrossfadeState {
 }
 
 /// Whether the decode loop has time-based work that a command cannot wake it
-/// for. Keep this in step with the bottom of the loop: parked HTTP reopen,
-/// pending rate handoff, preload and crossfade all advance on their own.
+/// for. Keep this in step with the bottom of the loop: pending rate handoff,
+/// preload and crossfade all advance on their own.
 fn needs_timed_wait(current: &Current) -> bool {
     // A paused decoder produces no PCM and is woken by Resume/Seek, so it
     // blocks too; only work that advances without a command keeps polling.
-    current.parked_url.is_some()
-        || current.pending_handoff.is_some()
+    current.pending_handoff.is_some()
         || current.preload.is_some()
         || current.preload_requested
         || current.crossfade.is_some()
@@ -474,24 +478,44 @@ fn worker_thread(
                     interrupt_stop(&mut current);
                     break;
                 }
-                Command::Stop => {
+                Command::Stop { fade_out } => {
                     cancel_preload(&mut current);
                     interrupt_stop(&mut current);
+                    if fade_out {
+                        sink.request_fade_out();
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    sink.reset();
+                    sink.close_writes();
+                    sink.set_paused(true);
                     current.decoder = None;
                     current.stop = None;
-                    current.parked_url = None;
                     current.paused = false;
                     current.paused_at = None;
                     current.stopped = true;
                     shared.lock().decoder_live = false;
                     continue;
                 }
+                Command::SetNextUrl(next_url) => {
+                    if current.next_url != next_url {
+                        current.next_url = next_url;
+                        if current.crossfade.is_none() {
+                            cancel_preload(&mut current);
+                            current.preload = None;
+                            current.preload_requested = false;
+                            current.pending_handoff = None;
+                            if !current.stopped && current.decoder.is_some() {
+                                seed_preload(&mut current, &shared, &preload_tx);
+                            }
+                        }
+                    }
+                    continue;
+                }
                 Command::Pause => {
                     cancel_preload(&mut current);
-                    // A parked or live seekable decoder is kept: the ring keeps
-                    // its buffered audio and resume continues from it.
-                    let keep = current.parked_url.is_some()
-                        || current.decoder.as_ref().is_some_and(Decoder::is_seekable);
+                    // A live seekable decoder is kept: the ring keeps its
+                    // buffered audio and resume continues from it.
+                    let keep = current.decoder.as_ref().is_some_and(Decoder::is_seekable);
                     if keep {
                         current.paused = true;
                         current.paused_at = Some(Instant::now());
@@ -500,7 +524,6 @@ fn worker_thread(
                         interrupt_stop(&mut current);
                         current.decoder = None;
                         current.stop = None;
-                        current.parked_url = None;
                         current.paused = false;
                         current.paused_at = None;
                         sink.reset();
@@ -530,7 +553,6 @@ fn worker_thread(
                             cancel_preload(&mut current);
                             interrupt_stop(&mut current);
                             current.decoder = None;
-                            current.parked_url = None;
                             sink.reset();
                             start_decoder(
                                 &mut current,
@@ -539,6 +561,7 @@ fn worker_thread(
                                 generation,
                                 resume_at,
                                 false,
+                                true,
                                 &shared,
                                 sink.as_ref(),
                             );
@@ -546,12 +569,6 @@ fn worker_thread(
                             // Live decoder: keep it, do not re-seek.
                             shared.lock().loading = false;
                         }
-                        continue;
-                    }
-                    if current.parked_url.is_some() {
-                        // The parked reopen path resumes automatically as soon
-                        // as the ring drains; it seeks to the decoded boundary.
-                        shared.lock().loading = false;
                         continue;
                     }
                     if current.stopped {
@@ -571,6 +588,7 @@ fn worker_thread(
                         generation,
                         resume_at,
                         false,
+                        true,
                         &shared,
                         sink.as_ref(),
                     );
@@ -584,9 +602,10 @@ fn worker_thread(
                         match command {
                             Command::Seek(newer) => seconds = newer,
                             Command::Load { .. }
+                            | Command::SetNextUrl(_)
                             | Command::Pause
                             | Command::Resume { .. }
-                            | Command::Stop
+                            | Command::Stop { .. }
                             | Command::Shutdown => {
                                 pending_command = Some(command);
                                 break;
@@ -594,18 +613,31 @@ fn worker_thread(
                         }
                     }
                     let seconds = seconds.max(0.0);
+                    if !current.paused {
+                        // Let the old audio fade out before the seek discards
+                        // the queue; the new position fades in below.
+                        sink.request_fade_out();
+                        std::thread::sleep(Duration::from_millis(25));
+                    }
+                    sink.flush();
+                    *shared
+                        .clock_origin
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = seconds;
+                    shared
+                        .clock_start
+                        .store(sink.played_frames(), Ordering::Release);
+                    // A seek cuts the queued old audio; fade the new position's
+                    // PCM in instead of starting it with a hard discontinuity.
+                    if !current.paused {
+                        sink.request_fade_in();
+                    }
                     cancel_preload(&mut current);
                     if let Some(decoder) = current.decoder.as_mut() {
                         match decoder.seek(seconds) {
                             Ok(()) => {
                                 current.written_frames = 0;
                                 current.timeline_start = seconds;
-                                current.parked_url = None;
-                                current.first_pcm = true;
-                                // The request path already published the
-                                // newest clock target. Do not write this
-                                // command's older target here: a later seek
-                                // may have arrived while decoder.seek ran.
                                 shared.decode_done.store(false, Ordering::Release);
                                 let paused = current.paused;
                                 shared.lock().loading = !paused;
@@ -617,9 +649,8 @@ fn worker_thread(
                             }
                         }
                     } else if !current.stopped {
-                        // No live decoder (parked or interrupted by a pause):
-                        // reopen at the seek target so the position is honoured.
-                        current.parked_url = None;
+                        // No live decoder (interrupted by a pause): reopen at
+                        // the seek target so the position is honoured.
                         let (url, next_url, generation) = (
                             current.url.clone(),
                             current.next_url.clone(),
@@ -632,6 +663,7 @@ fn worker_thread(
                             generation,
                             seconds,
                             false,
+                            true,
                             &shared,
                             sink.as_ref(),
                         );
@@ -646,6 +678,7 @@ fn worker_thread(
                     next_url,
                     paused,
                     generation,
+                    fade_out,
                 } => {
                     // A burst of skips can enqueue several loads while a
                     // previous HTTP open is being interrupted. Only the
@@ -653,6 +686,13 @@ fn worker_thread(
                     if generation != shared.generation.load(Ordering::Acquire) {
                         continue;
                     }
+                    if fade_out {
+                        // A manual track change cuts the old stream; fade it
+                        // out before the reset instead of clicking.
+                        sink.request_fade_out();
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    sink.reset();
                     // Apply the pause/active state before opening: a paused
                     // restore then leaves the PipeWire node suspended for the
                     // whole (possibly slow) network open instead of burning
@@ -660,12 +700,16 @@ fn worker_thread(
                     current.paused = paused;
                     current.paused_at = None;
                     sink.set_paused(paused);
+                    shared
+                        .clock_start
+                        .store(sink.played_frames(), Ordering::Release);
                     start_decoder(
                         &mut current,
                         url,
                         next_url,
                         generation,
                         0.0,
+                        false,
                         false,
                         &shared,
                         sink.as_ref(),
@@ -690,8 +734,8 @@ fn worker_thread(
                 .preload
                 .as_ref()
                 .is_some_and(|decoder| decoder.sample_rate() != current.rate);
-            let mismatched_pending = current.preload_requested
-                && current.preload_target_rate != Some(current.rate);
+            let mismatched_pending =
+                current.preload_requested && current.preload_target_rate != Some(current.rate);
             if mismatched_ready || mismatched_pending {
                 cancel_preload(&mut current);
             }
@@ -714,7 +758,13 @@ fn worker_thread(
             maybe_start_crossfade(&mut current, &shared);
         }
         if current.crossfade.is_some() {
-            run_crossfade_chunk(&mut current, &shared, sink.as_ref(), &mut pcm, &mut next_pcm);
+            run_crossfade_chunk(
+                &mut current,
+                &shared,
+                sink.as_ref(),
+                &mut pcm,
+                &mut next_pcm,
+            );
             continue;
         }
 
@@ -742,25 +792,6 @@ fn worker_thread(
                 let next_stop = current.preload_stop.take();
                 handoff_to_decoder(&mut current, next, next_stop, 0.0, &shared, sink.as_ref());
                 continue;
-            }
-            if let Some(url) = current.parked_url.clone()
-                && !sink.ring().paused()
-                && sink.ring().buffered_frames() <= current.rate as u64 * 2
-            {
-                let target = current.timeline_start
-                    + current.written_frames as f64 / f64::from(current.rate);
-                let next_url = current.next_url.clone();
-                let generation = current.generation;
-                start_decoder(
-                    &mut current,
-                    url,
-                    next_url,
-                    generation,
-                    target,
-                    true,
-                    &shared,
-                    sink.as_ref(),
-                );
             }
             continue;
         };
@@ -818,16 +849,16 @@ fn worker_thread(
             continue;
         }
 
-        let mode = Normalization::from_code(
-            shared.normalization.load(Ordering::Acquire) as u8,
-        );
+        let mode = Normalization::from_code(shared.normalization.load(Ordering::Acquire) as u8);
         if !shared.bit_perfect.load(Ordering::Acquire)
             && mode.enabled()
             && let Some(decoder) = current.decoder.as_ref()
-            && let Some(gain) = normalization_gain(
+            && let Some(gain) = normalization_gain_with_peak(
                 mode,
                 decoder.replaygain_track_gain_db(),
                 decoder.replaygain_album_gain_db(),
+                decoder.replaygain_track_peak(),
+                decoder.replaygain_album_peak(),
             )
         {
             apply_normalization(&mut pcm[..frames * ring::CHANNELS], gain);
@@ -852,22 +883,6 @@ fn worker_thread(
             current.decoder = None;
             shared.lock().decoder_live = false;
             cancel_preload(&mut current);
-            continue;
-        }
-
-        // The ring is the playback buffer. Once it is nearly full, close the
-        // current AVIO/HTTP response and let playback consume the buffered
-        // PCM. The threshold is 7/8 of the rate-scaled usable capacity (~9.5 s
-        // of audio at any pipeline rate). Reopen before it runs low, seeking to
-        // the decoded boundary.
-        if current.crossfade.is_none()
-            && sink.ring().buffered_frames() >= sink.ring().usable_frames() * 7 / 8
-            && current.decoder.as_ref().is_some_and(Decoder::is_seekable)
-        {
-            current.parked_url = Some(current.url.clone());
-            current.decoder = None;
-            current.stop = None;
-            shared.lock().decoder_live = false;
             continue;
         }
 
@@ -897,6 +912,7 @@ fn start_decoder(
     generation: u64,
     position: f64,
     preserve_preload: bool,
+    is_reopen: bool,
     shared: &Shared,
     sink: &dyn PcmSink,
 ) {
@@ -904,7 +920,7 @@ fn start_decoder(
         cancel_preload(current);
         current.preload = None;
         current.preload_requested = false;
-        current.preload_token = 0;
+        current.preload_token = current.preload_token.wrapping_add(1);
         current.preload_started = None;
         current.next_url = next_url.clone();
     }
@@ -915,12 +931,13 @@ fn start_decoder(
     current.generation = generation;
     current.written_frames = 0;
     current.timeline_start = position;
-    current.parked_url = None;
     current.pending_handoff = None;
     if !preserve_preload {
         current.next_url = next_url;
     }
-    current.first_pcm = true;
+    if !is_reopen {
+        current.first_pcm = true;
+    }
     current.stopped = false;
     current.eq = None;
     current.eq_epoch = 0;
@@ -967,7 +984,10 @@ fn start_decoder(
             current.decoder = Some(decoder);
             {
                 let mut status = shared.lock();
-                status.loading = !current.paused;
+                if !is_reopen {
+                    status.loading = !current.paused;
+                    status.loaded = true;
+                }
                 status.duration = current
                     .decoder
                     .as_ref()
@@ -980,15 +1000,16 @@ fn start_decoder(
                     .unwrap_or(0);
                 status.seekable = seekable;
                 status.decoder_live = true;
-                status.loaded = true;
             }
-            *shared
-                .clock_origin
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = position;
-            shared
-                .clock_start
-                .store(sink.played_frames(), Ordering::Release);
+            if !is_reopen {
+                *shared
+                    .clock_origin
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = position;
+                shared
+                    .clock_start
+                    .store(sink.played_frames(), Ordering::Release);
+            }
             shared.signal();
         }
         Err(error) => {
@@ -1016,10 +1037,7 @@ fn crossfade_remaining(current: &Current) -> Option<f64> {
 /// configured crossfade seconds of the current track's end and the preloaded decoder
 /// runs at the same pipeline rate.
 fn maybe_start_crossfade(current: &mut Current, shared: &Shared) {
-    if !shared.crossfade.load(Ordering::Acquire)
-        || current.crossfade.is_some()
-        || current.paused
-    {
+    if !shared.crossfade.load(Ordering::Acquire) || current.crossfade.is_some() || current.paused {
         return;
     }
     let Some(decoder) = current.decoder.as_ref() else {
@@ -1056,14 +1074,15 @@ fn maybe_start_crossfade(current: &mut Current, shared: &Shared) {
     };
     let total_frames = (remaining * f64::from(current.rate)).round().max(1.0) as u64;
     let (eq_epoch, eq_profile) = shared.eq_snapshot();
-    let next_eq = eq_profile
-        .map(|profile| crate::eq::EqRuntime::new(profile, current.rate, ring::CHANNELS));
+    let next_eq =
+        eq_profile.map(|profile| crate::eq::EqRuntime::new(profile, current.rate, ring::CHANNELS));
     current.crossfade = Some(CrossfadeState {
         next,
         next_stop: current.preload_stop.take(),
         next_eq,
         eq_epoch,
         equal_power: shared.crossfade_equal_power.load(Ordering::Acquire),
+        played_frames: 0,
         next_frames: 0,
         total_frames,
         next_failed: false,
@@ -1091,26 +1110,35 @@ fn refresh_eq(current: &mut Current, shared: &Shared) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
-    current.eq = profile
-        .map(|profile| crate::eq::EqRuntime::new(profile, current.rate, ring::CHANNELS));
+    current.eq =
+        profile.map(|profile| crate::eq::EqRuntime::new(profile, current.rate, ring::CHANNELS));
     current.eq_epoch = epoch;
     current.eq_rate = current.rate;
 }
 
-/// Complementary-gain mix for one PCM block. Frames past `next_frames` (or
-/// any frame when `next_failed`) contribute silence, so a short next track
-/// cannot underflow the buffer.
+/// Complementary-gain mix for one PCM block, interpolating per frame across the
+/// chunk. Frames past `next_frames` (or any frame when `next_failed`)
+/// contribute silence, so a short next track cannot underflow the buffer.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "per-frame crossfade mixing takes the two sample buffers, frame counts, and progress envelope parameters directly"
+)]
 fn mix_crossfade(
     pcm: &mut [f32],
     next: &[f32],
     frames: usize,
     next_frames: usize,
     next_failed: bool,
-    gain_out: f32,
-    gain_in: f32,
+    played_frames: u64,
+    total_frames: u64,
+    equal_power: bool,
 ) {
     let frames = frames.min(pcm.len() / ring::CHANNELS);
+    let total = total_frames.max(1) as f64;
     for frame in 0..frames {
+        let progress =
+            (played_frames.saturating_add(frame as u64) as f64 / total).clamp(0.0, 1.0) as f32;
+        let (gain_out, gain_in) = crate::player::crossfade_gains(progress, equal_power);
         let next_available = !next_failed && frame < next_frames;
         for channel in 0..ring::CHANNELS {
             let index = frame * ring::CHANNELS + channel;
@@ -1203,10 +1231,12 @@ fn run_crossfade_chunk(
     if !shared.bit_perfect.load(Ordering::Acquire)
         && mode.enabled()
         && let Some(decoder) = current.decoder.as_ref()
-        && let Some(gain) = normalization_gain(
+        && let Some(gain) = normalization_gain_with_peak(
             mode,
             decoder.replaygain_track_gain_db(),
             decoder.replaygain_album_gain_db(),
+            decoder.replaygain_track_peak(),
+            decoder.replaygain_album_peak(),
         )
     {
         apply_normalization(&mut pcm[..cur_frames * ring::CHANNELS], gain);
@@ -1215,10 +1245,12 @@ fn run_crossfade_chunk(
         let Some(crossfade) = current.crossfade.as_ref() else {
             return;
         };
-        if let Some(gain) = normalization_gain(
+        if let Some(gain) = normalization_gain_with_peak(
             mode,
             crossfade.next.replaygain_track_gain_db(),
             crossfade.next.replaygain_album_gain_db(),
+            crossfade.next.replaygain_track_peak(),
+            crossfade.next.replaygain_album_peak(),
         ) {
             apply_normalization(&mut next_pcm[..next_frames * ring::CHANNELS], gain);
         }
@@ -1228,54 +1260,51 @@ fn run_crossfade_chunk(
     if let Some(eq) = current.eq.as_mut() {
         eq.process(&mut pcm[..cur_frames * ring::CHANNELS], cur_frames);
     }
-    if next_frames > 0
-        && let Some(crossfade) = current.crossfade.as_mut()
-    {
-        let epoch = shared.eq_epoch.load(Ordering::Acquire);
-        if crossfade.eq_epoch != epoch {
-            let profile = shared
-                .eq
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
-            crossfade.next_eq = profile.map(|profile| {
-                crate::eq::EqRuntime::new(profile, current.rate, ring::CHANNELS)
-            });
-            crossfade.eq_epoch = epoch;
-        }
-        if let Some(eq) = crossfade.next_eq.as_mut() {
-            eq.process(
-                &mut next_pcm[..next_frames * ring::CHANNELS],
-                next_frames,
-            );
+    if let Some(crossfade) = current.crossfade.as_mut() {
+        if shared.bit_perfect.load(Ordering::Acquire) {
+            crossfade.next_eq = None;
+            crossfade.eq_epoch = shared.eq_epoch.load(Ordering::Acquire);
+        } else if next_frames > 0 {
+            let epoch = shared.eq_epoch.load(Ordering::Acquire);
+            if crossfade.eq_epoch != epoch {
+                let profile = shared
+                    .eq
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
+                crossfade.next_eq = profile.map(|profile| {
+                    crate::eq::EqRuntime::new(profile, current.rate, ring::CHANNELS)
+                });
+                crossfade.eq_epoch = epoch;
+            }
+            if let Some(eq) = crossfade.next_eq.as_mut() {
+                eq.process(&mut next_pcm[..next_frames * ring::CHANNELS], next_frames);
+            }
         }
     }
-    let (played, total, next_failed) = {
+    let (played, total, next_failed, equal_power) = {
         let Some(crossfade) = current.crossfade.as_ref() else {
             return;
         };
         (
-            crossfade.next_frames,
+            crossfade.played_frames,
             crossfade.total_frames,
             crossfade.next_failed,
+            crossfade.equal_power,
         )
     };
-    let progress = (played as f64 / total.max(1) as f64).clamp(0.0, 1.0) as f32;
-    let equal_power = current
-        .crossfade
-        .as_ref()
-        .is_some_and(|crossfade| crossfade.equal_power);
-    let (gain_out, gain_in) = crate::player::crossfade_gains(progress, equal_power);
     mix_crossfade(
         pcm,
         next_pcm,
         cur_frames,
         next_frames,
         next_failed,
-        gain_out,
-        gain_in,
+        played,
+        total,
+        equal_power,
     );
     if let Some(crossfade) = current.crossfade.as_mut() {
+        crossfade.played_frames = crossfade.played_frames.saturating_add(cur_frames as u64);
         crossfade.next_frames = crossfade.next_frames.saturating_add(next_frames as u64);
     }
 
@@ -1311,10 +1340,14 @@ fn handoff_to_decoder(
     let stream_size = next.stream_size().max(0) as u64;
     let seekable = next.is_seekable();
     current.decoder = Some(next);
+    current.epoch = sink.epoch();
     current.written_frames = 0;
-    current.first_pcm = true;
+    current.first_pcm = false;
     let boundary = sink_ring_written(sink);
     shared.boundary_frame.store(boundary, Ordering::Release);
+    shared
+        .boundary_epoch
+        .store(current.epoch, Ordering::Release);
     *shared
         .boundary_duration
         .lock()
@@ -1367,7 +1400,8 @@ fn seed_preload(current: &mut Current, shared: &Shared, preload_tx: &Sender<Prel
     let status = shared.lock();
     let duration = status.duration;
     drop(status);
-    let written_seconds = current.written_frames as f64 / f64::from(current.rate);
+    let written_seconds =
+        current.timeline_start + current.written_frames as f64 / f64::from(current.rate.max(1));
     let ready = if duration > 0.0 {
         duration - written_seconds <= 30.0
     } else {
@@ -1376,7 +1410,7 @@ fn seed_preload(current: &mut Current, shared: &Shared, preload_tx: &Sender<Prel
     if !ready {
         return;
     }
-    let token = current.generation;
+    let token = current.preload_token.wrapping_add(1);
     let stop = Arc::new(AtomicBool::new(false));
     current.preload_requested = true;
     current.preload_token = token;
@@ -1475,34 +1509,70 @@ fn fail(shared: &Shared, error: crate::player::PlaybackError) {
 /// Linear gain for a ReplayGain mode. Album prefers the album tag; track
 /// prefers the track tag and falls back to the other one. Off/unavailable/
 /// malformed gains return `None` (unity).
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "only the ReplayGain tests call the peak-less wrapper"
+    )
+)]
 fn normalization_gain(
     mode: Normalization,
     track_db: Option<f64>,
     album_db: Option<f64>,
 ) -> Option<f64> {
-    let db = match mode {
+    normalization_gain_with_peak(mode, track_db, album_db, None, None)
+}
+
+/// Linear gain for a ReplayGain mode, capped by `1.0 / peak` when peak metadata
+/// is available so positive makeup gain cannot push samples above full scale.
+fn normalization_gain_with_peak(
+    mode: Normalization,
+    track_db: Option<f64>,
+    album_db: Option<f64>,
+    track_peak: Option<f64>,
+    album_peak: Option<f64>,
+) -> Option<f64> {
+    let (db, peak) = match mode {
         Normalization::Off => return None,
-        Normalization::Track => track_db.or(album_db),
-        Normalization::Album => album_db.or(track_db),
-    }?;
+        Normalization::Track => match track_db {
+            Some(db) => (db, track_peak.or(album_peak)),
+            None => (album_db?, album_peak.or(track_peak)),
+        },
+        Normalization::Album => match album_db {
+            Some(db) => (db, album_peak.or(track_peak)),
+            None => (track_db?, track_peak.or(album_peak)),
+        },
+    };
     if !db.is_finite() {
         return None;
     }
     // ReplayGain tags are usually negative; cap positive makeup to +12 dB so
     // a bad tag cannot blast the output.
     let db = db.min(12.0);
-    (10f64.powf(db / 20.0)).is_finite().then(|| 10f64.powf(db / 20.0))
+    let mut gain = 10f64.powf(db / 20.0);
+    if !gain.is_finite() {
+        return None;
+    }
+    if let Some(peak) = peak
+        && peak.is_finite()
+        && peak > 0.0
+        && gain * peak > 1.0
+    {
+        gain = 1.0 / peak;
+    }
+    Some(gain)
 }
 
-/// Applies a linear normalization gain to interleaved F32 stereo.
-/// instead of wrapping.
+/// Applies a linear normalization gain to interleaved F32 stereo, clamping to
+/// `[-1.0, 1.0]` instead of wrapping or overflowing full scale.
 fn apply_normalization(pcm: &mut [f32], gain: f64) {
     if !gain.is_finite() || (gain - 1.0).abs() < 1e-6 {
         return;
     }
     let gain = gain as f32;
     for sample in pcm {
-        *sample *= gain;
+        *sample = (*sample * gain).clamp(-1.0, 1.0);
     }
 }
 
@@ -1519,31 +1589,54 @@ mod tests {
     fn crossfade_mix_keeps_the_old_track_at_the_start_and_new_at_the_end() {
         let mut pcm = [0.25f32; 2 * 4];
         let next = [0.5f32; 2 * 4];
-        mix_crossfade(&mut pcm, &next, 4, 4, false, 1.0, 0.0);
-        assert_eq!(pcm, [0.25; 8]);
+        // Across a 4-frame linear crossfade from frame 0 to frame 3 (`total_frames = 3`):
+        // frame 0 is 100% old (0.25), frame 3 is 100% new (0.5), and intermediate
+        // frames are smoothly interpolated per frame.
+        mix_crossfade(&mut pcm, &next, 4, 4, false, 0, 3, false);
+        assert!((pcm[0] - 0.25).abs() < 1e-6);
+        assert!((pcm[1] - 0.25).abs() < 1e-6);
+        assert!(pcm[2] > 0.25 && pcm[2] < 0.5);
+        assert!(pcm[4] > pcm[2] && pcm[4] < 0.5);
+        assert!((pcm[6] - 0.5).abs() < 1e-6);
+        assert!((pcm[7] - 0.5).abs() < 1e-6);
+
+        // At completion (`played_frames == total_frames`), all frames use the new track.
         let mut pcm = [0.25f32; 2 * 4];
-        mix_crossfade(&mut pcm, &next, 4, 4, false, 0.0, 1.0);
+        mix_crossfade(&mut pcm, &next, 4, 4, false, 100, 100, false);
         assert_eq!(pcm, [0.5; 8]);
-        let mut pcm = [0.25f32; 2 * 4];
-        mix_crossfade(&mut pcm, &next, 4, 4, false, 0.5, 0.5);
-        assert_eq!(pcm, [0.375; 8]);
     }
 
     #[test]
     fn crossfade_mix_pads_a_short_or_failed_next_stream() {
         let mut pcm = [0.25f32; 2 * 4];
         let next = [0.5f32; 2 * 2];
-        mix_crossfade(&mut pcm, &next, 4, 2, false, 0.5, 0.5);
-        assert_eq!(&pcm[..4], &[0.375; 4]);
-        assert_eq!(&pcm[4..], &[0.125; 4], "past EOF only the old tail");
+        // Midpoint (`played_frames = 500_000, total_frames = 1_000_000`, linear):
+        // first 2 frames mix both tracks (~0.375), trailing 2 frames fade only the
+        // old track (~0.125) because `next` reached EOF at 2 frames.
+        mix_crossfade(&mut pcm, &next, 4, 2, false, 500_000, 1_000_000, false);
+        assert!((pcm[0] - 0.375).abs() < 1e-4);
+        assert!((pcm[2] - 0.375).abs() < 1e-4);
+        assert!((pcm[4] - 0.125).abs() < 1e-4, "past EOF only the old tail");
+        assert!((pcm[6] - 0.125).abs() < 1e-4, "past EOF only the old tail");
+
+        // A failed next stream contributes silence while the outgoing track still
+        // fades out across the chunk (`played_frames = 0, total_frames = 3`).
         let mut pcm = [0.25f32; 2 * 4];
-        mix_crossfade(&mut pcm, &next, 4, 2, true, 1.0, 1.0);
-        assert_eq!(pcm, [0.25; 8], "a failed next stream is silent");
+        mix_crossfade(&mut pcm, &next, 4, 2, true, 0, 3, false);
+        assert!((pcm[0] - 0.25).abs() < 1e-6);
+        assert!(pcm[2] < 0.25 && pcm[2] > 0.0);
+        assert!(
+            (pcm[6] - 0.0).abs() < 1e-6,
+            "outgoing track fades to silence"
+        );
     }
 
     #[test]
     fn replaygain_modes_choose_the_right_tag_and_clamp() {
-        assert_eq!(normalization_gain(Normalization::Off, Some(-6.0), Some(-8.0)), None);
+        assert_eq!(
+            normalization_gain(Normalization::Off, Some(-6.0), Some(-8.0)),
+            None
+        );
         let track = normalization_gain(Normalization::Track, Some(-6.0), Some(-8.0)).unwrap();
         assert!((track - 10f64.powf(-6.0 / 20.0)).abs() < 1e-9);
         let album = normalization_gain(Normalization::Track, None, Some(-8.0)).unwrap();
@@ -1556,17 +1649,70 @@ mod tests {
         assert!(normalization_gain(Normalization::Album, Some(-6.0), None).is_some());
         // Positive makeup is capped at +12 dB; garbage tags are ignored.
         assert!(normalization_gain(Normalization::Track, Some(60.0), None).unwrap() < 4.0);
-        assert_eq!(normalization_gain(Normalization::Track, Some(f64::NAN), None), None);
+        assert_eq!(
+            normalization_gain(Normalization::Track, Some(f64::NAN), None),
+            None
+        );
     }
 
     #[test]
     fn normalization_scales_and_clips_samples() {
         let mut pcm = [0.1f32, -0.1, 0.9, -0.9];
         apply_normalization(&mut pcm, 2.0);
-        assert_eq!(pcm, [0.2, -0.2, 1.8, -1.8]);
+        assert_eq!(pcm, [0.2, -0.2, 1.0, -1.0]);
         let mut unharmed = [0.5f32; 4];
         apply_normalization(&mut unharmed, 1.0);
         assert_eq!(unharmed, [0.5; 4]);
+    }
+
+    #[test]
+    fn normalization_respects_peak_and_avoids_clipping() {
+        // +6 dB (~1.995x) on a track with peak 0.8 would clip at ~1.596, so
+        // peak limiting caps the linear gain to 1.0 / 0.8 = 1.25.
+        let gain =
+            normalization_gain_with_peak(Normalization::Track, Some(6.0), None, Some(0.8), None)
+                .unwrap();
+        assert!((gain - 1.25).abs() < 1e-9, "unexpected capped gain: {gain}");
+
+        // When gain * peak <= 1.0, the dB gain is applied untouched.
+        let untouched =
+            normalization_gain_with_peak(Normalization::Track, Some(-6.0), None, Some(0.95), None)
+                .unwrap();
+        assert!((untouched - 10f64.powf(-6.0 / 20.0)).abs() < 1e-9);
+
+        let mut pcm = [0.8f32, -0.8, 0.4, -0.4];
+        apply_normalization(&mut pcm, gain);
+        assert_eq!(pcm, [1.0, -1.0, 0.5, -0.5]);
+    }
+
+    #[test]
+    fn seed_preload_includes_timeline_start() {
+        let shared = Shared::new();
+        shared.lock().duration = 200.0;
+        let (preload_tx, preload_rx) = mpsc::channel();
+
+        // Near the start of a 200 s track (`timeline_start = 0.0`), 480 frames
+        // at 48 kHz (0.01 s) is nowhere near the 30 s preload threshold.
+        let mut current = Current {
+            rate: 48_000,
+            timeline_start: 0.0,
+            written_frames: 480,
+            next_url: Some("file:///tmp/next.wav".to_string()),
+            ..Current::default()
+        };
+        seed_preload(&mut current, &shared, &preload_tx);
+        assert!(!current.preload_requested);
+        assert!(preload_rx.try_recv().is_err());
+
+        // After seeking to 180.0 s on a 200.0 s track, only 20 s remain (<= 30 s),
+        // so `seed_preload` triggers immediately even when `written_frames` is small.
+        current.timeline_start = 180.0;
+        seed_preload(&mut current, &shared, &preload_tx);
+        assert!(current.preload_requested);
+        let request = preload_rx
+            .try_recv()
+            .expect("preload request should be sent when timeline_start is within 30s of end");
+        assert_eq!(request.url, "file:///tmp/next.wav");
     }
 
     struct WavFile {
@@ -1679,7 +1825,7 @@ mod tests {
 
         let boundary = shared.boundary_frame.load(Ordering::Acquire);
         assert!(
-            wait_until(|| sink.played_frames() >= boundary, Duration::from_secs(10)),
+            wait_until(|| sink.read_frames() >= boundary, Duration::from_secs(10)),
             "playback never reached the armed boundary ({boundary})"
         );
         assert!(
@@ -1720,7 +1866,7 @@ mod tests {
         assert!(failed.is_none(), "same-rate handoff failed: {failed:?}");
         let boundary = shared.boundary_frame.load(Ordering::Acquire);
         assert!(
-            wait_until(|| sink.played_frames() >= boundary, Duration::from_secs(10)),
+            wait_until(|| sink.read_frames() >= boundary, Duration::from_secs(10)),
             "playback never reached the same-rate boundary"
         );
         assert!(
@@ -1732,7 +1878,7 @@ mod tests {
     #[test]
     fn idle_transport_blocks_instead_of_polling() {
         // A freshly started or stopped transport has no decoder and nothing
-        // parked, so the worker may sleep on its command channel.
+        // pending, so the worker may sleep on its command channel.
         let current = Current::default();
         assert!(!needs_timed_wait(&current));
 
@@ -1743,13 +1889,7 @@ mod tests {
         };
         assert!(!needs_timed_wait(&current));
 
-        // Every field below advances on its own even without a command.
-        let current = Current {
-            parked_url: Some("https://example.invalid/track".to_string()),
-            ..Current::default()
-        };
-        assert!(needs_timed_wait(&current));
-
+        // In-flight preload work advances on its own even without a command.
         let current = Current {
             preload_requested: true,
             ..Current::default()

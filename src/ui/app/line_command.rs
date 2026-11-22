@@ -79,6 +79,9 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // U-12: handlers that stamp `clock.now` (denied flash) must see the
+        // current instant, not the last rendered frame's.
+        self.clock.tick();
         let key = event.keystroke.key.as_str();
         let control = event.keystroke.modifiers.control;
         let shift = event.keystroke.modifiers.shift;
@@ -93,13 +96,25 @@ impl AppRoot {
                 cx.notify();
                 return;
             }
-            "up" | "ctrl-p" | "ctrl-k" => {
+            "up" => {
                 self.line_search_step(-1);
                 cx.notify();
                 return;
             }
-            "down" | "ctrl-n" | "ctrl-j" => {
+            "down" => {
                 self.line_search_step(1);
+                cx.notify();
+                return;
+            }
+            // GPUI reports a bare Ctrl chord as the letter plus the `control`
+            // modifier, so `"ctrl-p"`/`"ctrl-n"` never matched.
+            "n" if control => {
+                self.line_search_step(1);
+                cx.notify();
+                return;
+            }
+            "p" if control => {
+                self.line_search_step(-1);
                 cx.notify();
                 return;
             }
@@ -420,6 +435,8 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // U-12: the parse-error flash stamps `clock.now`.
+        self.clock.tick();
         let key = event.keystroke.key.as_str();
         let control = event.keystroke.modifiers.control;
         let shift = event.keystroke.modifiers.shift;
@@ -434,13 +451,25 @@ impl AppRoot {
                 cx.notify();
                 return;
             }
-            "up" | "ctrl-p" | "ctrl-k" => {
+            "up" => {
                 self.command_line.move_suggestion(-1);
                 cx.notify();
                 return;
             }
-            "down" | "ctrl-n" | "ctrl-j" => {
+            "down" => {
                 self.command_line.move_suggestion(1);
+                cx.notify();
+                return;
+            }
+            // GPUI reports a bare Ctrl chord as the letter plus the `control`
+            // modifier, so `"ctrl-p"`/`"ctrl-n"` never matched.
+            "n" if control => {
+                self.command_line.move_suggestion(1);
+                cx.notify();
+                return;
+            }
+            "p" if control => {
+                self.command_line.move_suggestion(-1);
                 cx.notify();
                 return;
             }
@@ -469,7 +498,7 @@ impl AppRoot {
                     }
                     Err(error) => {
                         let now = self.clock.now;
-                        self.push_toast(error.to_string(), ToastKind::Error, None);
+                        self.push_toast(error.to_string(), None);
                         self.command_line.deny(now, error.to_string());
                     }
                 }

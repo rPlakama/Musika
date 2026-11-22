@@ -133,30 +133,13 @@ impl CommandLineState {
         self.cycle = None;
     }
 
-    pub fn move_left(&mut self, extend: bool) {
-        self.editor.move_left(extend);
-        self.reset_completion();
-        self.refresh();
-    }
-
-    pub fn move_right(&mut self, extend: bool) {
-        self.editor.move_right(extend);
-        self.reset_completion();
-        self.refresh();
-    }
-
-    pub fn home(&mut self, extend: bool) {
-        self.editor.home(extend);
-        self.reset_completion();
-        self.refresh();
-    }
-
-    pub fn end(&mut self, extend: bool) {
-        self.editor.end(extend);
-        self.reset_completion();
-        self.refresh();
-    }
-
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "only the command-line tests exercise this edit helper"
+        )
+    )]
     pub fn select_all(&mut self) {
         self.editor.select_all();
         self.reset_completion();
@@ -169,38 +152,29 @@ impl CommandLineState {
         self.refresh();
     }
 
-    pub fn backspace(&mut self) {
-        self.editor.backspace();
-        self.reset_completion();
-        self.refresh();
-    }
-
-    pub fn delete_forward(&mut self) {
-        self.editor.delete_forward();
-        self.reset_completion();
-        self.refresh();
-    }
-
-    pub fn delete_word_back(&mut self) {
-        self.editor.delete_word_back();
-        self.reset_completion();
-        self.refresh();
-    }
-
     pub fn apply_edit(&mut self, command: &EditCommand) {
         apply(&mut self.editor, command);
         self.reset_completion();
         self.refresh();
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "only the command-line tests exercise this edit helper"
+        )
+    )]
     pub fn set_text(&mut self, text: &str) {
         self.editor.set_text(text);
         self.reset_completion();
         self.refresh();
     }
 
-    /// Neovim-style Tab/Shift-Tab completion. The first press completes the
-    /// token under the cursor; later presses cycle the discovered candidates.
+    /// Neovim-style Tab/Shift-Tab completion. The first press replaces the
+    /// byte span of the selected suggestion (as computed by the suggestion
+    /// source, so multi-word arguments such as `playlist add ; "Road T"`
+    /// complete as one region); later presses cycle the discovered candidates.
     pub fn complete(&mut self, backward: bool) -> bool {
         if let Some(cycle) = self.cycle.clone() {
             if !cycle.values.is_empty() {
@@ -228,18 +202,24 @@ impl CommandLineState {
             self.cycle = None;
         }
 
-        let token = self.token_under_cursor();
-        let values: Vec<(String, String)> = self
+        // The suggestion source owns the replaceable byte span: it may cover a
+        // multi-word region (the whole typed playlist name) instead of the
+        // whitespace-delimited token under the cursor.
+        let entries: Vec<Completion> = self
             .suggestions
             .iter()
             .filter_map(|suggestion| {
-                suggestion
-                    .completion
-                    .clone()
-                    .map(|completion| (completion, suggestion.label.clone()))
+                suggestion.completion.as_ref().map(|completion| Completion {
+                    span: CompletionSpan::clamped(
+                        suggestion.start,
+                        suggestion.end,
+                        &self.editor.text,
+                    ),
+                    completion: completion.clone(),
+                })
             })
             .collect();
-        if values.is_empty() {
+        if entries.is_empty() {
             return false;
         }
         let selected_completion = self
@@ -247,28 +227,48 @@ impl CommandLineState {
             .get(self.selected)
             .and_then(|suggestion| suggestion.completion.as_deref());
         let index = selected_completion
-            .and_then(|selected| values.iter().position(|(value, _)| value == selected))
-            .unwrap_or(if backward { values.len() - 1 } else { 0 });
-        let completion = values[index].0.clone();
-        let is_command = token.index == 0;
+            .and_then(|selected| {
+                entries
+                    .iter()
+                    .position(|entry| entry.completion == selected)
+            })
+            .unwrap_or(if backward { entries.len() - 1 } else { 0 });
+        let span = entries[index].span;
+        // Suggestions may predate the latest edit (an async reply can land
+        // after the text moved on). Only trust the source span while it still
+        // covers the cursor; otherwise fall back to the token under it.
+        let cursor = self.editor.cursor.min(self.editor.text.len());
+        let span = if span.start <= cursor && cursor <= span.end {
+            span
+        } else {
+            self.token_span_under_cursor()
+        };
+        let completion = entries[index].completion.clone();
+        let values: Vec<String> = entries.into_iter().map(|entry| entry.completion).collect();
+        // A completion of the command token itself starts the argument list, so
+        // it appends the space that separates the argument.
+        let is_command = self.editor.text[..span.start].trim().is_empty();
         let append_space = is_command && ipc_command::needs_argument(&completion);
         self.editor
             .text
-            .replace_range(token.start..token.end, &completion);
-        let cursor = token.start + completion.len() + usize::from(append_space);
+            .replace_range(span.start..span.end, &completion);
+        let mut cursor = span.start + completion.len();
         if append_space {
-            self.editor.text.insert(token.start + completion.len(), ' ');
+            self.editor.text.insert(cursor, ' ');
+            cursor += 1;
         }
         self.editor.cursor = cursor;
         self.editor.anchor = cursor;
+        // Refresh for the text left under the cursor: after a command
+        // completion that appended a trailing space this is the empty first
+        // argument token, so its values are offered immediately.
         self.refresh();
         if append_space {
             self.cycle = None;
         } else {
-            let values: Vec<String> = values.into_iter().map(|(value, _)| value).collect();
             self.cycle = Some(CompletionCycle {
-                start: token.start,
-                end: token.start + completion.len(),
+                start: span.start,
+                end: span.start + completion.len(),
                 values,
                 index,
             });
@@ -277,7 +277,9 @@ impl CommandLineState {
         true
     }
 
-    fn token_under_cursor(&self) -> Token {
+    /// Fallback replaceable span when the source-provided one is stale: the
+    /// whitespace-delimited token around the cursor.
+    fn token_span_under_cursor(&self) -> CompletionSpan {
         let input = &self.editor.text;
         let mut cursor = self.editor.cursor.min(input.len());
         while cursor > 0 && !input.is_char_boundary(cursor) {
@@ -305,11 +307,7 @@ impl CommandLineState {
             }
             end += ch.len_utf8();
         }
-        Token {
-            start,
-            end: end.max(cursor),
-            index: input[..start].split_whitespace().count(),
-        }
+        CompletionSpan { start, end }
     }
 
     pub fn deny(&mut self, now: f64, error: String) {
@@ -339,11 +337,39 @@ impl CommandLineState {
     }
 }
 
+/// The byte region a suggestion asks Tab to replace, with the completion that
+/// replaces it.
+#[derive(Debug, Clone)]
+struct Completion {
+    span: CompletionSpan,
+    completion: String,
+}
+
+/// Byte span of the text a completion replaces, as reported by the suggestion
+/// source (multi-word regions included).
 #[derive(Debug, Clone, Copy)]
-struct Token {
+struct CompletionSpan {
     start: usize,
     end: usize,
-    index: usize,
+}
+
+impl CompletionSpan {
+    /// Clamps a source-provided span into `text`, snapping both ends to char
+    /// boundaries so a stale reply can never split a UTF-8 sequence.
+    fn clamped(start: usize, end: usize, text: &str) -> Self {
+        let start = floor_char_boundary(text, start.min(text.len()));
+        let end = floor_char_boundary(text, end.max(start).min(text.len()));
+        Self { start, end }
+    }
+}
+
+/// Largest char boundary at or below `index`, clamped to `text.len()`.
+fn floor_char_boundary(text: &str, index: usize) -> usize {
+    let mut index = index.min(text.len());
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
 }
 
 #[cfg(test)]
@@ -432,5 +458,51 @@ mod tests {
         state.open();
         state.set_text("nonsense");
         assert!(!state.complete(false));
+    }
+
+    /// U-18 regression: the completion must replace the byte span the
+    /// suggestion source reported, not the whitespace token under the cursor.
+    /// A playlist name typed after the `;` cutoff spans several words, so a
+    /// token-local replacement would leave the earlier typed words behind.
+    #[test]
+    fn tab_completion_replaces_suggestion_span() {
+        let mut state = CommandLineState::new();
+        state.open();
+        let query = "playlist add ; Road T";
+        state.set_text(query);
+        let span_start = query.find("Road T").expect("typed name region");
+        state.install_search_suggestions(
+            span_start,
+            query.len(),
+            &[("Road Trip".to_string(), "12 tracks".to_string())],
+        );
+        assert!(state.complete(false));
+        assert_eq!(state.query(), "playlist add ; \"Road Trip\"");
+        assert_eq!(state.editor.cursor, state.query().len());
+
+        // Completing a bare command appends the argument space and refreshes
+        // the suggestions for the empty argument token in the same press.
+        state.set_text("syn");
+        assert!(state.complete(false));
+        assert_eq!(state.query(), "sync ");
+        assert_eq!(
+            state
+                .suggestions
+                .first()
+                .and_then(|suggestion| suggestion.completion.as_deref()),
+            Some("all"),
+        );
+    }
+
+    /// A suggestion reply can land after the text moved on; its stale span must
+    /// not be used to splice the completion over unrelated text.
+    #[test]
+    fn stale_suggestion_span_falls_back_to_the_cursor_token() {
+        let mut state = CommandLineState::new();
+        state.open();
+        state.set_text("sync all");
+        state.install_search_suggestions(0, 4, &[("repair".to_string(), "rebuild".to_string())]);
+        assert!(state.complete(false));
+        assert_eq!(state.query(), "sync repair");
     }
 }

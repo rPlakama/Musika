@@ -104,6 +104,12 @@ async fn get(pool: &SqlitePool, song_id: &str) -> Result<Option<Stored>> {
 }
 
 /// Upserts one media row. `file` is the blob name relative to its tier dir.
+///
+/// The upsert refuses — atomically, in the same statement — to downgrade a
+/// config-tier download (permanent/rule) to a purgeable playback-cache copy:
+/// a stream-cache fetch racing a download must never delete the user's blob
+/// (N-05). `last_used`/`created_at` are bound as INTEGERs so the LRU ordering
+/// of [`enforce_playback_cap`] compares like values (N-09).
 #[expect(
     clippy::too_many_arguments,
     reason = "parameters mirror the media row; a wrapper struct would restate it"
@@ -118,8 +124,8 @@ pub async fn record(
     fingerprint: &str,
     rule_id: Option<&str>,
 ) -> Result<()> {
-    let now = crate::consts::now_secs().to_string();
-    sqlx::query(
+    let now = crate::consts::now_secs();
+    let result = sqlx::query(
         "INSERT INTO media
              (song_id, kind, file, size, quality, fingerprint, rule_id, last_used, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
@@ -130,7 +136,8 @@ pub async fn record(
              quality     = excluded.quality,
              fingerprint = excluded.fingerprint,
              rule_id     = excluded.rule_id,
-             last_used   = excluded.last_used",
+             last_used   = excluded.last_used
+         WHERE NOT (excluded.kind = ?9 AND media.kind IN (?10, ?11))",
     )
     .bind(song_id)
     .bind(kind)
@@ -139,9 +146,15 @@ pub async fn record(
     .bind(quality)
     .bind(fingerprint)
     .bind(rule_id)
-    .bind(&now)
+    .bind(now)
+    .bind(KIND_PLAYBACK)
+    .bind(KIND_PERMANENT)
+    .bind(KIND_RULE)
     .execute(pool)
     .await?;
+    if result.rows_affected() == 0 {
+        anyhow::bail!("refusing to replace {song_id}'s downloaded blob with a playback-cache copy");
+    }
     Ok(())
 }
 
@@ -199,6 +212,44 @@ pub async fn store_streamed(
     .await
 }
 
+/// Sanitizes a blob file extension so it can never introduce path traversal or
+/// separator characters: strips leading `.`, keeps only ASCII alphanumeric
+/// characters (up to 12), lowercases, and falls back to `"bin"` if empty.
+pub(crate) fn sanitize_extension(ext: &str) -> String {
+    let clean: String = ext
+        .trim_start_matches('.')
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(12)
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect();
+    if clean.is_empty() {
+        "bin".to_string()
+    } else {
+        clean
+    }
+}
+
+fn safe_blob_path(dir: &Path, file: &str) -> Option<PathBuf> {
+    if file.is_empty() || file.contains('\0') {
+        return None;
+    }
+    let mut components = Path::new(file).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(part)), None) if part == std::ffi::OsStr::new(file) => {
+            let path = dir.join(file);
+            (path.parent() == Some(dir)).then_some(path)
+        }
+        _ => None,
+    }
+}
+
+fn remove_blob_in(dir: &Path, file: &str) {
+    if let Some(path) = safe_blob_path(dir, file) {
+        _ = std::fs::remove_file(path);
+    }
+}
+
 /// The directory-taking half of [`store_streamed`] (also the test seam).
 #[expect(
     clippy::too_many_arguments,
@@ -216,12 +267,16 @@ pub(crate) async fn store_in_dir(
     extension: &str,
     rule_id: Option<&str>,
 ) -> Result<PathBuf> {
-    let file = format!(
-        "{}.{}",
-        crate::digest::md5_hex(song_id.as_bytes())?,
-        extension
+    let ext = sanitize_extension(extension);
+    let file = format!("{}.{}", crate::digest::md5_hex(song_id.as_bytes())?, ext);
+    let Some(final_path) = safe_blob_path(dir, &file) else {
+        anyhow::bail!("refusing unsafe media blob filename: {file}");
+    };
+    anyhow::ensure!(
+        final_path.parent() == Some(dir),
+        "refusing media blob outside target directory: {}",
+        final_path.display()
     );
-    let final_path = dir.join(&file);
     let previous = get(pool, song_id).await?;
 
     if let Err(err) = std::fs::rename(source, &final_path) {
@@ -246,6 +301,7 @@ pub(crate) async fn store_in_dir(
         if previous
             .as_ref()
             .is_none_or(|old| old.file != file || old.kind != kind)
+            && final_path.parent() == Some(dir)
         {
             _ = std::fs::remove_file(&final_path);
         }
@@ -256,7 +312,7 @@ pub(crate) async fn store_in_dir(
         && (old.file != file || old.kind != kind)
         && let Ok(old_dir) = tier_dir(&old.kind)
     {
-        _ = std::fs::remove_file(old_dir.join(&old.file));
+        remove_blob_in(&old_dir, &old.file);
     }
     Ok(final_path)
 }
@@ -275,7 +331,10 @@ pub async fn cached_path(pool: &SqlitePool, song_id: &str) -> Result<Option<Path
     let Some(row) = get(pool, song_id).await? else {
         return Ok(None);
     };
-    let path = tier_dir(&row.kind)?.join(&row.file);
+    let dir = tier_dir(&row.kind)?;
+    let Some(path) = safe_blob_path(&dir, &row.file) else {
+        return Ok(None);
+    };
     Ok(path.is_file().then_some(path))
 }
 
@@ -411,6 +470,7 @@ pub async fn prune_uncovered(dbs: &crate::db::Dbs) -> Result<usize> {
     .await?;
 
     let mut removed = 0;
+    let mut removed_songs: Vec<String> = Vec::new();
     for (song_id, kind, file, rule_kind) in rows {
         let scope = scopes.get(&song_id);
         let artist_covered = scope
@@ -432,15 +492,50 @@ pub async fn prune_uncovered(dbs: &crate::db::Dbs) -> Result<usize> {
         });
         crate::cache::delete_by(&dbs.media, "DELETE FROM media WHERE song_id = ?1", &song_id)
             .await?;
+        removed_songs.push(song_id);
         removed += 1;
+    }
+
+    // N-05: the ledger and the offline catalog must follow the blobs, or a
+    // removed download stays visible/downloaded after its scope is gone.
+    for song_id in &removed_songs {
+        crate::cache::delete_by(
+            &dbs.download,
+            "DELETE FROM download WHERE song_id = ?1",
+            song_id,
+        )
+        .await?;
+    }
+    if !removed_songs.is_empty() {
+        crate::offline::clear_cache();
     }
     Ok(removed)
 }
 
 fn remove_blob(row: &Stored) {
     if let Ok(dir) = tier_dir(&row.kind) {
-        _ = std::fs::remove_file(dir.join(&row.file));
+        remove_blob_in(&dir, &row.file);
     }
+}
+
+/// Clears `active` download-ledger rows left behind by a crashed process.
+///
+/// At most one fetch per song runs in-process (the RAII claims in
+/// `media_actions`), so an `active` row seen outside a fetch is stale and would
+/// otherwise block that song's retries forever (N-05). The daemon calls this
+/// at startup; [`purge`] repeats it after a successful sync as a fallback.
+pub async fn reset_stale_downloads(dbs: &crate::db::Dbs) -> Result<usize> {
+    let result = sqlx::query(
+        "UPDATE download
+            SET state = ?2, error = COALESCE(error, 'interrupted by a restart'), updated_at = ?3
+          WHERE state = ?1",
+    )
+    .bind(crate::download::ACTIVE)
+    .bind(crate::download::ERROR)
+    .bind(crate::consts::now_secs())
+    .execute(&dbs.download)
+    .await?;
+    Ok(result.rows_affected() as usize)
 }
 
 /// Drops blobs for songs that left the library and rows whose rule vanished.
@@ -459,11 +554,17 @@ pub async fn purge(dbs: &crate::db::Dbs) -> Result<usize> {
     // MEMORY: one query carries the rule id too (the old code loaded the
     // whole media table a second time into a `song_id -> rule_id` map), and
     // the library is asked only about the ids this cache actually holds.
+    // N-05: a crash mid-download leaves `active` ledger rows; purge runs on
+    // every successful sync, so recover them here as well as at startup.
+    if let Err(err) = reset_stale_downloads(dbs).await {
+        eprintln!("media: could not reset stale download rows: {err:#}");
+    }
+
     let rows: Vec<PurgeRow> = sqlx::query_as("SELECT song_id, kind, file, rule_id FROM media")
         .fetch_all(&dbs.media)
         .await?;
     if rows.is_empty() {
-        remove_temp_files_all();
+        sweep_temp_files().await;
         return Ok(0);
     }
     let media_ids: Vec<&str> = rows.iter().map(|row| row.song_id.as_str()).collect();
@@ -500,27 +601,52 @@ pub async fn purge(dbs: &crate::db::Dbs) -> Result<usize> {
         removed += 1;
     }
 
-    remove_temp_files_all();
+    sweep_temp_files().await;
     Ok(removed)
 }
 
+/// Temp files (`.part`/`.tmp`) younger than this are active transfers, never
+/// garbage (N-04).
+const TEMP_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Sweeps abandoned temp files on the blocking pool; a just-written `.part`
+/// belongs to a running download and is left alone (N-04, N-18).
+async fn sweep_temp_files() {
+    if let Err(err) = tokio::task::spawn_blocking(remove_temp_files_all).await {
+        eprintln!("media: temp sweep task failed: {err}");
+    }
+}
+
 fn remove_temp_files_all() {
-    for kind in [KIND_PERMANENT, KIND_PLAYBACK] {
+    for kind in [KIND_PERMANENT, KIND_RULE, KIND_PLAYBACK, KIND_ROLLING] {
         if let Ok(dir) = tier_dir(kind) {
             remove_temp_files(&dir);
         }
     }
 }
 
-fn remove_temp_files(dir: &std::path::Path) {
+/// Test seam: the per-directory stale-temp sweep (also runs on the blocking
+/// pool from [`purge`]).
+pub(crate) fn remove_temp_files(dir: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name.ends_with(".tmp") || name.ends_with(".part") {
-            _ = std::fs::remove_file(entry.path());
+        if !(name.ends_with(".tmp") || name.ends_with(".part")) {
+            continue;
+        }
+        let path = entry.path();
+        // An active download/stream-cache writes into its `.part`; only sweep
+        // files old enough to be abandoned (N-04).
+        let stale = std::fs::metadata(&path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age >= TEMP_MIN_AGE);
+        if stale {
+            _ = std::fs::remove_file(path);
         }
     }
 }
@@ -558,20 +684,18 @@ pub async fn path_map_of(
             if kind == KIND_PLAYBACK && quality != playback_quality {
                 continue;
             }
-            if let Ok(dir) = tier_dir(&kind) {
-                let path = dir.join(&file);
-                if path.is_file() {
-                    if kind == KIND_PLAYBACK {
-                        _ = sqlx::query(
-                            "UPDATE media SET last_used = ?2 WHERE song_id = ?1",
-                        )
+            if let Ok(dir) = tier_dir(&kind)
+                && let Some(path) = safe_blob_path(&dir, &file)
+                && path.is_file()
+            {
+                if kind == KIND_PLAYBACK {
+                    _ = sqlx::query("UPDATE media SET last_used = ?2 WHERE song_id = ?1")
                         .bind(&song_id)
                         .bind(now)
                         .execute(pool)
                         .await;
-                    }
-                    map.insert(song_id, path);
                 }
+                map.insert(song_id, path);
             }
         }
     }
@@ -595,7 +719,10 @@ pub async fn playback_path(
     if row.kind != KIND_PLAYBACK || quality_matches.as_deref() != Some(quality) {
         return Ok(None);
     }
-    let path = tier_dir(&row.kind)?.join(&row.file);
+    let dir = tier_dir(&row.kind)?;
+    let Some(path) = safe_blob_path(&dir, &row.file) else {
+        return Ok(None);
+    };
     Ok(path.is_file().then_some(path))
 }
 
@@ -611,25 +738,195 @@ pub async fn touch_playback(pool: &SqlitePool, song_id: &str) -> Result<()> {
 
 /// Evicts the least-recently-used playback blobs until their total size fits
 /// `max_bytes`. Download tiers are never touched.
+///
+/// True LRU: the oldest entries go first, whatever their size, until the
+/// remaining set fits. The previous newest-first greedy pass could delete a
+/// newer large blob and keep older small ones, so recency — not size — must
+/// decide eviction (N-09). `last_used` is an INTEGER column and every writer
+/// binds integers, so the ordering compares like values.
 pub async fn enforce_playback_cap(pool: &SqlitePool, max_bytes: u64) -> Result<usize> {
     let rows: Vec<(String, String, i64)> = sqlx::query_as(
         "SELECT song_id, file, size FROM media WHERE kind = 'playback'
-         ORDER BY last_used DESC, created_at DESC",
+         ORDER BY last_used ASC, created_at ASC",
     )
     .fetch_all(pool)
     .await?;
-    let dir = tier_dir(KIND_PLAYBACK)?;
     let mut total = 0u64;
+    for (_, _, size) in &rows {
+        total = total.saturating_add((*size).max(0) as u64);
+    }
+    if total <= max_bytes {
+        return Ok(0);
+    }
+    let dir = tier_dir(KIND_PLAYBACK)?;
     let mut removed = 0usize;
     for (song_id, file, size) in rows {
-        let size = size.max(0) as u64;
-        if total.saturating_add(size) <= max_bytes {
-            total += size;
-            continue;
+        if total <= max_bytes {
+            break;
         }
-        _ = std::fs::remove_file(dir.join(&file));
+        remove_blob_in(&dir, &file);
         crate::cache::delete_by(pool, "DELETE FROM media WHERE song_id = ?1", &song_id).await?;
+        total = total.saturating_sub(size.max(0) as u64);
         removed += 1;
     }
     Ok(removed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn media_pool() -> SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations_media")
+            .run(&pool)
+            .await
+            .unwrap();
+        pool
+    }
+
+    #[test]
+    fn sanitize_extension_strips_traversal_and_limits_length() {
+        assert_eq!(sanitize_extension(".flac"), "flac");
+        assert_eq!(sanitize_extension("...MP3"), "mp3");
+        assert_eq!(sanitize_extension("../../etc/passwd"), "etcpasswd");
+        assert_eq!(sanitize_extension("../"), "bin");
+        assert_eq!(sanitize_extension(""), "bin");
+        assert_eq!(sanitize_extension("..."), "bin");
+        assert_eq!(sanitize_extension("A123456789012345"), "a12345678901");
+    }
+
+    #[tokio::test]
+    async fn store_in_dir_sanitizes_traversal_suffix() {
+        if let Some(dir_os) = std::env::var_os("MUSIKA_TEST_MEDIA_SUBPROC_DIR") {
+            let blob_dir = PathBuf::from(dir_os);
+            let outside_canary = blob_dir.parent().unwrap().join("outside.txt");
+            let sub_pool = media_pool().await;
+            let row = Stored {
+                song_id: "s-evil".to_string(),
+                kind: KIND_PERMANENT.to_string(),
+                file: "../outside.txt".to_string(),
+            };
+            remove_blob(&row);
+            assert!(
+                outside_canary.is_file(),
+                "remove_blob must reject traversal"
+            );
+
+            record(
+                &sub_pool,
+                "s1",
+                KIND_PERMANENT,
+                "../outside.txt",
+                11,
+                "original",
+                "fp",
+                None,
+            )
+            .await
+            .unwrap();
+            let part2 = blob_dir.join("download2.part");
+            std::fs::write(&part2, b"new-bytes").unwrap();
+            _ = store_in_dir(
+                &sub_pool,
+                &blob_dir,
+                "s1",
+                &part2,
+                9,
+                KIND_PERMANENT,
+                "original",
+                "fp2",
+                "flac",
+                None,
+            )
+            .await
+            .unwrap();
+            assert!(
+                outside_canary.is_file(),
+                "store_in_dir old.file cleanup must reject traversal"
+            );
+            return;
+        }
+
+        let base = std::env::temp_dir().join(format!("musika-media-s05-{}", std::process::id()));
+        _ = std::fs::remove_dir_all(&base);
+        let blob_dir = base.join("blobs");
+        std::fs::create_dir_all(&blob_dir).unwrap();
+
+        let outside_canary = base.join("outside.txt");
+        std::fs::write(&outside_canary, b"keep-outside").unwrap();
+
+        let pool = media_pool().await;
+        let part = blob_dir.join("download.part");
+        std::fs::write(&part, b"audio-bytes").unwrap();
+
+        let stored = store_in_dir(
+            &pool,
+            &blob_dir,
+            "s1",
+            &part,
+            11,
+            KIND_PERMANENT,
+            "original",
+            "fp",
+            "../../outside.txt",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(stored.parent(), Some(blob_dir.as_path()));
+        let expected_name = format!("{}.outsidetxt", crate::digest::md5_hex(b"s1").unwrap());
+        assert_eq!(stored, blob_dir.join(&expected_name));
+        assert!(stored.is_file());
+        assert_eq!(
+            std::fs::read(&outside_canary).unwrap(),
+            b"keep-outside",
+            "outside canary must never be overwritten or removed"
+        );
+
+        // `safe_blob_path` and `remove_blob_in` must reject traversal/non-normal filenames.
+        for bad in [
+            "../outside.txt",
+            "sub/file.flac",
+            "/etc/passwd",
+            ".",
+            "..",
+            "",
+            "./local.flac",
+        ] {
+            assert!(
+                safe_blob_path(&blob_dir, bad).is_none(),
+                "should reject {bad}"
+            );
+            remove_blob_in(&blob_dir, bad);
+        }
+        assert!(outside_canary.is_file());
+
+        // Also test real `remove_blob` and `store_in_dir` old.file cleanup in an
+        // isolated subprocess with `MUSIKA_MEDIA_DIR` pointing at `blob_dir`.
+        let exe = std::env::current_exe().unwrap();
+        let output = std::process::Command::new(&exe)
+            .env("MUSIKA_MEDIA_DIR", &blob_dir)
+            .env("MUSIKA_TEST_MEDIA_SUBPROC_DIR", &blob_dir)
+            .args([
+                "--exact",
+                "media::tests::store_in_dir_sanitizes_traversal_suffix",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "media child failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(outside_canary.is_file());
+
+        _ = std::fs::remove_dir_all(&base);
+    }
 }

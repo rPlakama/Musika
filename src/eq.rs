@@ -87,8 +87,8 @@ impl EqProfile {
                     }
                 }
                 "graphiceq" => {
-                    let bands = parse_graphic(rest)
-                        .with_context(|| format!("line {}", line_no + 1))?;
+                    let bands =
+                        parse_graphic(rest).with_context(|| format!("line {}", line_no + 1))?;
                     filters.extend(bands);
                 }
                 // Equalizer APO may scope a file to a device/channel; Musika
@@ -148,7 +148,10 @@ fn parse_filter(rest: &str) -> Result<Option<EqFilter>> {
                     .parse()
                     .with_context(|| format!("invalid Fc '{}'", tokens[index + 1]))?;
                 index += 2;
-                if tokens.get(index).is_some_and(|unit| unit.eq_ignore_ascii_case("hz")) {
+                if tokens
+                    .get(index)
+                    .is_some_and(|unit| unit.eq_ignore_ascii_case("hz"))
+                {
                     index += 1;
                 }
             }
@@ -172,6 +175,12 @@ fn parse_filter(rest: &str) -> Result<Option<EqFilter>> {
             }
             other => bail!("unexpected Filter token '{other}'"),
         }
+    }
+    if index < tokens.len() {
+        bail!(
+            "unexpected trailing token '{}' in Filter line",
+            tokens[index]
+        );
     }
     if !enabled {
         return Ok(None);
@@ -262,20 +271,42 @@ pub fn list_profiles() -> Vec<String> {
 
 pub fn load_profile(name: &str) -> Result<EqProfile> {
     let path = profile_path(name).with_context(|| format!("profile '{name}' not found"))?;
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("read {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
     EqProfile::parse(name, &text)
 }
 
 pub fn profile_path(name: &str) -> Result<PathBuf> {
+    validate_profile_name(name)?;
     let dir = profiles_dir()?;
     for extension in ["txt", "eq"] {
         let path = dir.join(format!("{name}.{extension}"));
-        if path.is_file() {
+        if path.parent() == Some(dir.as_path()) && path.is_file() {
             return Ok(path);
         }
     }
     bail!("no '{name}.txt' or '{name}.eq' in {}", dir.display())
+}
+
+fn validate_profile_name(name: &str) -> Result<()> {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains('\0')
+        || name.chars().any(std::path::is_separator)
+    {
+        bail!("invalid EQ profile name '{name}'");
+    }
+    let mut components = Path::new(name).components();
+    if !matches!(
+        (components.next(), components.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    ) {
+        bail!("invalid EQ profile name '{name}'");
+    }
+    Ok(())
 }
 
 pub fn profiles_dir() -> Result<PathBuf> {
@@ -285,34 +316,35 @@ pub fn profiles_dir() -> Result<PathBuf> {
 fn is_profile_path(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("txt") || extension.eq_ignore_ascii_case("eq"))
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("txt") || extension.eq_ignore_ascii_case("eq")
+        })
 }
 
 /// Normalized biquad coefficients.
-#[derive(Debug, Clone, Copy)]
-struct Biquad {
-    b0: f32,
-    b1: f32,
-    b2: f32,
-    a1: f32,
-    a2: f32,
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Biquad {
+    pub(crate) b0: f64,
+    pub(crate) b1: f64,
+    pub(crate) b2: f64,
+    pub(crate) a1: f64,
+    pub(crate) a2: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-struct BiquadState {
-    x1: f32,
-    x2: f32,
-    y1: f32,
-    y2: f32,
+pub(crate) struct BiquadState {
+    x1: f64,
+    x2: f64,
+    y1: f64,
+    y2: f64,
 }
 
 impl BiquadState {
-    fn process(&mut self, biquad: &Biquad, x: f32) -> f32 {
-        let y = biquad.b0 * x
-            + biquad.b1 * self.x1
-            + biquad.b2 * self.x2
+    pub(crate) fn process(&mut self, biquad: &Biquad, x: f64) -> f64 {
+        let y = biquad.b0 * x + biquad.b1 * self.x1 + biquad.b2 * self.x2
             - biquad.a1 * self.y1
             - biquad.a2 * self.y2;
+        let y = if y.abs() < 1e-18 { 0.0 } else { y };
         self.x2 = self.x1;
         self.x1 = x;
         self.y2 = self.y1;
@@ -324,20 +356,14 @@ impl BiquadState {
 /// A profile compiled for one sample rate and channel count.
 #[derive(Debug, Clone)]
 pub struct EqRuntime {
-    profile: std::sync::Arc<EqProfile>,
     preamp: f32,
     biquads: Vec<Biquad>,
     states: Vec<Vec<BiquadState>>,
     channels: usize,
-    sample_rate: u32,
 }
 
 impl EqRuntime {
-    pub fn new(
-        profile: std::sync::Arc<EqProfile>,
-        sample_rate: u32,
-        channels: usize,
-    ) -> Self {
+    pub fn new(profile: std::sync::Arc<EqProfile>, sample_rate: u32, channels: usize) -> Self {
         let preamp = profile.gain();
         let biquads = profile
             .filters
@@ -346,21 +372,11 @@ impl EqRuntime {
             .collect();
         let states = vec![vec![BiquadState::default(); channels]; profile.filters.len()];
         Self {
-            profile,
             preamp,
             biquads,
             states,
             channels,
-            sample_rate,
         }
-    }
-
-    pub fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-
-    pub fn profile(&self) -> &EqProfile {
-        &self.profile
     }
 
     /// Applies the chain to interleaved F32 PCM.
@@ -370,20 +386,21 @@ impl EqRuntime {
         }
         let channels = self.channels.max(1);
         let frames = frames.min(pcm.len() / channels);
+        let preamp = f64::from(self.preamp);
         for frame in 0..frames {
             for channel in 0..channels {
                 let index = frame * channels + channel;
-                let mut sample = pcm[index] * self.preamp;
+                let mut sample = f64::from(pcm[index]) * preamp;
                 for (biquad, states) in self.biquads.iter().zip(self.states.iter_mut()) {
                     sample = states[channel].process(biquad, sample);
                 }
-                pcm[index] = sample;
+                pcm[index] = sample as f32;
             }
         }
     }
 }
 
-fn biquad_for(filter: &EqFilter, sample_rate: f64) -> Biquad {
+pub(crate) fn biquad_for(filter: &EqFilter, sample_rate: f64) -> Biquad {
     let freq = filter.freq.clamp(1.0, sample_rate * 0.49);
     let omega = 2.0 * PI * freq / sample_rate;
     let sin = omega.sin();
@@ -401,25 +418,25 @@ fn biquad_for(filter: &EqFilter, sample_rate: f64) -> Biquad {
             1.0 - alpha / a,
         ),
         FilterKind::LowShelf => {
-            let sqrt = (2.0 * a.sqrt() * alpha).sqrt();
+            let beta = 2.0 * a.sqrt() * alpha;
             (
-                a * ((a + 1.0) - (a - 1.0) * cos + 2.0 * sqrt),
+                a * ((a + 1.0) - (a - 1.0) * cos + beta),
                 2.0 * a * ((a - 1.0) - (a + 1.0) * cos),
-                a * ((a + 1.0) - (a - 1.0) * cos - 2.0 * sqrt),
-                (a + 1.0) + (a - 1.0) * cos + 2.0 * sqrt,
+                a * ((a + 1.0) - (a - 1.0) * cos - beta),
+                (a + 1.0) + (a - 1.0) * cos + beta,
                 -2.0 * ((a - 1.0) + (a + 1.0) * cos),
-                (a + 1.0) + (a - 1.0) * cos - 2.0 * sqrt,
+                (a + 1.0) + (a - 1.0) * cos - beta,
             )
         }
         FilterKind::HighShelf => {
-            let sqrt = (2.0 * a.sqrt() * alpha).sqrt();
+            let beta = 2.0 * a.sqrt() * alpha;
             (
-                a * ((a + 1.0) + (a - 1.0) * cos + 2.0 * sqrt),
+                a * ((a + 1.0) + (a - 1.0) * cos + beta),
                 -2.0 * a * ((a - 1.0) + (a + 1.0) * cos),
-                a * ((a + 1.0) + (a - 1.0) * cos - 2.0 * sqrt),
-                (a + 1.0) - (a - 1.0) * cos + 2.0 * sqrt,
+                a * ((a + 1.0) + (a - 1.0) * cos - beta),
+                (a + 1.0) - (a - 1.0) * cos + beta,
                 2.0 * ((a - 1.0) - (a + 1.0) * cos),
-                (a + 1.0) - (a - 1.0) * cos - 2.0 * sqrt,
+                (a + 1.0) - (a - 1.0) * cos - beta,
             )
         }
         FilterKind::LowPass => (
@@ -455,11 +472,142 @@ fn biquad_for(filter: &EqFilter, sample_rate: f64) -> Biquad {
     b2 /= a0;
     a1 /= a0;
     a2 /= a0;
-    Biquad {
-        b0: b0 as f32,
-        b1: b1 as f32,
-        b2: b2 as f32,
-        a1: a1 as f32,
-        a2: a2 as f32,
+    Biquad { b0, b1, b2, a1, a2 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn low_shelf_and_high_shelf_match_rbj_cookbook_dc_and_nyquist_gain() {
+        let fs = 48_000.0;
+        let f0 = fs / 6.0; // 8 kHz: omega = pi/3, so alpha is large and 2*sqrt(A)*alpha != 2*sqrt(2*sqrt(A)*alpha)
+        let gain_db = 12.0;
+        let q = std::f64::consts::FRAC_1_SQRT_2;
+
+        let omega = 2.0 * PI * f0 / fs;
+        let sin = omega.sin();
+        let cos = omega.cos();
+        let alpha = sin / (2.0 * q);
+        let a = 10f64.powf(gain_db / 40.0);
+        let beta = 2.0 * a.sqrt() * alpha;
+        let linear_gain = 10f64.powf(gain_db / 20.0);
+
+        // LowShelf exact RBJ cookbook coefficients
+        let ls = biquad_for(
+            &EqFilter {
+                kind: FilterKind::LowShelf,
+                freq: f0,
+                gain_db,
+                q,
+            },
+            fs,
+        );
+        let ls_a0 = (a + 1.0) + (a - 1.0) * cos + beta;
+        let expected_ls = Biquad {
+            b0: (a * ((a + 1.0) - (a - 1.0) * cos + beta)) / ls_a0,
+            b1: (2.0 * a * ((a - 1.0) - (a + 1.0) * cos)) / ls_a0,
+            b2: (a * ((a + 1.0) - (a - 1.0) * cos - beta)) / ls_a0,
+            a1: (-2.0 * ((a - 1.0) + (a + 1.0) * cos)) / ls_a0,
+            a2: ((a + 1.0) + (a - 1.0) * cos - beta) / ls_a0,
+        };
+        assert!((ls.b0 - expected_ls.b0).abs() < 1e-12);
+        assert!((ls.b1 - expected_ls.b1).abs() < 1e-12);
+        assert!((ls.b2 - expected_ls.b2).abs() < 1e-12);
+        assert!((ls.a1 - expected_ls.a1).abs() < 1e-12);
+        assert!((ls.a2 - expected_ls.a2).abs() < 1e-12);
+
+        // LowShelf DC gain (z = 1) is linear_gain, Nyquist gain (z = -1) is 1.0
+        let ls_dc = (ls.b0 + ls.b1 + ls.b2) / (1.0 + ls.a1 + ls.a2);
+        let ls_nyquist = (ls.b0 - ls.b1 + ls.b2) / (1.0 - ls.a1 + ls.a2);
+        assert!(
+            (ls_dc - linear_gain).abs() < 1e-12,
+            "ls_dc={ls_dc}, expected={linear_gain}"
+        );
+        assert!((ls_nyquist - 1.0).abs() < 1e-12, "ls_nyquist={ls_nyquist}");
+
+        // HighShelf exact RBJ cookbook coefficients
+        let hs = biquad_for(
+            &EqFilter {
+                kind: FilterKind::HighShelf,
+                freq: f0,
+                gain_db,
+                q,
+            },
+            fs,
+        );
+        let hs_a0 = (a + 1.0) - (a - 1.0) * cos + beta;
+        let expected_hs = Biquad {
+            b0: (a * ((a + 1.0) + (a - 1.0) * cos + beta)) / hs_a0,
+            b1: (-2.0 * a * ((a - 1.0) + (a + 1.0) * cos)) / hs_a0,
+            b2: (a * ((a + 1.0) + (a - 1.0) * cos - beta)) / hs_a0,
+            a1: (2.0 * ((a - 1.0) - (a + 1.0) * cos)) / hs_a0,
+            a2: ((a + 1.0) - (a - 1.0) * cos - beta) / hs_a0,
+        };
+        assert!((hs.b0 - expected_hs.b0).abs() < 1e-12);
+        assert!((hs.b1 - expected_hs.b1).abs() < 1e-12);
+        assert!((hs.b2 - expected_hs.b2).abs() < 1e-12);
+        assert!((hs.a1 - expected_hs.a1).abs() < 1e-12);
+        assert!((hs.a2 - expected_hs.a2).abs() < 1e-12);
+
+        // HighShelf DC gain (z = 1) is 1.0, Nyquist gain (z = -1) is linear_gain
+        let hs_dc = (hs.b0 + hs.b1 + hs.b2) / (1.0 + hs.a1 + hs.a2);
+        let hs_nyquist = (hs.b0 - hs.b1 + hs.b2) / (1.0 - hs.a1 + hs.a2);
+        assert!((hs_dc - 1.0).abs() < 1e-12, "hs_dc={hs_dc}");
+        assert!(
+            (hs_nyquist - linear_gain).abs() < 1e-12,
+            "hs_nyquist={hs_nyquist}, expected={linear_gain}"
+        );
+
+        // Time-domain steady-state DC and Nyquist responses + denormal flushing
+        let mut ls_state = BiquadState::default();
+        let mut hs_state = BiquadState::default();
+        let mut ls_out = 0.0;
+        let mut hs_out = 0.0;
+        for _ in 0..512 {
+            ls_out = ls_state.process(&ls, 1.0);
+            hs_out = hs_state.process(&hs, 1.0);
+        }
+        assert!((ls_out - linear_gain).abs() < 1e-9);
+        assert!((hs_out - 1.0).abs() < 1e-9);
+
+        let mut denorm_state = BiquadState::default();
+        assert_eq!(denorm_state.process(&ls, 1e-20), 0.0);
+        assert_eq!(denorm_state.y1, 0.0);
+    }
+
+    #[test]
+    fn profile_path_rejects_traversal() {
+        for bad in [
+            "../etc/passwd",
+            "a/b",
+            "..",
+            ".",
+            "a\\b",
+            "",
+            "/etc/passwd",
+            "./flat",
+        ] {
+            assert!(
+                profile_path(bad).is_err(),
+                "profile_path({bad:?}) must return Err"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_filter_rejects_trailing_unpaired_token() {
+        for bad in [
+            "Filter: ON PK Fc 1000 Hz Gain -3.0 dB Q",
+            "Filter: ON PK Fc 1000 Hz trailing",
+            "Filter: OFF LS Gain",
+            "Filter: ON HS stray",
+        ] {
+            assert!(
+                EqProfile::parse("bad", bad).is_err(),
+                "expected trailing token error for: {bad}"
+            );
+        }
     }
 }

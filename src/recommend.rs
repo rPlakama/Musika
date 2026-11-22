@@ -61,6 +61,34 @@ const GENRE_TOPUP_TAGS: usize = 5;
 static GRAPH_FETCHES: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
+/// RAII claim on one seed's provider-graph fetch (N-10).
+///
+/// The in-flight set used to be cleared only on the task's normal tail, so a
+/// panicking or cancelled refresh leaked the seed forever and no later radio
+/// could retry it. Dropping the guard always releases the claim.
+struct GraphFetchGuard {
+    artist_id: String,
+}
+
+impl GraphFetchGuard {
+    /// Claims the seed, or `None` when another refresh already owns it.
+    fn claim(artist_id: &str) -> Option<Self> {
+        let mut in_flight = GRAPH_FETCHES.lock().unwrap_or_else(PoisonError::into_inner);
+        in_flight.insert(artist_id.to_string()).then(|| Self {
+            artist_id: artist_id.to_string(),
+        })
+    }
+}
+
+impl Drop for GraphFetchGuard {
+    fn drop(&mut self) {
+        GRAPH_FETCHES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.artist_id);
+    }
+}
+
 /// Expands `seed_kind`/`seed_id` into songs similar to it, without network.
 ///
 /// `offline` restricts the candidates to downloaded songs. `rng_seed` makes the
@@ -153,6 +181,11 @@ async fn ordered_similar_artists(dbs: &Dbs, seed: &Seed) -> Result<Vec<String>> 
     };
     let mut artists = cached_similar_artist_ids(dbs, seed_artist).await?;
     maybe_refresh_similar_graph(dbs, seed_artist).await;
+    // N-13: the local ranking is a full-table profile scan plus playlist
+    // queries; skip it when the provider graph alone already fills the window.
+    if artists.len() >= MAX_SIMILAR_ARTISTS {
+        return Ok(artists);
+    }
     for artist in local_similar_artists(dbs, seed).await? {
         if artists.len() >= MAX_SIMILAR_ARTISTS {
             break;
@@ -209,7 +242,6 @@ struct SongFeature {
     starred: Option<String>,
     genre: Option<String>,
     year: Option<i32>,
-    play_count: Option<i64>,
 }
 
 impl SongFeature {
@@ -244,8 +276,6 @@ struct Seed {
 struct AlbumSeedRow {
     id: String,
     artist_id: Option<String>,
-    name: String,
-    artist: Option<String>,
     year: Option<i32>,
     genre: Option<String>,
 }
@@ -273,9 +303,10 @@ async fn load_seed(dbs: &Dbs, kind: &str, id: &str) -> Result<Seed> {
                 genre_texts.push(genre);
             }
             Ok(Seed {
-                artist_id: song.artist_id.clone().or_else(|| {
-                    album.as_ref().and_then(|album| album.artist_id.clone())
-                }),
+                artist_id: song
+                    .artist_id
+                    .clone()
+                    .or_else(|| album.as_ref().and_then(|album| album.artist_id.clone())),
                 genre_texts,
                 year: song
                     .year
@@ -306,12 +337,11 @@ async fn load_seed(dbs: &Dbs, kind: &str, id: &str) -> Result<Seed> {
             })
         }
         "artist" => {
-            let exists = sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM songs WHERE artist_id = ?1",
-            )
-            .bind(id)
-            .fetch_one(&dbs.library)
-            .await?;
+            let exists =
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM songs WHERE artist_id = ?1")
+                    .bind(id)
+                    .fetch_one(&dbs.library)
+                    .await?;
             if exists == 0 {
                 return Err(anyhow!("this artist is not in the local library"));
             }
@@ -373,12 +403,11 @@ async fn artist_genres(dbs: &Dbs, artist_id: &str) -> Result<Vec<(String, i64)>>
 }
 
 async fn artist_mean_year(dbs: &Dbs, artist_id: &str) -> Result<Option<i32>> {
-    let mean: Option<f64> = sqlx::query_scalar(
-        "SELECT AVG(year) FROM songs WHERE artist_id = ?1 AND year > 0",
-    )
-    .bind(artist_id)
-    .fetch_one(&dbs.library)
-    .await?;
+    let mean: Option<f64> =
+        sqlx::query_scalar("SELECT AVG(year) FROM songs WHERE artist_id = ?1 AND year > 0")
+            .bind(artist_id)
+            .fetch_one(&dbs.library)
+            .await?;
     Ok(mean.map(|value| value.round() as i32))
 }
 
@@ -427,23 +456,18 @@ async fn maybe_refresh_similar_graph(dbs: &Dbs, artist_id: &str) {
         return;
     }
     let artist_id = artist_id.to_string();
-    if !GRAPH_FETCHES
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(artist_id.clone())
-    {
+    let Some(guard) = GraphFetchGuard::claim(&artist_id) else {
         return;
-    }
+    };
     let dbs = dbs.clone();
     crate::app::runtime().spawn(async move {
+        // The guard owns the in-flight claim for the whole task, so a panic or
+        // cancellation still releases it through `Drop` (N-10).
+        let _guard = guard;
         let result = refresh_similar_graph(&dbs, &artist_id).await;
         if let Err(err) = result {
-            crate::debug_log!("GPUI: radio similar graph refresh failed: {err:#}");
+            crate::debug_log!("recommend: radio similar graph refresh failed: {err:#}");
         }
-        GRAPH_FETCHES
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&artist_id);
     });
 }
 
@@ -490,7 +514,8 @@ async fn local_similar_artists(dbs: &Dbs, seed: &Seed) -> Result<Vec<String>> {
             continue;
         }
         let genre = if seed_norm > 0.0 {
-            profile.genre_dot(seed_profile) / (seed_norm * profile.genre_norm()).max(f64::MIN_POSITIVE)
+            profile.genre_dot(seed_profile)
+                / (seed_norm * profile.genre_norm()).max(f64::MIN_POSITIVE)
         } else {
             0.0
         };
@@ -606,8 +631,7 @@ async fn artist_profiles(dbs: &Dbs) -> Result<HashMap<String, ArtistProfile>> {
             for token in tokens {
                 let df = document_frequency.get(&token).copied().unwrap_or(1.0);
                 let idf = ((artist_count + 1.0) / (df + 0.5)).ln();
-                *profile.genre_weights.entry(token).or_default() +=
-                    count as f64 * split * idf;
+                *profile.genre_weights.entry(token).or_default() += count as f64 * split * idf;
             }
         }
     }
@@ -642,12 +666,11 @@ fn genre_tokens(genre: &str) -> HashSet<String> {
 /// and candidate artists that share a playlist count once per playlist; the
 /// library's song ids are the join key (`playlist_song.song_id`).
 async fn playlist_affinity(dbs: &Dbs, seed_artist: &str) -> Result<HashMap<String, f64>> {
-    let seed_songs: Vec<String> = sqlx::query_scalar(
-        "SELECT id FROM songs WHERE artist_id = ?1 LIMIT 200",
-    )
-    .bind(seed_artist)
-    .fetch_all(&dbs.library)
-    .await?;
+    let seed_songs: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM songs WHERE artist_id = ?1 LIMIT 200")
+            .bind(seed_artist)
+            .fetch_all(&dbs.library)
+            .await?;
     if seed_songs.is_empty() {
         return Ok(HashMap::new());
     }
@@ -679,9 +702,7 @@ async fn playlist_affinity(dbs: &Dbs, seed_artist: &str) -> Result<HashMap<Strin
         return Ok(HashMap::new());
     }
     let song_ids: Vec<String> = song_counts.iter().map(|(id, _)| id.clone()).collect();
-    let mut builder = sqlx::QueryBuilder::new(
-        "SELECT id, artist_id FROM songs WHERE id IN (",
-    );
+    let mut builder = sqlx::QueryBuilder::new("SELECT id, artist_id FROM songs WHERE id IN (");
     crate::cache::push_in_list(&mut builder, &song_ids);
     let artists: Vec<(String, Option<String>)> = builder
         .build_query_as()
@@ -731,7 +752,10 @@ async fn artist_songs(
                    COALESCE(play_count, 0) DESC, RANDOM() LIMIT ",
     );
     builder.push_bind(limit as i64);
-    let rows = builder.build_query_as::<SongFeature>().fetch_all(&dbs.library).await?;
+    let rows = builder
+        .build_query_as::<SongFeature>()
+        .fetch_all(&dbs.library)
+        .await?;
     Ok(rows)
 }
 
@@ -749,7 +773,10 @@ async fn genre_songs(dbs: &Dbs, seed: &Seed, limit: usize) -> Result<Vec<SongFea
     push_seed_excludes(&mut builder, seed);
     builder.push(" ORDER BY RANDOM() LIMIT ");
     builder.push_bind((limit * 3).max(limit) as i64);
-    let rows = builder.build_query_as::<SongFeature>().fetch_all(&dbs.library).await?;
+    let rows = builder
+        .build_query_as::<SongFeature>()
+        .fetch_all(&dbs.library)
+        .await?;
     Ok(rows)
 }
 
@@ -767,7 +794,10 @@ async fn era_songs(dbs: &Dbs, seed: &Seed, limit: usize) -> Result<Vec<SongFeatu
     push_seed_excludes(&mut builder, seed);
     builder.push(" ORDER BY RANDOM() LIMIT ");
     builder.push_bind((limit * 3).max(limit) as i64);
-    let rows = builder.build_query_as::<SongFeature>().fetch_all(&dbs.library).await?;
+    let rows = builder
+        .build_query_as::<SongFeature>()
+        .fetch_all(&dbs.library)
+        .await?;
     Ok(rows)
 }
 
@@ -779,7 +809,10 @@ async fn random_songs(dbs: &Dbs, seed: &Seed, limit: usize) -> Result<Vec<SongFe
     push_seed_excludes(&mut builder, seed);
     builder.push(" ORDER BY RANDOM() LIMIT ");
     builder.push_bind((limit * 3).max(limit) as i64);
-    let rows = builder.build_query_as::<SongFeature>().fetch_all(&dbs.library).await?;
+    let rows = builder
+        .build_query_as::<SongFeature>()
+        .fetch_all(&dbs.library)
+        .await?;
     Ok(rows)
 }
 
@@ -878,5 +911,26 @@ impl SplitMix64 {
             return 0;
         }
         ((u128::from(self.next()) * u128::from(len)) >> 64) as u64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// N-10: the in-flight claim is a RAII guard, so releasing it can never be
+    /// skipped by an early return (the panic/cancel path is the same `Drop`).
+    #[test]
+    fn graph_fetch_guard_releases_its_claim_on_drop() {
+        let guard = GraphFetchGuard::claim("guard-test").expect("first claim wins");
+        assert!(
+            GraphFetchGuard::claim("guard-test").is_none(),
+            "a second refresh of the same seed is rejected"
+        );
+        drop(guard);
+        assert!(
+            GraphFetchGuard::claim("guard-test").is_some(),
+            "dropping the guard releases the seed for a later retry"
+        );
     }
 }

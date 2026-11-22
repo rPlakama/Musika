@@ -21,7 +21,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -129,10 +129,20 @@ impl FadeState {
     /// frame. A zero-frame callback (paused/empty ring) leaves the ramp where
     /// it is unless the caller forces completion.
     pub(crate) fn apply(&mut self, out: &mut [f32], frames: usize) {
-        if !self.active() || frames == 0 {
+        if frames == 0 {
             return;
         }
         let frames = frames.min(out.len() / ring::CHANNELS);
+        if !self.active() {
+            if self.to == 0.0 {
+                out[..frames * ring::CHANNELS].fill(0.0);
+            } else if (self.to - 1.0).abs() > f32::EPSILON {
+                for sample in &mut out[..frames * ring::CHANNELS] {
+                    *sample *= self.to;
+                }
+            }
+            return;
+        }
         for index in 0..frames {
             let gain = self.current();
             for channel in 0..ring::CHANNELS {
@@ -162,8 +172,13 @@ pub(crate) trait PcmSink: Send + Sync {
     fn reset(&self);
     fn close_writes(&self);
     fn played_frames(&self) -> u64;
+    fn read_frames(&self) -> u64;
     fn buffered_frames(&self) -> u64;
     fn underruns(&self) -> u64;
+    #[expect(
+        dead_code,
+        reason = "the failure flag is inspected through Sink::failed, never through the trait object"
+    )]
     fn failed(&self) -> bool;
 }
 
@@ -172,6 +187,10 @@ pub(crate) trait PcmSink: Send + Sync {
 /// Field order matters: `listener` unregisters its hook when dropped, so it
 /// must be dropped while `stream` is still alive.
 struct ActiveStream<'c> {
+    #[expect(
+        dead_code,
+        reason = "kept only for its drop side effect: dropping the listener unregisters the stream hook"
+    )]
     listener: pw::stream::StreamListener<RtContext>,
     stream: pw::stream::StreamBox<'c>,
 }
@@ -179,6 +198,8 @@ struct ActiveStream<'c> {
 pub(crate) struct Sink {
     ring: Arc<Ring>,
     shared: Arc<Shared>,
+    hw_volume_active: Arc<AtomicBool>,
+    hw_mute_active: Arc<AtomicBool>,
     commands: pw::channel::Sender<SinkCommand>,
     thread: Option<JoinHandle<()>>,
 }
@@ -186,18 +207,33 @@ pub(crate) struct Sink {
 impl Sink {
     pub(crate) fn new(shared: Arc<Shared>) -> Result<Self, String> {
         let ring = Arc::new(Ring::new()?);
+        let hw_volume_active = Arc::new(AtomicBool::new(false));
+        let hw_mute_active = Arc::new(AtomicBool::new(false));
         let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
         let (command_tx, command_rx) = pw::channel::channel::<SinkCommand>();
         let thread_ring = Arc::clone(&ring);
         let thread_shared = Arc::clone(&shared);
+        let thread_hw_volume = Arc::clone(&hw_volume_active);
+        let thread_hw_mute = Arc::clone(&hw_mute_active);
         let thread = thread::Builder::new()
             .name("musika-pipewire".to_string())
-            .spawn(move || sink_thread(thread_ring, thread_shared, command_rx, ready_tx))
+            .spawn(move || {
+                sink_thread(
+                    thread_ring,
+                    thread_shared,
+                    thread_hw_volume,
+                    thread_hw_mute,
+                    command_rx,
+                    ready_tx,
+                )
+            })
             .map_err(|error| format!("cannot start PipeWire thread: {error}"))?;
         match ready_rx.recv_timeout(Duration::from_secs(10)) {
             Ok(Ok(())) => Ok(Self {
                 ring,
                 shared,
+                hw_volume_active,
+                hw_mute_active,
                 commands: command_tx,
                 thread: Some(thread),
             }),
@@ -214,11 +250,6 @@ impl Sink {
 
     pub(crate) fn ring(&self) -> &Arc<Ring> {
         &self.ring
-    }
-
-    /// Descriptor the engine polls for boundary/stream-state wakeups.
-    pub(crate) fn wake_fd(&self) -> libc::c_int {
-        self.shared.wake_fd()
     }
 
     pub(crate) fn epoch(&self) -> u64 {
@@ -295,7 +326,7 @@ impl Sink {
     }
 
     pub(crate) fn set_muted(&self, muted: bool) {
-        self.ring.set_muted(muted);
+        update_software_mute(&self.ring, &self.hw_mute_active, muted);
         _ = self.commands.send(SinkCommand::SetMuted(muted));
     }
 
@@ -305,11 +336,15 @@ impl Sink {
     /// two paths cannot attenuate the signal twice.
     pub(crate) fn set_volume(&self, volume: f64) {
         let volume = volume.clamp(0.0, 1.0);
-        self.ring.set_volume(volume);
+        update_software_volume(&self.ring, &self.hw_volume_active, volume);
         _ = self.commands.send(SinkCommand::SetVolume(volume as f32));
     }
 
     pub(crate) fn flush(&self) {
+        // A seek/flush discards the frames the armed gapless boundary was
+        // measured in; disarming prevents a spurious `Boundary` when the read
+        // counter reaches the old marker in the new timeline (P-01).
+        self.shared.disarm_boundary();
         self.ring.flush();
     }
 
@@ -325,6 +360,10 @@ impl Sink {
         self.ring.played_frames()
     }
 
+    pub(crate) fn read_frames(&self) -> u64 {
+        self.ring.read_frames()
+    }
+
     pub(crate) fn buffered_frames(&self) -> u64 {
         self.ring.buffered_frames()
     }
@@ -333,17 +372,15 @@ impl Sink {
         self.ring.underruns()
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "only the PipeWire sink tests inspect the failure flag"
+        )
+    )]
     pub(crate) fn failed(&self) -> bool {
         self.ring.failed()
-    }
-
-    /// Last reported PipeWire stream state.
-    pub(crate) fn stream_state(&self) -> SinkState {
-        self.shared
-            .sink
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .state
     }
 }
 
@@ -358,13 +395,34 @@ impl Drop for Sink {
     }
 }
 
+fn update_software_volume(ring: &Ring, hw_volume_active: &AtomicBool, volume: f64) {
+    if !hw_volume_active.load(Ordering::Acquire) {
+        ring.set_volume(volume);
+    }
+}
+
+fn update_software_mute(ring: &Ring, hw_mute_active: &AtomicBool, muted: bool) {
+    if !hw_mute_active.load(Ordering::Acquire) {
+        ring.set_muted(muted);
+    }
+}
+
 fn sink_thread(
     ring: Arc<Ring>,
     shared: Arc<Shared>,
+    hw_volume_active: Arc<AtomicBool>,
+    hw_mute_active: Arc<AtomicBool>,
     commands: pw::channel::Receiver<SinkCommand>,
     ready: mpsc::SyncSender<Result<(), String>>,
 ) {
-    let result = run_sink(ring, shared, commands, ready.clone());
+    let result = run_sink(
+        ring,
+        shared,
+        hw_volume_active,
+        hw_mute_active,
+        commands,
+        ready.clone(),
+    );
     if let Err(error) = result {
         _ = ready.send(Err(error));
     }
@@ -380,10 +438,16 @@ fn log_refused_control(id: u32) {
 
 /// Applies the requested stream volume to the graph node and the software
 /// fallback. Returns whether the node accepted the control.
-fn apply_volume(stream: &pw::stream::Stream, ring: &Ring, volume: f32) -> bool {
+fn apply_volume(
+    stream: &pw::stream::Stream,
+    ring: &Ring,
+    hw_volume_active: &AtomicBool,
+    volume: f32,
+) -> bool {
     let applied = stream
         .set_control(spa_sys::SPA_PROP_channelVolumes, &[volume, volume])
         .is_ok();
+    hw_volume_active.store(applied, Ordering::Release);
     // The graph applies the gain when it accepted the control; then the sample
     // path stays at unity so volume is not squared. A refused control keeps the
     // software gain at the requested value.
@@ -396,10 +460,16 @@ fn apply_volume(stream: &pw::stream::Stream, ring: &Ring, volume: f32) -> bool {
 
 /// Applies the requested soft-mute to the graph node and the software
 /// fallback. Returns whether the node accepted the control.
-fn apply_mute(stream: &pw::stream::Stream, ring: &Ring, muted: bool) -> bool {
+fn apply_mute(
+    stream: &pw::stream::Stream,
+    ring: &Ring,
+    hw_mute_active: &AtomicBool,
+    muted: bool,
+) -> bool {
     let applied = stream
         .set_control(spa_sys::SPA_PROP_softMute, &[if muted { 1.0 } else { 0.0 }])
         .is_ok();
+    hw_mute_active.store(applied, Ordering::Release);
     // The graph mutes or the samples are zeroed, never both silently left to
     // the wrong path.
     ring.set_muted(if applied { false } else { muted });
@@ -512,9 +582,10 @@ fn build_stream<'c>(
 ///
 /// The ring rate (and its rate-scaled usable limit) is updated first, so a
 /// producer that wakes up between the rebuild steps still sees the new limit;
-/// the old stream is only dropped once the replacement is connected.
+/// the old stream is dropped before the replacement is built so its teardown
+/// callback cannot clobber `SinkState::Connecting`.
 fn switch_format<'c>(
-    active: &mut ActiveStream<'c>,
+    active: &mut Option<ActiveStream<'c>>,
     core: &'c pw::core::Core,
     ring: &Arc<Ring>,
     shared: &Arc<Shared>,
@@ -523,14 +594,16 @@ fn switch_format<'c>(
     exclusive: bool,
 ) -> Result<(), String> {
     let rate = rate.clamp(1, ring::MAX_RATE);
-    if rate == ring.rate() {
+    if rate == ring.rate() && active.is_some() {
         return Ok(());
     }
     let previous_rate = ring.set_rate(rate);
     // Frames queued at the old rate must not be presented as if they were
     // produced at the new rate. The producer blocks on the flush until the
     // rebuilt stream's first process callback services it.
+    shared.disarm_boundary();
     ring.flush();
+    *active = None;
     match build_stream(core, ring, shared, rate, target, exclusive) {
         Ok(next) => {
             ring.set_failed(false);
@@ -538,12 +611,12 @@ fn switch_format<'c>(
             if let Err(error) = next.stream.set_active(!ring.paused()) {
                 crate::debug_log!("pipewire: cannot restore stream active state: {error}");
             }
-            *active = next;
+            *active = Some(next);
             Ok(())
         }
         Err(error) => {
-            // Keep the old stream usable: restore the ring's previous rate.
             ring.set_rate(previous_rate);
+            shared.disarm_boundary();
             ring.flush();
             Err(error)
         }
@@ -553,7 +626,7 @@ fn switch_format<'c>(
 /// Rebuilds the stream for a different target at the current rate. Unlike a
 /// format change this keeps the queued PCM: only the graph node changes.
 fn rebuild_stream<'c>(
-    active: &mut ActiveStream<'c>,
+    active: &mut Option<ActiveStream<'c>>,
     core: &'c pw::core::Core,
     ring: &Arc<Ring>,
     shared: &Arc<Shared>,
@@ -561,14 +634,27 @@ fn rebuild_stream<'c>(
     target: Option<&str>,
     exclusive: bool,
 ) -> Result<(), String> {
+    *active = None;
     let next = build_stream(core, ring, shared, rate, target, exclusive)?;
     ring.set_failed(false);
     shared.set_sink_state(SinkState::Connecting, None);
     if let Err(error) = next.stream.set_active(!ring.paused()) {
         crate::debug_log!("pipewire: cannot restore stream active state: {error}");
     }
-    *active = next;
+    *active = Some(next);
     Ok(())
+}
+
+/// Records a `default.audio.sink` property notification and returns `true`
+/// only when the default sink actually changed after the initial bind seed.
+fn record_default_sink_change(last_default: &mut Option<String>, value: Option<&str>) -> bool {
+    let next = value.unwrap_or_default();
+    let changed = match last_default.as_deref() {
+        Some(previous) => previous != next,
+        None => false,
+    };
+    *last_default = Some(next.to_string());
+    changed
 }
 
 /// Clears `target` when the registry-ready snapshot has no sink with that
@@ -594,6 +680,8 @@ fn take_missing_target(
 fn run_sink(
     ring: Arc<Ring>,
     shared: Arc<Shared>,
+    hw_volume_active: Arc<AtomicBool>,
+    hw_mute_active: Arc<AtomicBool>,
     commands: pw::channel::Receiver<SinkCommand>,
     ready: mpsc::SyncSender<Result<(), String>>,
 ) -> Result<(), String> {
@@ -615,6 +703,14 @@ fn run_sink(
         move |command| pending.borrow_mut().push_back(command)
     });
 
+    let pause_deactivate_due = Rc::new(Cell::new(false));
+    let pause_timer = mainloop.loop_().add_timer({
+        let pause_deactivate_due = Rc::clone(&pause_deactivate_due);
+        move |_expirations| {
+            pause_deactivate_due.set(true);
+        }
+    });
+
     // Follow the default sink live: PipeWire publishes it through the
     // `default` metadata object. Rebinding replaces the previous proxy; the
     // callback only sets a flag, so a graph change never re-enters the stream
@@ -623,8 +719,10 @@ fn run_sink(
         .get_registry_rc()
         .map_err(|error| format!("cannot read PipeWire registry: {error}"))?;
     let default_changed = Rc::new(Cell::new(false));
-    let metadata_keep: Rc<RefCell<Option<(pw::metadata::Metadata, pw::metadata::MetadataListener)>>> =
-        Rc::new(RefCell::new(None));
+    let last_default: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let metadata_keep: Rc<
+        RefCell<Option<(pw::metadata::Metadata, pw::metadata::MetadataListener)>>,
+    > = Rc::new(RefCell::new(None));
     // The selected node is checked against this live registry snapshot. A
     // removed node is not necessarily a stream error: PipeWire can fall back
     // to the default sink silently, so waiting for `SinkFailed` would leave
@@ -637,6 +735,7 @@ fn run_sink(
         .global({
             let registry = registry.clone();
             let default_changed = Rc::clone(&default_changed);
+            let last_default = Rc::clone(&last_default);
             let metadata_keep = Rc::clone(&metadata_keep);
             let sinks = Rc::clone(&sinks);
             move |global| {
@@ -660,16 +759,17 @@ fn run_sink(
                 if !is_default {
                     return;
                 }
-                let Ok(metadata) =
-                    registry.bind::<pw::metadata::Metadata, _>(global)
-                else {
+                let Ok(metadata) = registry.bind::<pw::metadata::Metadata, _>(global) else {
                     return;
                 };
                 let changed = Rc::clone(&default_changed);
+                let last_default = Rc::clone(&last_default);
                 let listener = metadata
                     .add_listener_local()
-                    .property(move |_subject, key, _type, _value| {
-                        if key == Some("default.audio.sink") {
+                    .property(move |_subject, key, _type, value| {
+                        if key == Some("default.audio.sink")
+                            && record_default_sink_change(&mut last_default.borrow_mut(), value)
+                        {
                             changed.set(true);
                         }
                         0
@@ -701,14 +801,14 @@ fn run_sink(
         .register();
 
     let mut exclusive = false;
-    let mut active = build_stream(
+    let mut active = Some(build_stream(
         &core,
         &ring,
         &shared,
         ring.rate(),
         target.borrow().as_deref(),
         exclusive,
-    )?;
+    )?);
     let mut volume = 1.0f32;
     let mut muted = false;
     // The freshly built node starts at unity; re-apply the mixer controls once
@@ -732,25 +832,34 @@ fn run_sink(
                     if paused {
                         // Let the RT callback consume the buffered tail
                         // through the fade-out envelope before deactivating
-                        // the stream. The main loop may sleep here; process
-                        // callbacks run on the RT thread.
-                        std::thread::sleep(FADE_STOP_GRACE);
-                    }
-                    // A failure surfaces asynchronously as a stream-state
-                    // error; the engine then recovers the sink.
-                    if let Err(error) = active.stream.set_active(!paused) {
-                        crate::debug_log!("pipewire: cannot set stream active state: {error}");
+                        // the stream without blocking the PipeWire loop thread.
+                        pause_deactivate_due.set(false);
+                        _ = pause_timer.update_timer(Some(FADE_STOP_GRACE), None);
+                    } else {
+                        pause_deactivate_due.set(false);
+                        _ = pause_timer.update_timer(None, None);
+                        if let Some(active) = active.as_ref()
+                            && let Err(error) = active.stream.set_active(true)
+                        {
+                            crate::debug_log!("pipewire: cannot set stream active state: {error}");
+                        }
                     }
                 }
                 SinkCommand::SetVolume(value) => {
                     volume = value;
-                    apply_volume(&active.stream, &ring, volume);
+                    if let Some(active) = active.as_ref() {
+                        apply_volume(&active.stream, &ring, &hw_volume_active, volume);
+                    }
                 }
                 SinkCommand::SetMuted(value) => {
                     muted = value;
-                    apply_mute(&active.stream, &ring, muted);
+                    if let Some(active) = active.as_ref() {
+                        apply_mute(&active.stream, &ring, &hw_mute_active, muted);
+                    }
                 }
                 SinkCommand::SetFormat { rate, ack } => {
+                    pause_deactivate_due.set(false);
+                    _ = pause_timer.update_timer(None, None);
                     let result = switch_format(
                         &mut active,
                         &core,
@@ -760,10 +869,14 @@ fn run_sink(
                         target.borrow().as_deref(),
                         exclusive,
                     );
-                    if result.is_ok() {
+                    if result.is_ok()
+                        && let Some(active) = active.as_ref()
+                    {
                         // Replay the mixer state on the rebuilt node.
-                        let volume_applied = apply_volume(&active.stream, &ring, volume);
-                        let mute_applied = apply_mute(&active.stream, &ring, muted);
+                        let volume_applied =
+                            apply_volume(&active.stream, &ring, &hw_volume_active, volume);
+                        let mute_applied =
+                            apply_mute(&active.stream, &ring, &hw_mute_active, muted);
                         controls_dirty = !(volume_applied && mute_applied);
                     }
                     if ack.send(result).is_err() {
@@ -771,12 +884,10 @@ fn run_sink(
                     }
                 }
                 SinkCommand::SetTarget { target: next, ack } => {
+                    pause_deactivate_due.set(false);
+                    _ = pause_timer.update_timer(None, None);
                     *target.borrow_mut() = next;
-                    let fallback = take_missing_target(
-                        &target,
-                        &sinks,
-                        registry_ready.get(),
-                    );
+                    let fallback = take_missing_target(&target, &sinks, registry_ready.get());
                     let result = rebuild_stream(
                         &mut active,
                         &core,
@@ -786,9 +897,13 @@ fn run_sink(
                         target.borrow().as_deref(),
                         exclusive,
                     );
-                    if result.is_ok() {
-                        let volume_applied = apply_volume(&active.stream, &ring, volume);
-                        let mute_applied = apply_mute(&active.stream, &ring, muted);
+                    if result.is_ok()
+                        && let Some(active) = active.as_ref()
+                    {
+                        let volume_applied =
+                            apply_volume(&active.stream, &ring, &hw_volume_active, volume);
+                        let mute_applied =
+                            apply_mute(&active.stream, &ring, &hw_mute_active, muted);
                         controls_dirty = !(volume_applied && mute_applied);
                     }
                     if let Some(lost) = fallback {
@@ -802,6 +917,8 @@ fn run_sink(
                     exclusive: next,
                     ack,
                 } => {
+                    pause_deactivate_due.set(false);
+                    _ = pause_timer.update_timer(None, None);
                     exclusive = next;
                     let result = rebuild_stream(
                         &mut active,
@@ -812,9 +929,13 @@ fn run_sink(
                         target.borrow().as_deref(),
                         exclusive,
                     );
-                    if result.is_ok() {
-                        let volume_applied = apply_volume(&active.stream, &ring, volume);
-                        let mute_applied = apply_mute(&active.stream, &ring, muted);
+                    if result.is_ok()
+                        && let Some(active) = active.as_ref()
+                    {
+                        let volume_applied =
+                            apply_volume(&active.stream, &ring, &hw_volume_active, volume);
+                        let mute_applied =
+                            apply_mute(&active.stream, &ring, &hw_mute_active, muted);
                         controls_dirty = !(volume_applied && mute_applied);
                     }
                     if ack.send(result).is_err() {
@@ -825,10 +946,18 @@ fn run_sink(
             }
         }
         if running
-            && let Some(lost) = take_missing_target(&target, &sinks, registry_ready.get())
+            && pause_deactivate_due.replace(false)
+            && ring.paused()
+            && let Some(active) = active.as_ref()
+            && let Err(error) = active.stream.set_active(false)
         {
+            crate::debug_log!("pipewire: cannot set stream active state: {error}");
+        }
+        if running && let Some(lost) = take_missing_target(&target, &sinks, registry_ready.get()) {
             // PipeWire can silently relink a stream whose target vanished;
             // make the fallback explicit and tell the service to persist it.
+            pause_deactivate_due.set(false);
+            _ = pause_timer.update_timer(None, None);
             let result = rebuild_stream(
                 &mut active,
                 &core,
@@ -838,14 +967,18 @@ fn run_sink(
                 None,
                 exclusive,
             );
-            if result.is_ok() {
-                let volume_applied = apply_volume(&active.stream, &ring, volume);
-                let mute_applied = apply_mute(&active.stream, &ring, muted);
+            if result.is_ok()
+                && let Some(active) = active.as_ref()
+            {
+                let volume_applied = apply_volume(&active.stream, &ring, &hw_volume_active, volume);
+                let mute_applied = apply_mute(&active.stream, &ring, &hw_mute_active, muted);
                 controls_dirty = !(volume_applied && mute_applied);
             }
             shared.set_output_fallback(lost);
         }
         if running && default_changed.replace(false) && target.borrow().is_none() {
+            pause_deactivate_due.set(false);
+            _ = pause_timer.update_timer(None, None);
             let result = rebuild_stream(
                 &mut active,
                 &core,
@@ -855,21 +988,24 @@ fn run_sink(
                 None,
                 exclusive,
             );
-            if result.is_ok() {
-                let volume_applied = apply_volume(&active.stream, &ring, volume);
-                let mute_applied = apply_mute(&active.stream, &ring, muted);
+            if result.is_ok()
+                && let Some(active) = active.as_ref()
+            {
+                let volume_applied = apply_volume(&active.stream, &ring, &hw_volume_active, volume);
+                let mute_applied = apply_mute(&active.stream, &ring, &hw_mute_active, muted);
                 controls_dirty = !(volume_applied && mute_applied);
             }
         }
         if running
             && controls_dirty
+            && let Some(active) = active.as_ref()
             && matches!(
                 active.stream.state(),
                 pw::stream::StreamState::Paused | pw::stream::StreamState::Streaming
             )
         {
-            let volume_applied = apply_volume(&active.stream, &ring, volume);
-            let mute_applied = apply_mute(&active.stream, &ring, muted);
+            let volume_applied = apply_volume(&active.stream, &ring, &hw_volume_active, volume);
+            let mute_applied = apply_mute(&active.stream, &ring, &hw_mute_active, muted);
             controls_dirty = !(volume_applied && mute_applied);
         }
     }
@@ -934,10 +1070,11 @@ fn process(stream: &pw::stream::Stream, ctx: &mut RtContext) {
         }
     }
     // Gapless boundary as an event: the armed boundary frame lives in the same
-    // absolute frame space as `played`. Wake the engine; it consumes the
+    // absolute frame space as `read`. Wake the engine; it consumes the
     // boundary and disarms it, so the write happens at most a handful of times.
-    if ctx.shared.boundary_active.load(Ordering::Acquire)
-        && ring.played_frames() >= ctx.shared.boundary_frame.load(Ordering::Acquire)
+    if ctx
+        .shared
+        .boundary_reached(ring.epoch(), ring.read_frames())
     {
         ctx.shared.signal();
     }
@@ -995,6 +1132,9 @@ impl PcmSink for Sink {
     }
     fn played_frames(&self) -> u64 {
         self.played_frames()
+    }
+    fn read_frames(&self) -> u64 {
+        self.read_frames()
     }
     fn buffered_frames(&self) -> u64 {
         self.buffered_frames()
@@ -1066,9 +1206,77 @@ mod tests {
         let mut after = vec![0.5f32; 64 * ring::CHANNELS];
         fade.apply(&mut after, 64);
         assert!(
-            after.iter().all(|sample| *sample == 0.5),
-            "once the ramp is done, the (paused) callback emits silence separately"
+            after.iter().all(|sample| *sample == 0.0),
+            "once the ramp is done, FadeState holds 0.0 to prevent post-fade pops"
         );
+    }
+
+    #[test]
+    fn fade_state_holds_zero_after_fade_out_completes() {
+        let mut fade = FadeState::new();
+        fade.start(0.0, 48_000);
+        let mut block = vec![1.0f32; 1200 * ring::CHANNELS];
+        fade.apply(&mut block, 1200);
+        assert!(!fade.active());
+        assert_eq!(fade.current(), 0.0);
+
+        let mut tail = vec![0.8f32; 128 * ring::CHANNELS];
+        fade.apply(&mut tail, 128);
+        assert!(
+            tail.iter().all(|sample| *sample == 0.0),
+            "completed fade-out must continue zeroing buffered tail frames until fade-in"
+        );
+    }
+
+    #[test]
+    fn software_ring_volume_is_not_double_applied_when_hw_volume_active() {
+        let ring = Ring::new().expect("ring");
+        let hw_volume_active = AtomicBool::new(false);
+        let hw_mute_active = AtomicBool::new(false);
+
+        // When hardware controls are inactive, software fallback updates the ring.
+        update_software_volume(&ring, &hw_volume_active, 0.4);
+        assert_eq!(ring.volume_milli(), 400);
+        update_software_mute(&ring, &hw_mute_active, true);
+        assert!(ring.muted());
+
+        // When PipeWire hardware controls are active, ring stays at unity/unmuted
+        // and Sink::set_volume / set_muted do not overwrite it with software attenuation.
+        hw_volume_active.store(true, Ordering::Release);
+        hw_mute_active.store(true, Ordering::Release);
+        ring.set_volume(1.0);
+        ring.set_muted(false);
+
+        update_software_volume(&ring, &hw_volume_active, 0.25);
+        assert_eq!(
+            ring.volume_milli(),
+            1000,
+            "ring volume must stay at unity when hw_volume_active is true"
+        );
+        update_software_mute(&ring, &hw_mute_active, true);
+        assert!(
+            !ring.muted(),
+            "ring mute must stay false when hw_mute_active is true"
+        );
+    }
+
+    #[test]
+    fn initial_default_sink_property_does_not_mark_default_changed() {
+        let mut last_default = None;
+        assert!(
+            !record_default_sink_change(&mut last_default, Some("alsa_output.one")),
+            "initial bind enumeration must seed last_default without triggering a rebuild"
+        );
+        assert_eq!(last_default.as_deref(), Some("alsa_output.one"));
+        assert!(
+            !record_default_sink_change(&mut last_default, Some("alsa_output.one")),
+            "repeating the same sink name must not trigger a rebuild"
+        );
+        assert!(
+            record_default_sink_change(&mut last_default, Some("alsa_output.two")),
+            "changing to a new default sink must trigger a rebuild"
+        );
+        assert_eq!(last_default.as_deref(), Some("alsa_output.two"));
     }
 
     #[test]

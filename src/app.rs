@@ -19,10 +19,9 @@
 
 use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 
-use sqlx::SqlitePool;
 use tokio::runtime::Runtime;
 
-static DBS: OnceLock<RwLock<Arc<crate::db::Dbs>>> = OnceLock::new();
+static DBS: OnceLock<RwLock<Option<Arc<crate::db::Dbs>>>> = OnceLock::new();
 
 /// The databases opened at start-up. An owned handle over a swappable slot —
 /// repeated wipes no longer leak a database set per pass; the old set is
@@ -30,7 +29,7 @@ static DBS: OnceLock<RwLock<Arc<crate::db::Dbs>>> = OnceLock::new();
 pub fn dbs() -> Option<Arc<crate::db::Dbs>> {
     let slot = DBS.get()?;
     let guard = slot.read().unwrap_or_else(PoisonError::into_inner);
-    Some(Arc::clone(&guard))
+    guard.as_ref().cloned()
 }
 
 /// Swaps in a freshly initialised set (the full wipe deletes the files and
@@ -41,31 +40,44 @@ pub fn set_dbs(dbs: crate::db::Dbs) {
     // from; a fresh set starts cold and rebuilds on first search/sync.
     crate::search::index::clear();
     let dbs = Arc::new(dbs);
-    match DBS.get() {
-        Some(slot) => {
-            let mut guard = slot.write().unwrap_or_else(PoisonError::into_inner);
-            let old = std::mem::replace(&mut *guard, Arc::clone(&dbs));
-            drop(guard);
-            drop_dbs(old);
-        }
-        None => {
-            _ = DBS.set(RwLock::new(dbs));
-        }
+    let slot = DBS.get_or_init(|| RwLock::new(None));
+    let mut guard = slot.write().unwrap_or_else(PoisonError::into_inner);
+    let old = guard.replace(dbs);
+    drop(guard);
+    if let Some(old) = old {
+        drop_dbs(old);
     }
 }
 
-/// Closes the distinct pools of an old database set off the Qt/DB threads.
-fn drop_dbs(old: Arc<crate::db::Dbs>) {
-    runtime().spawn(async move {
-        for pool in [&old.library, &old.search, &old.media] {
-            pool.clone().close().await;
-        }
-    });
+/// Takes the active database set out of the slot and waits until every pool is
+/// closed. Account removal calls this before deleting the account's data root:
+/// deleting files under live SQLite handles would race the pools and leave the
+/// directory half-removed (S-09).
+pub async fn close_dbs() {
+    crate::search::index::clear();
+    let Some(slot) = DBS.get() else {
+        return;
+    };
+    let old = {
+        let mut guard = slot.write().unwrap_or_else(PoisonError::into_inner);
+        guard.take()
+    };
+    if let Some(old) = old {
+        close_pools(old).await;
+    }
 }
 
-/// Convenience accessor for the credentials database.
-pub fn pool() -> Option<SqlitePool> {
-    dbs().map(|dbs| dbs.credentials.clone())
+/// Closes the distinct pools of a database set. The remaining logical pools
+/// (`credentials`, `covers`, `covers` aliases, ...) are clones of these four.
+async fn close_pools(old: Arc<crate::db::Dbs>) {
+    for pool in [&old.library, &old.sync, &old.search, &old.media] {
+        pool.clone().close().await;
+    }
+}
+
+/// Closes the distinct pools of an old database set off the UI/DB threads.
+fn drop_dbs(old: Arc<crate::db::Dbs>) {
+    runtime().spawn(close_pools(old));
 }
 
 /// Every core the machine has. Scope switches are user-initiated bulk reads,

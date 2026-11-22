@@ -97,7 +97,6 @@ impl AppRoot {
                 if self.syncing {
                     self.push_toast(
                         "Wait for the sync to finish before wiping.".to_string(),
-                        ToastKind::Notice,
                         None,
                     );
                     return;
@@ -153,7 +152,7 @@ impl AppRoot {
         match row.kind {
             RowKind::Song => QuickMenu::song_with(row.starred),
             RowKind::Album => QuickMenu::album_with(
-                !row.album_id.is_empty() && self.marks.albums_done.contains(&row.album_id),
+                !row.album_id.is_empty() && self.marks.downloaded("", &row.album_id),
                 row.starred,
                 row.rating.clamp(0, 5) as u8,
             ),
@@ -372,7 +371,11 @@ impl AppRoot {
                     .filter(|(id, _, _)| *id == album_id)
                     .map(|(_, starred, rating)| (*starred, *rating))
                     .unwrap_or((false, 0));
-                let cached = self.marks.albums_done.contains(&album_id);
+                // Honor the optimistic removal overlay: a downloaded badge
+                // (or the download verb's cached direction) must flip back
+                // immediately after "remove download", even before the next
+                // marks window lands.
+                let cached = self.marks.downloaded("", &album_id);
                 let menu = QuickMenu::album_with(cached, starred, rating);
                 let target = AltTarget {
                     kind: RowKind::Album,
@@ -461,11 +464,14 @@ impl AppRoot {
 
         if self.queue_open && self.queue_list.selection.active() {
             let queue = self.player.queue_snapshot();
-            let anchor_index = self.queue_list.selection.anchor().unwrap_or(self.queue_list.cursor);
-            let lo = anchor_index.min(self.queue_list.cursor);
-            let hi = anchor_index
-                .max(self.queue_list.cursor)
-                .min(queue.len().saturating_sub(1));
+            let anchor_index = self
+                .queue_list
+                .selection
+                .anchor()
+                .unwrap_or(self.queue_list.cursor);
+            let last = queue.len().saturating_sub(1);
+            let lo = anchor_index.min(self.queue_list.cursor).min(last);
+            let hi = anchor_index.max(self.queue_list.cursor).min(last);
             let tracks = queue.get(lo..=hi).unwrap_or_default();
             if tracks.is_empty() {
                 return None;
@@ -523,8 +529,11 @@ impl AppRoot {
             && page.list.selection.active()
         {
             let anchor_index = page.list.selection.anchor().unwrap_or(page.list.cursor);
-            let lo = anchor_index.min(page.list.cursor);
-            let hi = anchor_index.max(page.list.cursor);
+            // A selection can outlive the row list for one frame after a page
+            // switch; clamp the band so the slice never overshoots the rows.
+            let last = page.rows.len().saturating_sub(1);
+            let lo = anchor_index.min(page.list.cursor).min(last);
+            let hi = anchor_index.max(page.list.cursor).min(last);
             let rows = page.rows.get(lo..=hi).unwrap_or_default().to_vec();
             if let Some(hit) = self.alt_selection_target(
                 rows,
@@ -543,9 +552,15 @@ impl AppRoot {
             ));
         }
         if self.view.list.selection.active() {
-            let anchor_index = self.view.list.selection.anchor().unwrap_or(self.view.list.cursor);
-            let lo = anchor_index.min(self.view.list.cursor);
-            let hi = anchor_index.max(self.view.list.cursor);
+            let anchor_index = self
+                .view
+                .list
+                .selection
+                .anchor()
+                .unwrap_or(self.view.list.cursor);
+            let last = self.view.rows.count.saturating_sub(1);
+            let lo = anchor_index.min(self.view.list.cursor).min(last);
+            let hi = anchor_index.max(self.view.list.cursor).min(last);
             let rows: Vec<Row> = (lo..=hi)
                 .filter_map(|index| self.view.rows.get(index).cloned())
                 .collect();
@@ -565,7 +580,11 @@ impl AppRoot {
         Some((
             self.alt_menu_for_row(row),
             self.alt_target_for_row(row),
-            self.alt_scroll_anchor(&self.library_scroll, self.view.list.cursor, self.view.rows.count),
+            self.alt_scroll_anchor(
+                &self.library_scroll,
+                self.view.list.cursor,
+                self.view.rows.count,
+            ),
         ))
     }
 
@@ -720,9 +739,19 @@ impl AppRoot {
                     }
                 }
                 QuickVerb::Download { on } => {
+                    // Artists have no generic quick-download path: the bridge
+                    // resolves the whole discography through `download_artist`,
+                    // exactly like the single-row branch below.
                     for id in &target.ids {
-                        self.bridge
-                            .quick_download(target.api_kind().to_string(), id.clone(), on);
+                        if target.kind == RowKind::Artist {
+                            self.bridge.download_artist(id.clone(), on);
+                        } else {
+                            self.bridge.quick_download(
+                                target.api_kind().to_string(),
+                                id.clone(),
+                                on,
+                            );
+                        }
                     }
                 }
                 QuickVerb::StartRadio
@@ -817,10 +846,16 @@ impl AppRoot {
         cx: &mut Context<Self>,
     ) {
         let alt = event.modifiers.alt;
-        if alt && !self.alt_held {
+        // Every Ctrl/Shift/Super press also reports a modifiers change; only an
+        // actual Alt transition touches the gesture, so an unchanged state must
+        // not repaint the frame.
+        if alt == self.alt_held {
+            return;
+        }
+        if alt {
             self.alt_held = true;
             self.alt_arm();
-        } else if !alt && self.alt_held {
+        } else {
             self.alt_held = false;
             self.alt_release();
         }

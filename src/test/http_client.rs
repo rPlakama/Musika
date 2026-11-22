@@ -247,34 +247,56 @@ use std::time::Duration;
 /// request head and answers with `response`. Returns the base URL the client
 /// should use and a handle carrying the captured request text.
 fn serve_once(response: Vec<u8>) -> (String, std::thread::JoinHandle<String>) {
+    let (base, handle) = serve_sequence(vec![response]);
+    let mapped = std::thread::spawn(move || {
+        handle
+            .join()
+            .expect("loopback server thread")
+            .into_iter()
+            .next()
+            .unwrap_or_default()
+    });
+    (base, mapped)
+}
+
+/// A scripted loopback server: answers the next `responses.len()` connections
+/// with the given raw responses in order (used to exercise retry/backoff).
+fn serve_sequence(responses: Vec<Vec<u8>>) -> (String, std::thread::JoinHandle<Vec<String>>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind loopback server");
     let address = listener.local_addr().expect("loopback address");
     listener
         .set_nonblocking(true)
         .expect("non-blocking listener");
     let handle = std::thread::spawn(move || {
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        let mut socket = loop {
-            match listener.accept() {
-                Ok((socket, _)) => break socket,
-                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    if std::time::Instant::now() >= deadline {
-                        panic!("loopback server: no connection within 10 s");
-                    }
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Err(err) => panic!("loopback server: accept failed: {err}"),
-            }
-        };
-        socket
-            .set_read_timeout(Some(Duration::from_secs(10)))
-            .expect("read timeout");
-        let request = read_request_head(&mut socket);
-        socket.write_all(&response).expect("write response");
-        _ = socket.flush();
-        request
+        let mut requests = Vec::with_capacity(responses.len());
+        for response in responses {
+            let mut socket = accept_within(&listener, Duration::from_secs(10));
+            socket
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .expect("read timeout");
+            requests.push(read_request_head(&mut socket));
+            socket.write_all(&response).expect("write response");
+            _ = socket.flush();
+        }
+        requests
     });
     (format!("http://{address}"), handle)
+}
+
+fn accept_within(listener: &TcpListener, timeout: Duration) -> TcpStream {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match listener.accept() {
+            Ok((socket, _)) => return socket,
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                if std::time::Instant::now() >= deadline {
+                    panic!("loopback server: no connection within {timeout:?}");
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(err) => panic!("loopback server: accept failed: {err}"),
+        }
+    }
 }
 
 fn read_request_head(socket: &mut TcpStream) -> String {
@@ -304,6 +326,32 @@ fn response_bytes(content_type: &str, encoding: Option<&str>, body: &[u8]) -> Ve
     bytes
 }
 
+/// A raw response with an arbitrary status line and headers (304 fixtures, 5xx
+/// retry fixtures).
+fn raw_response(status_line: &str, headers: &[(&str, &str)], body: &[u8]) -> Vec<u8> {
+    let mut response = format!(
+        "HTTP/1.1 {status_line}\r\nContent-Length: {}\r\nConnection: close\r\n",
+        body.len()
+    );
+    for (name, value) in headers {
+        response.push_str(&format!("{name}: {value}\r\n"));
+    }
+    response.push_str("\r\n");
+    let mut bytes = response.into_bytes();
+    bytes.extend_from_slice(body);
+    bytes
+}
+
+fn http_temp_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "musika-http-{name}-{}-{}",
+        std::process::id(),
+        crate::consts::now_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    dir
+}
+
 /// Header value as sent on the wire (`None` when the request did not send it).
 fn sent_header(request: &str, name: &str) -> Option<String> {
     request.lines().find_map(|line| {
@@ -314,8 +362,7 @@ fn sent_header(request: &str, name: &str) -> Option<String> {
 }
 
 fn gzip(bytes: &[u8]) -> Vec<u8> {
-    let mut encoder =
-        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     encoder.write_all(bytes).expect("gzip fixture");
     encoder.finish().expect("finish gzip fixture")
 }
@@ -334,7 +381,10 @@ async fn json_calls_advertise_gzip_and_decode_it() {
         .call("ping", &[])
         .await
         .expect("a gzip JSON body decodes transparently");
-    assert_eq!(body.get("version").and_then(|value| value.as_str()), Some("1.16.1"));
+    assert_eq!(
+        body.get("version").and_then(|value| value.as_str()),
+        Some("1.16.1")
+    );
 
     let request = server.join().expect("loopback server");
     let encoding = sent_header(&request, "accept-encoding")
@@ -393,5 +443,193 @@ async fn media_download_requests_are_identity() {
         sent_header(&request, "accept-encoding").as_deref(),
         Some("identity"),
         "media bytes are already compressed; the request must not negotiate an encoding"
+    );
+}
+
+// --- N-01: HTTP 200 error envelopes are not binary data ---------------------
+
+/// S-15: the Subsonic salt must come from the CSPRNG, not the clock.
+#[test]
+fn generate_salt_is_random_hex() {
+    let first = generate_salt().expect("a salt");
+    assert_eq!(first.len(), 32, "salt is 16 random bytes hex-encoded");
+    assert!(
+        first.chars().all(|ch| ch.is_ascii_hexdigit()),
+        "salt must be hexadecimal: {first:?}"
+    );
+    let second = generate_salt().expect("a second salt");
+    assert_ne!(first, second, "salts must not repeat across calls");
+}
+
+#[test]
+fn subsonic_error_messages_are_extracted_from_json_and_xml() {
+    let json = br#"{"subsonic-response":{"status":"failed","error":{"code":10,"message":"Required parameter is missing"}}}"#;
+    assert_eq!(
+        subsonic_error_message(json).as_deref(),
+        Some("Required parameter is missing")
+    );
+
+    let xml = br#"<?xml version="1.0" encoding="UTF-8"?><subsonic-response status="failed"><error code="70" message="Art not found"/></subsonic-response>"#;
+    assert_eq!(
+        subsonic_error_message(xml).as_deref(),
+        Some("Art not found")
+    );
+
+    let coded = br#"<subsonic-response status="failed"><error code="40"/></subsonic-response>"#;
+    assert!(
+        subsonic_error_message(coded).is_some_and(|message| message.contains("40")),
+        "an XML error without a message must still surface its code"
+    );
+    assert!(subsonic_error_message(b"plain audio bytes").is_none());
+    assert!(subsonic_error_message(b"").is_none());
+}
+
+/// N-01: a failed `/rest/download` answers HTTP 200 with a JSON error envelope.
+/// Those bytes must never be adopted as an audio blob.
+#[tokio::test]
+async fn rejects_json_error_body_in_binary_download() {
+    const ERROR: &[u8] = br#"{"subsonic-response":{"status":"failed","version":"1.16.1","error":{"code":10,"message":"Required parameter is missing"}}}"#;
+    let (base, server) = serve_once(response_bytes("application/json", None, ERROR));
+    let client = SubsonicClient::new(&base, "alice", "secret");
+    let dir = http_temp_dir("json-error-download");
+    let dest = dir.join("song.part");
+
+    let error = client
+        .download_media_to("s1", &dest)
+        .await
+        .expect_err("a JSON error envelope must not be cached as audio");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("Required parameter is missing"),
+        "the Subsonic message must surface, got: {message}"
+    );
+    assert!(
+        !dest.exists(),
+        "the rejected body must not be written to disk"
+    );
+
+    _ = server.join();
+    _ = std::fs::remove_dir_all(dir);
+}
+
+/// N-01: an XML error envelope on a cover fetch must not become `raw-*.img`.
+#[tokio::test]
+async fn rejects_xml_error_body_in_cover_fetch() {
+    const ERROR: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?><subsonic-response status="failed"><error code="70" message="Art not found"/></subsonic-response>"#;
+    let (base, server) = serve_once(response_bytes("text/xml", None, ERROR));
+    let client = SubsonicClient::new(&base, "alice", "secret");
+
+    let error = client
+        .get_cover_art("al-1", None, None, None)
+        .await
+        .expect_err("an XML error envelope must not be cached as a cover");
+    assert!(
+        format!("{error:#}").contains("Art not found"),
+        "the Subsonic message must surface, got: {error:#}"
+    );
+
+    _ = server.join();
+}
+
+/// N-02: an empty 200 body is a failed transfer, not a valid blob.
+#[tokio::test]
+async fn rejects_empty_download_body() {
+    let (base, server) = serve_once(response_bytes("audio/flac", None, b""));
+    let client = SubsonicClient::new(&base, "alice", "secret");
+    let dir = http_temp_dir("empty-download");
+    let dest = dir.join("song.part");
+
+    let error = client
+        .download_media_to("s1", &dest)
+        .await
+        .expect_err("a zero-byte transfer must fail");
+    assert!(
+        format!("{error:#}").contains("empty"),
+        "the error should name the empty body, got: {error:#}"
+    );
+    assert!(!dest.exists(), "an empty `.part` must not be left behind");
+
+    _ = server.join();
+    _ = std::fs::remove_dir_all(dir);
+}
+
+/// N-02: one transient 5xx must not abort an idempotent GET.
+#[tokio::test]
+async fn retries_transient_server_errors_for_idempotent_gets() {
+    const ENVELOPE: &[u8] = br#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#;
+    let busy = raw_response(
+        "503 Service Unavailable",
+        &[("Content-Type", "text/html")],
+        b"",
+    );
+    let ok = response_bytes("application/json", None, ENVELOPE);
+    let (base, server) = serve_sequence(vec![busy, ok]);
+    let client = SubsonicClient::new(&base, "alice", "secret");
+
+    let body: serde_json::Value = client
+        .call("ping", &[])
+        .await
+        .expect("the retried GET succeeds");
+    assert_eq!(
+        body.get("version").and_then(|value| value.as_str()),
+        Some("1.16.1")
+    );
+
+    let requests = server.join().expect("loopback server");
+    assert_eq!(
+        requests.len(),
+        2,
+        "one retry for one transient server error"
+    );
+}
+
+/// N-21: a `304` may refresh the validators even though no bytes moved; the
+/// refreshed ETag/Last-Modified must be returned (and fall back to the request
+/// values when the server sends none).
+#[tokio::test]
+async fn not_modified_preserves_refreshed_validators() {
+    let refreshed = raw_response(
+        "304 Not Modified",
+        &[
+            ("ETag", "\"v2\""),
+            ("Last-Modified", "Wed, 21 Oct 2026 07:28:00 GMT"),
+        ],
+        b"",
+    );
+    let bare = raw_response("304 Not Modified", &[], b"");
+    let (base, server) = serve_sequence(vec![refreshed, bare]);
+    let client = SubsonicClient::new(&base, "alice", "secret");
+
+    let art = client
+        .get_cover_art("al-1", None, Some("\"v1\""), None)
+        .await
+        .expect("304 answer");
+    assert!(art.not_modified);
+    assert_eq!(art.etag.as_deref(), Some("\"v2\""), "refreshed ETag");
+    assert_eq!(
+        art.last_modified.as_deref(),
+        Some("Wed, 21 Oct 2026 07:28:00 GMT"),
+        "refreshed Last-Modified"
+    );
+    assert!(art.bytes.is_empty());
+
+    let cached = client
+        .get_cover_art("al-1", None, Some("\"v3\""), None)
+        .await
+        .expect("bare 304 answer");
+    assert_eq!(
+        cached.etag.as_deref(),
+        Some("\"v3\""),
+        "without a refreshed validator the request copy is kept"
+    );
+
+    let requests = server.join().expect("loopback server");
+    assert_eq!(
+        sent_header(&requests[0], "if-none-match").as_deref(),
+        Some("\"v1\"")
+    );
+    assert_eq!(
+        sent_header(&requests[1], "if-none-match").as_deref(),
+        Some("\"v3\"")
     );
 }

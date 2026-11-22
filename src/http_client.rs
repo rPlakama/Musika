@@ -37,6 +37,23 @@ pub(crate) const API_VERSION: &str = "1.16.1";
 /// the login `ping`). Uppercase on purpose: servers surface it verbatim.
 pub(crate) const CLIENT_NAME: &str = "MUSIKA";
 
+/// A stalled transfer (the server stopped sending mid-body) aborts instead of
+/// hanging a sync, a cover fetch or a download forever (N-02).
+const HTTP_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// JSON API calls are small and interactive: a whole-request deadline keeps a
+/// slow-but-not-stalled server from wedging the caller (N-02).
+const JSON_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Hard cap on one cover-art body: the bytes are decoded later, and a hostile
+/// or misconfigured provider must not be able to OOM the process (N-02).
+pub(crate) const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+/// Bound on an error body drained for its Subsonic message (N-01).
+const MAX_ERROR_BODY_BYTES: u64 = 64 * 1024;
+/// Idempotent GETs are retried on transient failures: one flaky response must
+/// not abort a whole sync (N-02).
+const GET_ATTEMPTS: u32 = 3;
+/// Linear backoff between GET attempts.
+const GET_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// One process-wide reqwest client: every `SubsonicClient` shares its
 /// connection pool and TLS session cache. Cloning a reqwest client is a
 /// refcount bump, so per-action clients stay cheap.
@@ -47,6 +64,7 @@ pub(crate) fn shared_http_client() -> reqwest::Client {
         .get_or_init(|| {
             reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(5))
+                .read_timeout(HTTP_READ_TIMEOUT)
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new())
         })
@@ -105,7 +123,7 @@ impl SubsonicClient {
     /// authentication parameters. Used for endpoints whose file name is not
     /// `<method>.view` (for example `hls.m3u8`).
     pub fn resource_url(&self, resource: &str, params: &[(&str, String)]) -> Result<Url> {
-        let salt = generate_salt();
+        let salt = generate_salt()?;
         let token = md5_token(&self.password, &salt)?;
 
         let mut url = Url::parse(&format!("{}/rest/{resource}", self.base))
@@ -148,16 +166,47 @@ impl SubsonicClient {
     }
 
     async fn get_checked(&self, url: Url) -> Result<reqwest::Response> {
-        self.send_checked(self.http.get(url)).await
+        self.send_checked(self.http.get(url).timeout(JSON_REQUEST_TIMEOUT))
+            .await
     }
 
+    /// Sends an idempotent GET, retrying transient failures with a bounded
+    /// linear backoff (N-02). The request is cloned per attempt; a request
+    /// whose body cannot be cloned (none of ours carry one) is not retried.
     async fn send_checked(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
-        let response = request.send().await.context("Could not reach the server")?;
-        let status = response.status();
-        if !status.is_success() && status != reqwest::StatusCode::NOT_MODIFIED {
-            bail!("Server returned HTTP {status}");
+        let mut request = request;
+        let mut attempt = 1;
+        loop {
+            let retry = (attempt < GET_ATTEMPTS)
+                .then(|| request.try_clone())
+                .flatten();
+            match request.send().await {
+                Ok(response) => {
+                    let status = response.status();
+                    if status.is_success() || status == reqwest::StatusCode::NOT_MODIFIED {
+                        return Ok(response);
+                    }
+                    if retry.is_none() || !is_transient_status(status) {
+                        bail!("Server returned HTTP {status}");
+                    }
+                    // Drop the failed response before the next attempt so its
+                    // connection is released back to the pool.
+                    drop(response);
+                }
+                Err(error) => {
+                    if retry.is_none() || !is_transient_error(&error) {
+                        return Err(error).context("Could not reach the server");
+                    }
+                }
+            }
+            let Some(retry) = retry else {
+                break;
+            };
+            tokio::time::sleep(GET_RETRY_BACKOFF * attempt).await;
+            request = retry;
+            attempt += 1;
         }
-        Ok(response)
+        bail!("Could not reach the server")
     }
 
     /// Streams the original media file (`download`) into `dest`, returning the
@@ -199,6 +248,10 @@ impl SubsonicClient {
         let mut response = self
             .send_checked(identity_encoding(self.http.get(url)))
             .await?;
+        // Subsonic answers a failed binary fetch with HTTP 200 and a JSON/XML
+        // error envelope; streaming that into the `.part` file would adopt an
+        // error message as an audio blob (and mark it downloaded) (N-01).
+        reject_error_payload(&mut response, "media download").await?;
         let mut file = tokio::fs::File::create(dest)
             .await
             .with_context(|| format!("Could not create {}", dest.display()))?;
@@ -217,6 +270,11 @@ impl SubsonicClient {
         file.flush()
             .await
             .with_context(|| format!("Could not flush {}", dest.display()))?;
+        if written == 0 {
+            drop(file);
+            _ = tokio::fs::remove_file(dest).await;
+            bail!("the server returned an empty download");
+        }
         Ok(written)
     }
 
@@ -270,25 +328,36 @@ impl SubsonicClient {
         let mut response = self.send_checked(request).await?;
 
         if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+            // A `304` may refresh the validators even though no bytes moved:
+            // keep the server's new ETag/Last-Modified over our request copy
+            // so the next revalidation compares against the latest version
+            // (N-21).
             return Ok(CoverArt {
                 not_modified: true,
-                etag: etag.map(str::to_string),
-                last_modified: last_modified.map(str::to_string),
+                etag: header_string(&response, reqwest::header::ETAG)
+                    .or_else(|| etag.map(str::to_string)),
+                last_modified: header_string(&response, reqwest::header::LAST_MODIFIED)
+                    .or_else(|| last_modified.map(str::to_string)),
                 content_type: None,
                 bytes: Vec::new(),
             });
         }
 
-        let header = |name: reqwest::header::HeaderName| {
-            response
-                .headers()
-                .get(name)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_string)
-        };
-        let etag = header(reqwest::header::ETAG);
-        let last_modified = header(reqwest::header::LAST_MODIFIED);
-        let content_type = header(reqwest::header::CONTENT_TYPE);
+        // A provider that answers an image request with an HTTP 200 JSON/XML
+        // error envelope must never reach the cache as `raw-*.img` (N-01).
+        reject_error_payload(&mut response, "cover art").await?;
+        if let Some(length) = response.content_length()
+            && length > MAX_IMAGE_BYTES
+        {
+            bail!(
+                "cover art is {} bytes, above the {} MiB cap",
+                length,
+                MAX_IMAGE_BYTES / (1024 * 1024)
+            );
+        }
+        let etag = header_string(&response, reqwest::header::ETAG);
+        let last_modified = header_string(&response, reqwest::header::LAST_MODIFIED);
+        let content_type = header_string(&response, reqwest::header::CONTENT_TYPE);
         // Chunks into one owned buffer: `bytes().to_vec()` held the whole body
         // twice at the peak, and a provider's original art can be several MB.
         let mut bytes = Vec::new();
@@ -297,7 +366,16 @@ impl SubsonicClient {
             .await
             .context("Could not read cover art body")?
         {
+            if bytes.len() as u64 + chunk.len() as u64 > MAX_IMAGE_BYTES {
+                bail!(
+                    "cover art exceeds the {} MiB body cap",
+                    MAX_IMAGE_BYTES / (1024 * 1024)
+                );
+            }
             bytes.extend_from_slice(&chunk);
+        }
+        if bytes.is_empty() {
+            bail!("the server returned an empty cover-art body");
         }
 
         Ok(CoverArt {
@@ -311,12 +389,133 @@ impl SubsonicClient {
 }
 
 /// Result of a cover-art request. See [`SubsonicClient::get_cover_art`].
+#[derive(Debug)]
 pub struct CoverArt {
     pub not_modified: bool,
     pub etag: Option<String>,
     pub last_modified: Option<String>,
     pub content_type: Option<String>,
     pub bytes: Vec<u8>,
+}
+
+fn header_string(
+    response: &reqwest::Response,
+    name: reqwest::header::HeaderName,
+) -> Option<String> {
+    response
+        .headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+}
+
+/// Whether a `Content-Type` names a textual error envelope rather than the
+/// binary body a download or an image fetch asked for (N-01).
+///
+/// `image/svg+xml` is the one XML type that is legitimate art (it is
+/// rasterized at ingest), so it is explicitly allowed through.
+pub(crate) fn is_error_content_type(content_type: Option<&str>) -> bool {
+    let Some(content_type) = content_type else {
+        return false;
+    };
+    let mime = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if mime == "image/svg+xml" {
+        return false;
+    }
+    mime.starts_with("text/")
+        || mime.contains("json")
+        || mime.contains("xml")
+        || mime.contains("html")
+}
+
+/// Drains (a bounded prefix of) an error body so its Subsonic message can be
+/// surfaced instead of the opaque "HTTP 200 with the wrong body" (N-01).
+async fn read_error_body(response: &mut reqwest::Response) -> Vec<u8> {
+    let mut body = Vec::new();
+    // A read error on a body that is already an error envelope is not worth
+    // surfacing separately: keep the prefix read so far.
+    while let Ok(Some(chunk)) = response.chunk().await {
+        if body.len() as u64 + chunk.len() as u64 > MAX_ERROR_BODY_BYTES {
+            break;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    body
+}
+
+/// Rejects an HTTP 200 whose body is a textual error envelope (N-01), with the
+/// Subsonic error message when the body carries one.
+async fn reject_error_payload(response: &mut reqwest::Response, context: &str) -> Result<()> {
+    let content_type = header_string(response, reqwest::header::CONTENT_TYPE);
+    if !is_error_content_type(content_type.as_deref()) {
+        return Ok(());
+    }
+    let body = read_error_body(response).await;
+    let detail = subsonic_error_message(&body).unwrap_or_else(|| {
+        format!(
+            "the server answered with {} instead of the requested data",
+            content_type.as_deref().unwrap_or("an unknown content type")
+        )
+    });
+    bail!("{context}: {detail}");
+}
+
+/// Extracts the Subsonic `error.message` (or its code) from a JSON or XML
+/// error envelope carried by an HTTP 200 response (N-01).
+pub(crate) fn subsonic_error_message(body: &[u8]) -> Option<String> {
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(body)
+        && let Some(error) = value
+            .get("subsonic-response")
+            .and_then(|response| response.get("error"))
+    {
+        if let Some(message) = error
+            .get("message")
+            .and_then(|message| message.as_str())
+            .filter(|message| !message.trim().is_empty())
+        {
+            return Some(message.to_string());
+        }
+        if let Some(code) = error.get("code").and_then(|code| code.as_i64()) {
+            return Some(format!("Server rejected the request (code {code})"));
+        }
+        return Some("Server rejected the request".to_string());
+    }
+
+    let text = std::str::from_utf8(body).ok()?;
+    let element = &text[text.find("<error")?..];
+    if let Some(message) = xml_attribute(element, "message") {
+        return Some(message);
+    }
+    xml_attribute(element, "code").map(|code| format!("Server rejected the request (code {code})"))
+}
+
+/// Reads one quoted XML attribute from the head of `element` (no XML parser is
+/// linked in; Subsonic error envelopes are a single flat element).
+fn xml_attribute(element: &str, name: &str) -> Option<String> {
+    let pattern = format!("{name}=");
+    let start = element.find(&pattern)? + pattern.len();
+    let rest = element[start..].trim_start();
+    let quote = rest
+        .chars()
+        .next()
+        .filter(|quote| *quote == '"' || *quote == '\'')?;
+    let value = rest.get(1..)?;
+    Some(value[..value.find(quote)?].to_string())
+}
+
+fn is_transient_status(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::REQUEST_TIMEOUT
+        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || status.is_server_error()
+}
+
+fn is_transient_error(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect()
 }
 
 /// What the server reports in the ping envelope: `type` (e.g. `navidrome`,
@@ -409,8 +608,17 @@ fn normalize_base(server_url: &str) -> String {
     }
 }
 
-fn generate_salt() -> String {
-    format!("{:x}", crate::consts::now_nanos())
+/// Generates a random 32-hex-character Subsonic authentication salt (S-15).
+///
+/// Subsonic authenticates with `md5(password + salt)`; a predictable salt (the
+/// previous implementation used the process nanosecond clock) lets an observer
+/// of one request derive the token of a later one. The bytes come from
+/// OpenSSL's CSPRNG; a failure to draw them is fatal to the request.
+pub(crate) fn generate_salt() -> Result<String> {
+    const SALT_BYTES: usize = 16;
+    let mut bytes = [0u8; SALT_BYTES];
+    openssl::rand::rand_bytes(&mut bytes).context("Could not generate a request salt")?;
+    Ok(crate::hex::encode(bytes))
 }
 
 pub(crate) fn md5_token(password: &str, salt: &str) -> anyhow::Result<String> {

@@ -98,3 +98,46 @@ fn a_failed_replace_removes_the_temp_file() {
     assert!(leftovers.is_empty(), "temp files must be cleaned up");
     _ = std::fs::remove_dir_all(dir);
 }
+
+/// N-06: `delete_in` binds `cache::IN_BATCH` chunks; a single `IN (...)` for a
+/// large queue snapshot could exceed SQLite's parameter limit.
+#[tokio::test]
+async fn delete_in_chunks_past_the_bind_limit() {
+    let pool = pool().await;
+    sqlx::query("CREATE TABLE cache (id TEXT PRIMARY KEY)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO cache (id) VALUES ('keep')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let count = crate::cache::IN_BATCH * 2 + 7;
+    let seed = format!(
+        "WITH RECURSIVE c(x) AS (
+             VALUES(0) UNION ALL SELECT x + 1 FROM c WHERE x + 1 < {}
+         ) INSERT INTO cache (id) SELECT 'id' || x FROM c;",
+        count - 1
+    );
+    sqlx::raw_sql(sqlx::AssertSqlSafe(seed))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let ids: Vec<String> = (0..count).map(|i| format!("id{i}")).collect();
+    let mut conn = pool.acquire().await.unwrap();
+    delete_in(&mut conn, "DELETE FROM cache WHERE id IN (", &ids)
+        .await
+        .unwrap();
+    // An empty list is a no-op, not an `IN ()` syntax error.
+    delete_in(&mut conn, "DELETE FROM cache WHERE id IN (", &[])
+        .await
+        .unwrap();
+    drop(conn);
+
+    let left: Vec<String> = sqlx::query_scalar("SELECT id FROM cache")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left, ["keep"]);
+}

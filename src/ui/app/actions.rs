@@ -7,6 +7,9 @@ use super::super::*;
 const DESCRIPTION_LINE_STEP: f32 = 22.0;
 const DESCRIPTION_PAGE_RATIO: f32 = 0.9;
 
+/// Rows one PageUp/PageDown motion crosses on the list surfaces.
+const LIST_PAGE_ROWS: usize = 10;
+
 /// The next description reader offset, clamped into `0..=max`.
 pub(in crate::ui) fn description_offset(current: f32, delta: f32, max: f32) -> f32 {
     (current + delta).clamp(0.0, max.max(0.0))
@@ -20,7 +23,11 @@ fn signed_percent(value: f64) -> String {
     if value.abs() < 0.005 {
         "0%".to_string()
     } else {
-        format!("{}{:.0}%", if value > 0.0 { "+" } else { "" }, value * 100.0)
+        format!(
+            "{}{:.0}%",
+            if value > 0.0 { "+" } else { "" },
+            value * 100.0
+        )
     }
 }
 
@@ -47,7 +54,6 @@ enum SettingsRowAction {
     SleepOff,
     Close,
 }
-
 
 impl AppRoot {
     pub(in crate::ui) fn on_quit(
@@ -434,14 +440,42 @@ impl AppRoot {
             .clone()
             .unwrap_or_else(|| "Original".to_string());
         vec![
-            ("Shuffle".into(), yes_no(self.player.shuffle()), SettingsRowAction::Shuffle),
+            (
+                "Shuffle".into(),
+                yes_no(self.player.shuffle()),
+                SettingsRowAction::Shuffle,
+            ),
             ("Repeat".into(), repeat.into(), SettingsRowAction::Repeat),
-            ("Crossfade".into(), yes_no(self.player.crossfade()), SettingsRowAction::Crossfade),
-            ("Crossfade length".into(), format!("{:.0}s", s.crossfade_seconds), SettingsRowAction::Length),
-            ("Crossfade curve".into(), s.crossfade_curve.clone(), SettingsRowAction::Curve),
-            ("Album-only crossfade".into(), yes_no(s.crossfade_album_only), SettingsRowAction::AlbumOnly),
-            ("Normalization".into(), format!("{:?}", self.player.normalization()), SettingsRowAction::Normalize),
-            ("Equalizer".into(), self.eq_profile.clone().unwrap_or_else(|| "Off".into()), SettingsRowAction::Eq),
+            (
+                "Crossfade".into(),
+                yes_no(self.player.crossfade()),
+                SettingsRowAction::Crossfade,
+            ),
+            (
+                "Crossfade length".into(),
+                format!("{:.0}s", s.crossfade_seconds),
+                SettingsRowAction::Length,
+            ),
+            (
+                "Crossfade curve".into(),
+                s.crossfade_curve.clone(),
+                SettingsRowAction::Curve,
+            ),
+            (
+                "Album-only crossfade".into(),
+                yes_no(s.crossfade_album_only),
+                SettingsRowAction::AlbumOnly,
+            ),
+            (
+                "Normalization".into(),
+                format!("{:?}", self.player.normalization()),
+                SettingsRowAction::Normalize,
+            ),
+            (
+                "Equalizer".into(),
+                self.eq_profile.clone().unwrap_or_else(|| "Off".into()),
+                SettingsRowAction::Eq,
+            ),
             (
                 "Palette contrast".into(),
                 signed_percent(s.color_contrast),
@@ -452,15 +486,43 @@ impl AppRoot {
                 signed_percent(s.color_saturation),
                 SettingsRowAction::ColorSaturation,
             ),
-            ("Scrobbling".into(), yes_no(s.scrobble), SettingsRowAction::Scrobble),
-            ("Bit-perfect DSP".into(), yes_no(s.bit_perfect), SettingsRowAction::BitPerfect),
-            ("Exclusive access".into(), yes_no(s.exclusive), SettingsRowAction::Exclusive),
-            ("Playback cache".into(), yes_no(s.stream_cache), SettingsRowAction::Cache),
+            (
+                "Scrobbling".into(),
+                yes_no(s.scrobble),
+                SettingsRowAction::Scrobble,
+            ),
+            (
+                "Bit-perfect DSP".into(),
+                yes_no(s.bit_perfect),
+                SettingsRowAction::BitPerfect,
+            ),
+            (
+                "Exclusive access".into(),
+                yes_no(s.exclusive),
+                SettingsRowAction::Exclusive,
+            ),
+            (
+                "Playback cache".into(),
+                yes_no(s.stream_cache),
+                SettingsRowAction::Cache,
+            ),
             ("Stream quality".into(), quality, SettingsRowAction::Quality),
             ("Stream format".into(), format, SettingsRowAction::Format),
-            ("Fixed pipeline rate".into(), fixed, SettingsRowAction::FixedRate),
-            ("Sleep timer".into(), "30 minutes".into(), SettingsRowAction::Sleep30),
-            ("Sleep timer".into(), "Off".into(), SettingsRowAction::SleepOff),
+            (
+                "Fixed pipeline rate".into(),
+                fixed,
+                SettingsRowAction::FixedRate,
+            ),
+            (
+                "Sleep timer".into(),
+                "30 minutes".into(),
+                SettingsRowAction::Sleep30,
+            ),
+            (
+                "Sleep timer".into(),
+                "Off".into(),
+                SettingsRowAction::SleepOff,
+            ),
             ("".into(), "Close".into(), SettingsRowAction::Close),
         ]
     }
@@ -495,9 +557,8 @@ impl AppRoot {
             SettingsRowAction::Length => {
                 let next =
                     (self.settings.crossfade_seconds + f64::from(direction)).clamp(1.0, 12.0);
-                self.bridge.set_crossfade_change(
-                    crate::playback_settings::CrossfadeChange::Length(next),
-                );
+                self.bridge
+                    .set_crossfade_change(crate::playback_settings::CrossfadeChange::Length(next));
             }
             SettingsRowAction::Shuffle
             | SettingsRowAction::Repeat
@@ -538,15 +599,13 @@ impl AppRoot {
                     6..=8 => 12.0,
                     _ => 3.0,
                 };
-                self.bridge.set_crossfade_change(
-                    crate::playback_settings::CrossfadeChange::Length(next),
-                );
+                self.bridge
+                    .set_crossfade_change(crate::playback_settings::CrossfadeChange::Length(next));
             }
             SettingsRowAction::Curve => {
                 let equal = self.settings.crossfade_curve != "linear";
-                self.bridge.set_crossfade_change(
-                    crate::playback_settings::CrossfadeChange::Curve(!equal),
-                );
+                self.bridge
+                    .set_crossfade_change(crate::playback_settings::CrossfadeChange::Curve(!equal));
             }
             SettingsRowAction::AlbumOnly => {
                 let enabled = !self.settings.crossfade_album_only;
@@ -590,9 +649,10 @@ impl AppRoot {
                     .set_output_mode(Some(!self.settings.exclusive), None);
             }
             SettingsRowAction::Cache => {
-                self.bridge.set_stream_change(
-                    crate::playback_settings::StreamChange::Cache(!self.settings.stream_cache),
-                );
+                self.bridge
+                    .set_stream_change(crate::playback_settings::StreamChange::Cache(
+                        !self.settings.stream_cache,
+                    ));
             }
             SettingsRowAction::Quality => {
                 let next = match self.settings.stream_max_bitrate {
@@ -600,9 +660,8 @@ impl AppRoot {
                     128 => 320,
                     _ => 0,
                 };
-                self.bridge.set_stream_change(
-                    crate::playback_settings::StreamChange::Quality(next),
-                );
+                self.bridge
+                    .set_stream_change(crate::playback_settings::StreamChange::Quality(next));
             }
             SettingsRowAction::Format => {
                 let next = match self.settings.stream_format.as_deref() {
@@ -610,9 +669,8 @@ impl AppRoot {
                     Some("mp3") => Some("opus".to_string()),
                     _ => None,
                 };
-                self.bridge.set_stream_change(
-                    crate::playback_settings::StreamChange::Format(next),
-                );
+                self.bridge
+                    .set_stream_change(crate::playback_settings::StreamChange::Format(next));
             }
             SettingsRowAction::FixedRate => {
                 let next = match self.settings.fixed_pipeline_hz {
@@ -621,9 +679,8 @@ impl AppRoot {
                     48_001..=96_000 => None,
                     _ => Some(48_000),
                 };
-                self.bridge.set_stream_change(
-                    crate::playback_settings::StreamChange::FixedRate(next),
-                );
+                self.bridge
+                    .set_stream_change(crate::playback_settings::StreamChange::FixedRate(next));
             }
             SettingsRowAction::Sleep30 => {
                 self.bridge.set_sleep_timer(Some(30));
@@ -767,7 +824,7 @@ impl AppRoot {
 
     fn announce_yank(&mut self, count: usize, missing: usize) {
         if count == 0 {
-            self.push_toast("Nothing to yank".to_string(), ToastKind::Notice, None);
+            self.push_toast("Nothing to yank".to_string(), None);
             return;
         }
         let suffix = if missing > 0 {
@@ -777,7 +834,6 @@ impl AppRoot {
         };
         self.push_toast(
             format!("Yanked {count} {}{suffix}", Self::rows_word(count)),
-            ToastKind::Notice,
             None,
         );
     }
@@ -913,7 +969,6 @@ impl AppRoot {
             self.clipboard_ids = ids;
             self.push_toast(
                 "Open the queue or a playlist page to paste".to_string(),
-                ToastKind::Notice,
                 None,
             );
             cx.notify();
@@ -976,11 +1031,7 @@ impl AppRoot {
         self.queue_list.selection.clear();
         self.visual_mode = false;
         self.follow_queue(true);
-        self.push_toast(
-            format!("Deleted {count} {}", Self::rows_word(count)),
-            ToastKind::Notice,
-            None,
-        );
+        self.push_toast(format!("Deleted {count} {}", Self::rows_word(count)), None);
         cx.notify();
     }
 
@@ -1150,44 +1201,6 @@ impl AppRoot {
         cx.notify();
     }
 
-    pub(in crate::ui) fn on_volume_up(
-        &self,
-        _: &VolumeUp,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.player.volume_up();
-        cx.notify();
-    }
-
-    pub(in crate::ui) fn on_volume_down(
-        &self,
-        _: &VolumeDown,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.player.volume_down();
-        cx.notify();
-    }
-
-    pub(in crate::ui) fn on_seek_back(
-        &self,
-        _: &SeekBack,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) {
-        self.player.seek_relative(-5.0);
-    }
-
-    pub(in crate::ui) fn on_seek_forward(
-        &self,
-        _: &SeekForward,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) {
-        self.player.seek_relative(5.0);
-    }
-
     pub(in crate::ui) fn on_next_track(
         &mut self,
         _: &NextTrack,
@@ -1198,10 +1211,24 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn execute_track_next(&mut self, cx: &mut Context<Self>) {
+        // The core answers asynchronously, so `player.index()` is still the
+        // pre-IPC row here. Land the queue cursor on the locally computed
+        // target; the authoritative index replaces it when the state frame
+        // arrives (and a shuffle target is only known to the core, so the
+        // cursor stays put until then).
+        let target = local_track_step(
+            self.player.index(),
+            self.player.len(),
+            self.player.repeat(),
+            self.player.shuffle(),
+            TrackStep::Next,
+        );
         self.press_transport(2);
         self.player.next();
-        if self.queue_open {
-            self.land_queue(self.player.index());
+        if self.queue_open
+            && let Some(index) = target
+        {
+            self.land_queue(index);
         }
         cx.notify();
     }
@@ -1216,11 +1243,19 @@ impl AppRoot {
     }
 
     pub(in crate::ui) fn execute_track_previous(&mut self, cx: &mut Context<Self>) {
+        let target = local_track_step(
+            self.player.index(),
+            self.player.len(),
+            self.player.repeat(),
+            self.player.shuffle(),
+            TrackStep::Previous,
+        );
         self.press_transport(0);
         self.player.previous();
-        if self.queue_open {
-            self.queue_list.cursor = self.player.index();
-            self.follow_queue(true);
+        if self.queue_open
+            && let Some(index) = target
+        {
+            self.land_queue(index);
         }
         cx.notify();
     }
@@ -1302,11 +1337,25 @@ impl AppRoot {
             cx.notify();
             return;
         }
+        // A list page motion pages the queue too while its overlay owns the
+        // surface (U-24: it used to page the list hidden behind it). The step
+        // is the number of queue rows the measured viewport paints.
+        if self.queue_open {
+            self.queue_list.cursor = self
+                .queue_list
+                .cursor
+                .saturating_add(queue_page_rows(&self.queue_scroll_modal))
+                .min(self.player.len().saturating_sub(1));
+            self.hovered_row = None;
+            self.follow_queue(true);
+            cx.notify();
+            return;
+        }
         if let Some(page) = self.page.as_mut() {
-            page.select(page.list.cursor.saturating_add(10));
+            page.select(page.list.cursor.saturating_add(LIST_PAGE_ROWS));
             self.follow_page(true);
         } else {
-            self.select(self.view.list.cursor.saturating_add(10));
+            self.select(self.view.list.cursor.saturating_add(LIST_PAGE_ROWS));
         }
         cx.notify();
     }
@@ -1327,11 +1376,21 @@ impl AppRoot {
             cx.notify();
             return;
         }
+        if self.queue_open {
+            self.queue_list.cursor = self
+                .queue_list
+                .cursor
+                .saturating_sub(queue_page_rows(&self.queue_scroll_modal));
+            self.hovered_row = None;
+            self.follow_queue(true);
+            cx.notify();
+            return;
+        }
         if let Some(page) = self.page.as_mut() {
-            page.select(page.list.cursor.saturating_sub(10));
+            page.select(page.list.cursor.saturating_sub(LIST_PAGE_ROWS));
             self.follow_page(true);
         } else {
-            self.select(self.view.list.cursor.saturating_sub(10));
+            self.select(self.view.list.cursor.saturating_sub(LIST_PAGE_ROWS));
         }
         cx.notify();
     }
@@ -1471,13 +1530,20 @@ impl AppRoot {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // U-12: the double-`q` quit window is measured against `clock.now`.
+        self.clock.tick();
+        // Back is the Escape/cancel path: every branch that consumes a surface
+        // also ends the visual range, so the next list action starts from a
+        // deterministic resting state (U-24).
         if self.settings_open {
             self.settings_open = false;
+            self.visual_mode = false;
             cx.notify();
             return;
         }
         if self.line_search.open {
             self.close_line_search();
+            self.visual_mode = false;
             cx.notify();
             return;
         }
@@ -1486,28 +1552,33 @@ impl AppRoot {
             self.alt_menu = None;
             self.alt_target = None;
             self.animate_alt(0.0);
+            self.visual_mode = false;
             cx.notify();
             return;
         }
         if self.status_focus.is_some() {
             self.status_focus = None;
+            self.visual_mode = false;
             cx.notify();
             return;
         }
         if self.description.is_some() {
             self.description = None;
+            self.visual_mode = false;
             cx.notify();
             return;
         }
         if self.lyrics_overlay {
             self.lyrics_overlay = false;
             self.lyrics_overlay_wanted = false;
+            self.visual_mode = false;
             cx.notify();
             return;
         }
         if self.fullscreen || self.fullscreen_anim.value(&self.clock) > 0.01 {
             self.fullscreen = false;
             self.release_lyrics_hold();
+            self.visual_mode = false;
             cx.notify();
             return;
         }
@@ -1518,12 +1589,20 @@ impl AppRoot {
             return;
         }
         if self.queue_open || self.queue_anim.value(&self.clock) > 0.01 {
+            // Closing the drawer keeps a half-painted selection alive
+            // otherwise; the list behind is the new focus.
             self.queue_open = false;
+            self.queue_list.selection.clear();
+            self.visual_mode = false;
             cx.notify();
             return;
         }
         if self.search.is_some() {
             self.search_open = false;
+            if let Some(search) = self.search.as_mut() {
+                search.selection.clear();
+            }
+            self.visual_mode = false;
             cx.notify();
             return;
         }
@@ -1535,16 +1614,19 @@ impl AppRoot {
             if let Some(page) = self.page.as_mut() {
                 page.list.selection.clear();
             }
+            self.visual_mode = false;
             cx.notify();
             return;
         }
         if self.view.list.selection.active() && self.page.is_none() {
             self.view.list.selection.clear();
+            self.visual_mode = false;
             cx.notify();
             return;
         }
         if self.page.is_some() {
             self.back_page();
+            self.visual_mode = false;
             cx.notify();
             return;
         }
@@ -1590,7 +1672,15 @@ impl AppRoot {
         self.alt_menu = None;
         self.alt_target = None;
         self.animate_alt(0.0);
+        // Home is the deterministic "back to the resting list" reset: every
+        // transient overlay and the visual range must go with it (U-24 left
+        // settings/visual mode/queue selection behind).
+        self.settings_open = false;
+        self.settings_cursor = 0;
         self.search_open = false;
+        if let Some(search) = self.search.as_mut() {
+            search.selection.clear();
+        }
         self.search = None;
         self.queue_open = false;
         self.fullscreen = false;
@@ -1598,9 +1688,16 @@ impl AppRoot {
         self.lyrics_overlay_wanted = false;
         self.release_lyrics_hold();
         self.description = None;
+        if let Some(page) = self.page.as_mut() {
+            page.list.selection.clear();
+        }
         self.page = None;
         self.travel = Travel::default();
+        self.visual_mode = false;
+        self.queue_list.selection.clear();
         self.view.list.selection.clear();
+        self.hovered_row = None;
+        self.hovered_page = None;
         cx.notify();
     }
 
@@ -1630,6 +1727,55 @@ impl AppRoot {
     fn page_description(&self, down: bool) {
         let step = self.description_viewport() * DESCRIPTION_PAGE_RATIO;
         self.scroll_description(if down { step } else { -step });
+    }
+}
+
+/// Rows one PageUp/PageDown motion crosses in the queue overlay: the rows the
+/// measured viewport paints, so a short window pages little and a tall one
+/// pages more (a hard-coded step would scroll past rows the user never saw).
+fn queue_page_rows(scroll: &scroll_modal::ScrollModal) -> usize {
+    let height = scroll.viewport_height();
+    if height <= 1.0 {
+        return LIST_PAGE_ROWS;
+    }
+    ((height / scroll.row_h).floor() as usize).max(1)
+}
+
+/// Which local transport step to predict for the queue cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrackStep {
+    Next,
+    Previous,
+}
+
+/// Predicts the row the core will land on after `track next`/`track previous`
+/// so the queue cursor can move in the same frame as the key press.
+///
+/// Only the deterministic linear order is predicted: shuffle picks from the
+/// core's private plan (and previous walks its play history), so those keep the
+/// cursor where it is and let the authoritative state frame land it.
+fn local_track_step(
+    index: usize,
+    len: usize,
+    repeat: crate::player::Repeat,
+    shuffle: bool,
+    step: TrackStep,
+) -> Option<usize> {
+    if len == 0 || shuffle {
+        return None;
+    }
+    let index = index.min(len - 1);
+    match step {
+        TrackStep::Next => {
+            if index + 1 < len {
+                Some(index + 1)
+            } else if repeat == crate::player::Repeat::All {
+                Some(0)
+            } else {
+                None
+            }
+        }
+        TrackStep::Previous => index.checked_sub(1),
     }
 }
 
@@ -1762,5 +1908,72 @@ mod contrast_step_tests {
         assert_eq!(signed_percent(0.4), "+40%");
         assert_eq!(signed_percent(-0.4), "-40%");
         assert_eq!(signed_percent(0.0), "0%");
+    }
+}
+
+#[cfg(test)]
+mod track_step_tests {
+    use super::{TrackStep, local_track_step};
+    use crate::player::Repeat;
+
+    #[test]
+    fn next_walks_forward_and_wraps_only_with_repeat_all() {
+        assert_eq!(
+            local_track_step(0, 4, Repeat::Off, false, TrackStep::Next),
+            Some(1)
+        );
+        // Repeat One only affects auto-advance; an explicit next still moves.
+        assert_eq!(
+            local_track_step(0, 4, Repeat::One, false, TrackStep::Next),
+            Some(1)
+        );
+        assert_eq!(
+            local_track_step(3, 4, Repeat::All, false, TrackStep::Next),
+            Some(0)
+        );
+        assert_eq!(
+            local_track_step(3, 4, Repeat::Off, false, TrackStep::Next),
+            None
+        );
+    }
+
+    #[test]
+    fn previous_clamps_at_the_head() {
+        assert_eq!(
+            local_track_step(2, 4, Repeat::Off, false, TrackStep::Previous),
+            Some(1)
+        );
+        assert_eq!(
+            local_track_step(0, 4, Repeat::Off, false, TrackStep::Previous),
+            None
+        );
+    }
+
+    #[test]
+    fn shuffle_and_empty_queue_leave_the_cursor_to_the_core() {
+        assert_eq!(
+            local_track_step(1, 4, Repeat::All, true, TrackStep::Next),
+            None
+        );
+        assert_eq!(
+            local_track_step(1, 4, Repeat::All, true, TrackStep::Previous),
+            None
+        );
+        assert_eq!(
+            local_track_step(0, 0, Repeat::All, false, TrackStep::Next),
+            None
+        );
+    }
+
+    #[test]
+    fn stale_out_of_range_index_is_clamped() {
+        assert_eq!(
+            local_track_step(9, 3, Repeat::All, false, TrackStep::Next),
+            Some(0)
+        );
+        assert_eq!(
+            local_track_step(9, 3, Repeat::All, false, TrackStep::Previous),
+            Some(1)
+        );
     }
 }

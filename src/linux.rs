@@ -30,23 +30,12 @@ use std::path::Path;
 /// userspace. The existing warm/read paths still run as a fallback.
 #[cfg(target_os = "linux")]
 pub(crate) fn advise_willneed(path: &Path) -> std::io::Result<()> {
-    const POSIX_FADV_WILLNEED: std::ffi::c_int = 3;
-    // SAFETY: `posix_fadvise` is a plain libc function declared with the
-    // platform's `int`/`long` ABI; only integers cross this boundary.
-    unsafe extern "C" {
-        fn posix_fadvise(
-            fd: std::ffi::c_int,
-            offset: std::ffi::c_long,
-            len: std::ffi::c_long,
-            advice: std::ffi::c_int,
-        ) -> std::ffi::c_int;
-    }
     let file = std::fs::File::open(path)?;
     // SAFETY: `file` keeps the descriptor open for the duration of the call;
     // `posix_fadvise` only inspects the open file description and reports
     // invalid/unsupported advice through its return value, never as memory
     // unsafety.
-    let _ = unsafe { posix_fadvise(file.as_raw_fd(), 0, 0, POSIX_FADV_WILLNEED) };
+    let _ = unsafe { libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_WILLNEED) };
     Ok(())
 }
 
@@ -146,9 +135,7 @@ pub(crate) fn set_idle_priority(tid: u32) -> bool {
     // thread for `sched_setscheduler`), and `param` is a fully initialised
     // `sched_param`; the call only reads those values and reports failure via
     // its return value.
-    let sched = unsafe {
-        libc::sched_setscheduler(tid as libc::pid_t, SCHED_IDLE, &param)
-    };
+    let sched = unsafe { libc::sched_setscheduler(tid as libc::pid_t, SCHED_IDLE, &param) };
     // SAFETY: raw `ioprio_set(2)` with integer-only arguments; the kernel
     // validates the target task/class and reports errors through the return
     // value, so no memory-safety precondition can be violated.
@@ -234,9 +221,7 @@ pub(crate) fn close_inherited_fds() -> std::io::Result<()> {
     // SAFETY: `close_range` only marks descriptor flags in the calling
     // process; the range starts at fd 3 so stdio is untouched, and failure
     // (old kernel/filesystem) is reported through the return value.
-    let _ = unsafe {
-        libc::close_range(3, u32::MAX, libc::CLOSE_RANGE_CLOEXEC as std::ffi::c_int)
-    };
+    let _ = unsafe { libc::close_range(3, u32::MAX, libc::CLOSE_RANGE_CLOEXEC as std::ffi::c_int) };
     Ok(())
 }
 

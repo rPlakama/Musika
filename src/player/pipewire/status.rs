@@ -16,8 +16,6 @@ pub(crate) struct Status {
     pub(crate) position: f64,
     pub(crate) duration: f64,
     pub(crate) stream_size: u64,
-    pub(crate) level: f64,
-    pub(crate) peak: f64,
     /// The worker's current decoder is seekable, so a pause can keep it alive
     /// instead of interrupting it and reopening the stream on resume.
     pub(crate) seekable: bool,
@@ -60,6 +58,8 @@ pub(crate) struct Shared {
     pub(crate) clock_origin: Mutex<f64>,
     /// Absolute ring frame where the next gapless track begins.
     pub(crate) boundary_frame: AtomicU64,
+    /// Ring epoch in which `boundary_frame` was armed.
+    pub(crate) boundary_epoch: AtomicU64,
     pub(crate) boundary_active: AtomicBool,
     pub(crate) boundary_duration: Mutex<f64>,
     /// Position (seconds) the gapless next track starts at; nonzero only for
@@ -126,6 +126,7 @@ impl Shared {
             clock_start: AtomicU64::new(0),
             clock_origin: Mutex::new(0.0),
             boundary_frame: AtomicU64::new(0),
+            boundary_epoch: AtomicU64::new(0),
             boundary_active: AtomicBool::new(false),
             boundary_duration: Mutex::new(0.0),
             boundary_origin: Mutex::new(0.0),
@@ -224,10 +225,8 @@ impl Shared {
     pub(crate) fn set_crossfade_config(&self, config: crate::player::CrossfadeConfig) {
         let config = config.sanitized();
         self.crossfade.store(config.enabled, Ordering::Release);
-        self.crossfade_millis.store(
-            (config.seconds * 1000.0).round() as u32,
-            Ordering::Release,
-        );
+        self.crossfade_millis
+            .store((config.seconds * 1000.0).round() as u32, Ordering::Release);
         self.crossfade_equal_power
             .store(config.equal_power, Ordering::Release);
     }
@@ -259,6 +258,33 @@ impl Shared {
         (epoch, profile)
     }
 
+    /// True when the armed gapless boundary has crossed into the audible
+    /// timeline. `epoch` is the sink's ring epoch and `read_frames` its
+    /// absolute frame read counter (both in ring frame space).
+    ///
+    /// The epoch check ignores a marker armed before a `reset()`; the
+    /// `boundary_active` check ignores one disarmed by a seek/flush (P-01).
+    pub(crate) fn boundary_reached(&self, epoch: u64, read_frames: u64) -> bool {
+        if !self.boundary_active.load(Ordering::Acquire) {
+            return false;
+        }
+        if epoch != self.boundary_epoch.load(Ordering::Acquire) {
+            return false;
+        }
+        read_frames >= self.boundary_frame.load(Ordering::Acquire)
+    }
+
+    /// Clears an armed gapless boundary.
+    ///
+    /// A seek or a format change discards the frames the boundary frame was
+    /// measured in, so the marker has no meaning afterwards: keeping it armed
+    /// would fire a spurious `Boundary` when the read counter reaches it in
+    /// the new timeline. `reset()` is already covered by the epoch guard; a
+    /// `flush()` keeps the epoch, so callers must disarm explicitly.
+    pub(crate) fn disarm_boundary(&self) {
+        self.boundary_active.store(false, Ordering::Release);
+    }
+
     pub(crate) fn set_sink_state(&self, state: SinkState, error: Option<String>) {
         {
             let mut sink = self.sink.lock().unwrap_or_else(PoisonError::into_inner);
@@ -286,5 +312,42 @@ impl Drop for Shared {
                 _ = libc::close(self.wake_fd);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::player::pipewire::ring::Ring;
+
+    #[test]
+    fn boundary_reached_requires_armed_epoch_and_crossed_frame() {
+        let shared = Shared::new();
+        shared.boundary_frame.store(500, Ordering::Release);
+        shared.boundary_epoch.store(7, Ordering::Release);
+        assert!(!shared.boundary_reached(7, 499), "not crossed yet");
+        shared.boundary_active.store(true, Ordering::Release);
+        assert!(!shared.boundary_reached(8, 500), "stale epoch after reset");
+        assert!(shared.boundary_reached(7, 500), "armed and crossed");
+        shared.boundary_active.store(false, Ordering::Release);
+        assert!(!shared.boundary_reached(7, 600), "disarmed marker");
+    }
+
+    #[test]
+    fn flush_disarms_armed_boundary_before_read_counter_crosses_it() {
+        // A seek flushes queued frames and moves the read counter; an armed
+        // boundary measured in the old timeline must not fire afterwards
+        // (P-01). `Ring::flush` keeps the epoch, so the explicit disarm is the
+        // only guard.
+        let shared = Shared::new();
+        let ring = Ring::new().expect("ring");
+        shared.boundary_epoch.store(ring.epoch(), Ordering::Release);
+        shared
+            .boundary_frame
+            .store(ring.written_frames(), Ordering::Release);
+        shared.boundary_active.store(true, Ordering::Release);
+        shared.disarm_boundary();
+        // Simulate the read counter jumping past the stale marker on flush.
+        assert!(!shared.boundary_reached(ring.epoch(), u64::MAX));
     }
 }

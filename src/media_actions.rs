@@ -26,18 +26,46 @@ use crate::session::client;
 static STREAM_CACHE_INFLIGHT: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
-fn claim_stream_cache(song_id: &str) -> bool {
-    STREAM_CACHE_INFLIGHT
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .insert(song_id.to_string())
+/// One *download* per song at a time in this process (N-05). The ledger's
+/// `active` state can be stale after a crash, so this in-memory claim is the
+/// authoritative in-flight marker; it also closes the check-then-set race two
+/// concurrent `download_one` calls had.
+static ONGOING_DOWNLOADS: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+fn lock_set(set: &Mutex<HashSet<String>>) -> std::sync::MutexGuard<'_, HashSet<String>> {
+    set.lock().unwrap_or_else(|error| error.into_inner())
 }
 
-fn release_stream_cache(song_id: &str) {
-    STREAM_CACHE_INFLIGHT
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .remove(song_id);
+/// Owned claim on one in-flight fetch. Dropping it releases the song — also
+/// on panic or task cancellation (N-05/N-10).
+struct FetchGuard {
+    set: &'static Mutex<HashSet<String>>,
+    song_id: String,
+}
+
+impl Drop for FetchGuard {
+    fn drop(&mut self) {
+        lock_set(self.set).remove(&self.song_id);
+    }
+}
+
+fn claim(set: &'static Mutex<HashSet<String>>, song_id: &str) -> Option<FetchGuard> {
+    if !lock_set(set).insert(song_id.to_string()) {
+        return None;
+    }
+    Some(FetchGuard {
+        set,
+        song_id: song_id.to_string(),
+    })
+}
+
+fn claim_stream_cache(song_id: &str) -> Option<FetchGuard> {
+    claim(&STREAM_CACHE_INFLIGHT, song_id)
+}
+
+fn claim_download(song_id: &str) -> Option<FetchGuard> {
+    claim(&ONGOING_DOWNLOADS, song_id)
 }
 
 pub(crate) async fn rule_off(dbs: &crate::db::Dbs, rule_id: &str) {
@@ -97,7 +125,9 @@ pub(crate) async fn download_one(
     song_id: &str,
 ) -> anyhow::Result<&'static str> {
     if crate::media::downloaded(&dbs.media, song_id).await?
-        && crate::media::cached_path(&dbs.media, song_id).await?.is_some()
+        && crate::media::cached_path(&dbs.media, song_id)
+            .await?
+            .is_some()
     {
         eprintln!("download: {song_id} already cached");
         crate::download::set_state(&dbs.download, song_id, crate::download::DONE, None).await?;
@@ -108,14 +138,15 @@ pub(crate) async fn download_one(
     // rule-owned blob leaves with its rule — the media row must carry the
     // ownership, or removing the target leaves the file behind (CACHE-5).
     let mark = crate::download::get(&dbs.download, song_id).await?;
-    if mark
-        .as_ref()
-        .is_some_and(|row| row.state == crate::download::ACTIVE)
-    {
+    let rule_of_mark = mark.and_then(|row| row.rule_id);
+    // N-05: the in-process RAII claim is the authoritative in-flight marker
+    // (the ledger check alone raced between two concurrent calls). A ledger
+    // row still `active` here is a leftover from a crash and is taken over
+    // below instead of locking the song out forever.
+    let Some(_inflight) = claim_download(song_id) else {
         eprintln!("download: {song_id} fetch already in flight");
         return Ok(crate::download::ACTIVE);
-    }
-    let rule_of_mark = mark.and_then(|row| row.rule_id);
+    };
 
     crate::download::mark_queued(&dbs.download, song_id, None).await?;
     crate::download::set_state(&dbs.download, song_id, crate::download::ACTIVE, None).await?;
@@ -145,10 +176,15 @@ pub(crate) async fn download_one(
         let written = match client.download_media_to(song_id, &temp).await {
             Ok(written) => written,
             Err(err) => {
-                _ = std::fs::remove_file(&temp);
+                _ = tokio::fs::remove_file(&temp).await;
                 return Err(err);
             }
         };
+        // N-01: a zero-byte body is a failed transfer, never a cached song.
+        if written == 0 {
+            _ = tokio::fs::remove_file(&temp).await;
+            anyhow::bail!("the server returned an empty download");
+        }
         crate::media::store_streamed(
             &dbs.media,
             song_id,
@@ -201,7 +237,9 @@ pub(crate) async fn cache_stream(
         return Ok(false);
     }
     if crate::media::downloaded(&dbs.media, song_id).await?
-        && crate::media::cached_path(&dbs.media, song_id).await?.is_some()
+        && crate::media::cached_path(&dbs.media, song_id)
+            .await?
+            .is_some()
     {
         return Ok(false);
     }
@@ -213,12 +251,11 @@ pub(crate) async fn cache_stream(
         _ = crate::media::touch_playback(&dbs.media, song_id).await;
         return Ok(true);
     }
-    if !claim_stream_cache(song_id) {
+    // N-10: the RAII claim is released on every exit path, cancellation too.
+    let Some(_inflight) = claim_stream_cache(song_id) else {
         return Ok(false);
-    }
-    let result = cache_stream_inner(dbs, song_id, settings, &quality).await;
-    release_stream_cache(song_id);
-    result
+    };
+    cache_stream_inner(dbs, song_id, settings, &quality).await
 }
 
 async fn cache_stream_inner(
@@ -231,13 +268,8 @@ async fn cache_stream_inner(
     let (size, suffix, bit_rate) = crate::library::song_file_info(&dbs.library, song_id)
         .await?
         .unwrap_or((None, None, None));
-    let fingerprint = crate::media::fingerprint(
-        size,
-        suffix.as_deref(),
-        bit_rate,
-        client.base(),
-        quality,
-    );
+    let fingerprint =
+        crate::media::fingerprint(size, suffix.as_deref(), bit_rate, client.base(), quality);
     let extension = settings
         .stream_format
         .as_deref()
@@ -257,13 +289,25 @@ async fn cache_stream_inner(
     {
         Ok(written) => written,
         Err(error) => {
-            _ = std::fs::remove_file(&temp);
+            _ = tokio::fs::remove_file(&temp).await;
             return Err(error);
         }
     };
     if written == 0 {
-        _ = std::fs::remove_file(&temp);
+        _ = tokio::fs::remove_file(&temp).await;
         anyhow::bail!("the server returned an empty stream");
+    }
+    // N-05: a download may have completed while this stream was in flight;
+    // never overwrite the user's config-tier blob with a purgeable copy.
+    // (`media::record` refuses the downgrade atomically as the last line of
+    // defence.)
+    if crate::media::downloaded(&dbs.media, song_id).await?
+        && crate::media::cached_path(&dbs.media, song_id)
+            .await?
+            .is_some()
+    {
+        _ = tokio::fs::remove_file(&temp).await;
+        return Ok(false);
     }
     crate::media::store_streamed(
         &dbs.media,

@@ -112,14 +112,13 @@ impl Bridge {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            let event = match crate::playlists::add_selection_to_playlist(
-                &dbs, &kind, &ids, &playlist,
-            )
-            .await
-            {
-                Ok((name, rows)) => PlaylistSave::ok(name).rows(rows).into(),
-                Err(err) => PlaylistSave::failed(playlist, format!("{err:#}")).into(),
-            };
+            let event =
+                match crate::playlists::add_selection_to_playlist(&dbs, &kind, &ids, &playlist)
+                    .await
+                {
+                    Ok((name, rows)) => PlaylistSave::ok(name).rows(rows).into(),
+                    Err(err) => PlaylistSave::failed(playlist, format!("{err:#}")).into(),
+                };
             _ = tx.send(event);
         });
     }
@@ -216,7 +215,9 @@ impl Bridge {
                 return;
             }
             let rows = song_ids.len();
-            match crate::playlists::insert_song_ids_at(&dbs, &playlist_id, position, &song_ids).await {
+            match crate::playlists::insert_song_ids_at(&dbs, &playlist_id, position, &song_ids)
+                .await
+            {
                 Ok(name) => {
                     _ = tx.send(
                         PlaylistSave::ok(name)
@@ -266,7 +267,8 @@ impl Bridge {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            match crate::playlists::move_playlist_block(&dbs, &playlist_id, start, len, delta).await {
+            match crate::playlists::move_playlist_block(&dbs, &playlist_id, start, len, delta).await
+            {
                 Ok(name) => {
                     _ = tx.send(
                         PlaylistSave::ok(name)
@@ -289,7 +291,8 @@ impl Bridge {
         let cursor = positions.first().copied();
         crate::app::runtime().spawn(async move {
             let Some(dbs) = crate::app::dbs() else { return };
-            match crate::playlists::remove_playlist_positions(&dbs, &playlist_id, &positions).await {
+            match crate::playlists::remove_playlist_positions(&dbs, &playlist_id, &positions).await
+            {
                 Ok(name) => {
                     _ = tx.send(
                         PlaylistSave::ok(name)

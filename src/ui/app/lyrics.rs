@@ -53,13 +53,6 @@ impl AppRoot {
         }
     }
 
-    pub(in crate::ui) fn transport_press_live(&self) -> bool {
-        self.transport_press.iter().flatten().any(|start| {
-            let elapsed = (self.clock.now - start) as f32;
-            (0.0..0.32).contains(&elapsed)
-        })
-    }
-
     pub(in crate::ui) fn refresh_lyrics_emphasis(&mut self) {
         let Some(lyrics) = self.lyrics.as_ref() else {
             self.lyrics_active_line = None;
@@ -189,7 +182,16 @@ impl AppRoot {
             .unwrap_or(active)
             .min(lyrics.lines.len() - 1);
         let mut base = (height * 0.055).clamp(13.0, 22.0);
-        let mut layout = lyrics_layout::layout_windowed(
+        // Wrapped-line measurement is the expensive part of a lyrics layout
+        // (font shaping per line); memoize it by
+        // `(track_id, lyrics_rev, width_px, font_size)` so a frame that only
+        // moves the playback highlight reuses the same heights instead of
+        // re-wrapping (and re-shaping) the whole document.
+        let track_id = lyrics.song_id.as_str();
+        let revision = lyrics_layout::lines_revision(&lyrics.lines);
+        let mut layout = lyrics_layout::layout_windowed_memoized(
+            track_id,
+            revision,
             &lyrics.lines,
             active,
             center,
@@ -202,7 +204,9 @@ impl AppRoot {
         // nominal size. Step the type down until it fits, then keep it.
         while base > 13.0 && layout.rows.iter().any(|row| row.height > height) {
             base -= 1.0;
-            layout = lyrics_layout::layout_windowed(
+            layout = lyrics_layout::layout_windowed_memoized(
+                track_id,
+                revision,
                 &lyrics.lines,
                 active,
                 center,
@@ -289,7 +293,7 @@ impl AppRoot {
                 self.lyrics_overlay_wanted = !self.lyrics_overlay_wanted;
                 self.refresh_lyrics_overlay();
             } else {
-                self.push_toast("There is no lyrics.".to_string(), ToastKind::Error, None);
+                self.push_toast("There is no lyrics.".to_string(), None);
             }
         } else if self.page.as_ref().is_some_and(|page| {
             self.notes

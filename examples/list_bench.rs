@@ -17,6 +17,10 @@ use gpui::{
 };
 
 #[path = "../src/ui/debug.rs"]
+#[allow(
+    dead_code,
+    reason = "the bench example paints the frame HUD but does not probe the debug-HUD env flag"
+)]
 mod fps;
 
 const ROW_H: f32 = 56.0;

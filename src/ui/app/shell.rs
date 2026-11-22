@@ -64,18 +64,13 @@ fn format_level(volume: f64) -> i64 {
 }
 
 impl AppRoot {
-    pub(in crate::ui) fn push_toast(
-        &mut self,
-        message: String,
-        kind: ToastKind,
-        retry: Option<RetryAction>,
-    ) {
+    pub(in crate::ui) fn push_toast(&mut self, message: String, retry: Option<RetryAction>) {
+        self.clock.tick();
         if self.toasts.iter().any(|toast| toast.message == message) {
             return;
         }
         self.toasts.push(ToastState {
             message,
-            kind,
             retry,
             created_at: self.clock.now,
         });
@@ -116,7 +111,7 @@ impl AppRoot {
         if Self::ipc_state_has_dedicated_toast(command) {
             return;
         }
-        self.push_toast(Self::ipc_toast_text(command), ToastKind::Notice, None);
+        self.push_toast(Self::ipc_toast_text(command), None);
     }
 
     /// Commands whose effect is announced by a dedicated state toast instead of
@@ -149,6 +144,7 @@ impl AppRoot {
     /// core reported, or the expected one right after a local toggle.
     pub(in crate::ui) fn sync_mute_toast(&mut self, muted: bool) {
         if muted {
+            self.clock.tick();
             // The level that will come back on unmute: mute never changes it.
             let level = self
                 .mute_toast_level

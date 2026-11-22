@@ -121,6 +121,10 @@ impl QuickVerb {
     }
 
     /// Which artist/album surface this rating verb belongs to, if any.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn rating_target(self) -> Option<QuickKind> {
         match self {
             QuickVerb::RateAlbum { .. } => Some(QuickKind::Album),
@@ -153,6 +157,10 @@ pub enum QuickKind {
     Album,
     Artist,
     Playlist,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     Selection,
 }
 
@@ -267,6 +275,10 @@ pub struct QuickMenu {
 impl QuickMenu {
     /// Track row (legacy UI `QuickActions.song`). The heart starts unstarred; use
     /// [`QuickMenu::song_with`] for a row that is already favourited.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn song() -> Self {
         Self::song_with(false)
     }
@@ -288,6 +300,10 @@ impl QuickMenu {
 
     /// Album row/card (legacy UI `QuickActions.album`). The heart starts unstarred
     /// and unrated; use [`QuickMenu::album_with`] for the row's real state.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn album(cached: bool) -> Self {
         Self::album_with(cached, false, 0)
     }
@@ -345,6 +361,10 @@ impl QuickMenu {
 
     /// Artist hit (legacy UI `QuickActions.artist`). The artist page is the row's
     /// Enter already, so both jumps stay open ("—").
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn artist() -> Self {
         Self::artist_with(false, 0)
     }
@@ -435,6 +455,10 @@ impl QuickMenu {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn slot_mut(&mut self, direction: Direction) -> Option<&mut QuickSlot> {
         match direction {
             Direction::North => self.north.as_mut(),
@@ -444,6 +468,10 @@ impl QuickMenu {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn set_slot(&mut self, direction: Direction, slot: Option<QuickSlot>) {
         match direction {
             Direction::North => self.north = slot,
@@ -671,6 +699,10 @@ impl AltGesture {
     }
 
     /// The label the aimed tile should show, including a multi-action cycle.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn active_label<'a>(&self, menu: &'a QuickMenu) -> Option<&'a str> {
         let direction = self.aimed?;
         let slot = self.aimed_slot(menu)?;
@@ -678,6 +710,10 @@ impl AltGesture {
     }
 
     /// The icon the aimed tile should show, including a multi-action cycle.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn active_icon<'a>(&self, menu: &'a QuickMenu) -> Option<&'a str> {
         let direction = self.aimed?;
         let slot = self.aimed_slot(menu)?;
@@ -765,6 +801,10 @@ impl AltGesture {
 
     /// Clear the dismissed latch without arming (the host may also use
     /// [`AltGesture::release_hold`], which does this on the Alt edge).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn clear_dismissed(&mut self) {
         self.dismissed = false;
     }

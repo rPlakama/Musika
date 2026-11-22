@@ -235,6 +235,16 @@ pub struct PlaylistWithSongs {
 }
 
 /// `getSimilarSongs` wrapper (ARC-RS-1): the seed song's neighbours.
+///
+/// Kept for the protocol round-trip tests; nothing calls `getSimilarSongs`
+/// in the current radio implementation.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "only the Subsonic protocol tests construct this wrapper"
+    )
+)]
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SimilarSongs {
@@ -468,19 +478,6 @@ impl SubsonicClient {
         self.get_key("getAlbum", &params, "album").await
     }
 
-    /// `getSimilarSongs` — songs similar to the given song (last.fm); the
-    /// radio page's row source (ARC-RS-1).
-    pub async fn get_similar_songs(&self, id: &str, count: Option<u32>) -> Result<Vec<Child>> {
-        let params = query(&[
-            ("id", Some(id.to_string())),
-            ("count", count.map(|value| value.to_string())),
-        ]);
-        let songs: SimilarSongs = self
-            .get_key("getSimilarSongs", &params, "similarSongs")
-            .await?;
-        Ok(songs.song)
-    }
-
     /// `getArtistInfo` — biography, images and similar artists (last.fm).
     pub async fn get_artist_info(
         &self,
@@ -527,11 +524,6 @@ impl SubsonicClient {
     // Media retrieval (URL builders)
     // -----------------------------------------------------------------------
 
-    /// `stream` — URL to stream a media file (transcoded as requested).
-    pub fn stream_url(&self, id: &str) -> Result<reqwest::Url> {
-        self.endpoint_url("stream", &[("id", id.to_string())])
-    }
-
     /// `stream` with an optional bitrate cap and format for the playback
     /// quality setting. `0`/`None` asks for the original.
     pub fn stream_url_with_quality(
@@ -553,12 +545,7 @@ impl SubsonicClient {
     /// `scrobble` — report a play. `submission=false` is the now-playing
     /// notification; `true` is the completed play, optionally with its
     /// provider timestamp in milliseconds.
-    pub async fn scrobble(
-        &self,
-        id: &str,
-        submission: bool,
-        time_ms: Option<i64>,
-    ) -> Result<()> {
+    pub async fn scrobble(&self, id: &str, submission: bool, time_ms: Option<i64>) -> Result<()> {
         let mut params: Vec<(&str, String)> = vec![
             ("id", id.to_string()),
             ("submission", submission.to_string()),

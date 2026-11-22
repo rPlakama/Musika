@@ -125,6 +125,9 @@ pub struct SearchIndex {
     most_played: Vec<usize>,
     by_album: HashMap<String, Vec<usize>>,
     pool: Vec<Arc<SongHit>>,
+    /// `library_revision` this catalog was built from; `None` for builds that
+    /// did not come from the sync path (tests) and for pre-revision databases.
+    revision: Option<i64>,
 }
 
 impl SearchIndex {
@@ -167,7 +170,12 @@ impl SearchIndex {
                     .disc_number
                     .unwrap_or(0)
                     .cmp(&songs[b].disc_number.unwrap_or(0))
-                    .then_with(|| songs[a].track.unwrap_or(0).cmp(&songs[b].track.unwrap_or(0)))
+                    .then_with(|| {
+                        songs[a]
+                            .track
+                            .unwrap_or(0)
+                            .cmp(&songs[b].track.unwrap_or(0))
+                    })
                     .then_with(|| songs[a].title.cmp(&songs[b].title))
             });
         }
@@ -206,6 +214,7 @@ impl SearchIndex {
             most_played,
             by_album,
             pool: songs,
+            revision: None,
         }
     }
 
@@ -332,7 +341,9 @@ fn match_indexed<T>(
     let mut out: Vec<(u32, &String, usize)> = heap.into_iter().map(|r| r.0).collect();
     out.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1)));
     out.truncate(limit);
-    out.into_iter().map(|(_, _, i)| Arc::clone(&items[i].row)).collect()
+    out.into_iter()
+        .map(|(_, _, i)| Arc::clone(&items[i].row))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -464,7 +475,8 @@ pub async fn ensure(pool: &SqlitePool) -> Result<Option<Arc<SearchIndex>>> {
         return Ok(None);
     }
     let started = std::time::Instant::now();
-    rebuild_locked(pool).await?;
+    let revision = crate::library::library_revision(pool).await?;
+    rebuild_locked(pool, revision).await?;
     crate::startup::trace_elapsed("search.catalog.build", started.elapsed());
     drop(build);
     Ok(slot()
@@ -476,6 +488,13 @@ pub async fn ensure(pool: &SqlitePool) -> Result<Option<Arc<SearchIndex>>> {
 /// Builds the catalog after the first frame, so the first search does not
 /// pay for it. FTS-only and over-budget libraries are skipped; `ensure`
 /// remains the source of truth for both conditions.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "only the search-index tests warm the catalog explicitly"
+    )
+)]
 pub async fn warm(pool: &SqlitePool) -> Result<()> {
     if !enabled() || over_budget() {
         return Ok(());
@@ -487,14 +506,30 @@ pub async fn warm(pool: &SqlitePool) -> Result<()> {
 /// Rebuilds the whole catalog from `library.db` (after a sync or on first
 /// use). Serialized with [`ensure`] through [`BUILD`]. The Nucleo injection
 /// runs on a blocking worker.
+///
+/// N-16: the post-sync rebuild runs even when the sync changed nothing. When
+/// the resident catalog was already built from the library's current
+/// revision, the expensive table reads and Nucleo rebuild are skipped.
 pub async fn rebuild(pool: &SqlitePool) -> Result<()> {
+    let revision = crate::library::library_revision(pool).await.unwrap_or(None);
     let build = BUILD.lock().await;
-    let result = rebuild_locked(pool).await;
+    if revision.is_some() {
+        let current = slot()
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        if let Some(index) = current
+            && index.revision == revision
+        {
+            return Ok(());
+        }
+    }
+    let result = rebuild_locked(pool, revision).await;
     drop(build);
     result
 }
 
-async fn rebuild_locked(pool: &SqlitePool) -> Result<()> {
+async fn rebuild_locked(pool: &SqlitePool, revision: Option<i64>) -> Result<()> {
     let epoch = EPOCH.load(Ordering::Relaxed);
     // A previous over-budget verdict must not stick forever: every rebuild
     // re-measures (the library may have shrunk, or the budget changed).
@@ -547,13 +582,14 @@ async fn rebuild_locked(pool: &SqlitePool) -> Result<()> {
     .fetch_all(pool)
     .await?;
 
-    let index =
+    let mut index =
         tokio::task::spawn_blocking(move || SearchIndex::from_shared(songs, artists, albums))
             .await?;
     if EPOCH.load(Ordering::Relaxed) != epoch {
         // A wipe landed while this build was running; drop the stale catalog.
         return Ok(());
     }
+    index.revision = revision;
     *slot().write().unwrap_or_else(|error| error.into_inner()) = Some(Arc::new(index));
     // The build allocated the catalog plus streaming rows; trim only the
     // allocator's free pages, never the index itself.

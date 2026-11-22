@@ -43,7 +43,7 @@
 use std::io::{self, Read, Write};
 
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::bridge::Event;
 use crate::player::{Repeat, State, Track};
@@ -63,7 +63,21 @@ pub const QUEUE_INSERT_MAX_ROWS: usize = QUEUE_CHUNK_ROWS;
 /// Bytes of the fixed frame header.
 pub const FRAME_HEADER_BYTES: usize = 8;
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "frame flag bits are only exercised by the ipc_protocol tests"
+    )
+)]
 pub const FLAG_REPLY: u8 = 1 << 0;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "frame flag bits are only exercised by the ipc_protocol tests"
+    )
+)]
 pub const FLAG_ERROR: u8 = 1 << 1;
 
 // Frame kinds. The hot path is binary; the control path is JSON.
@@ -178,6 +192,9 @@ impl Role {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
+    /// Success: replies always carry an explicit code, including `ok: true`
+    /// ones (D-26), instead of omitting the field.
+    Ok,
     BadFrame,
     TooLarge,
     UnknownKind,
@@ -196,6 +213,7 @@ pub enum ErrorCode {
 impl ErrorCode {
     pub fn as_u8(self) -> u8 {
         match self {
+            Self::Ok => 0,
             Self::BadFrame => 1,
             Self::TooLarge => 2,
             Self::UnknownKind => 3,
@@ -214,6 +232,7 @@ impl ErrorCode {
 
     pub fn from_u8(code: u8) -> Self {
         match code {
+            0 => Self::Ok,
             1 => Self::BadFrame,
             2 => Self::TooLarge,
             3 => Self::UnknownKind,
@@ -276,7 +295,7 @@ impl ReplyJson {
         Self {
             req,
             ok: true,
-            code: None,
+            code: Some(ErrorCode::Ok),
             message: None,
         }
     }
@@ -479,6 +498,13 @@ pub enum PlayerOp {
 }
 
 impl PlayerOp {
+    #[cfg_attr(
+        not(any(test, feature = "gpuui")),
+        expect(
+            dead_code,
+            reason = "the blocking frame path is consumed by the GPUI daemon client"
+        )
+    )]
     fn tag(&self) -> u8 {
         match self {
             Self::PlayPause => 0,
@@ -553,8 +579,6 @@ pub const STATE_FLAG_MUTED: u32 = 1 << 0;
 pub const STATE_FLAG_LOADING: u32 = 1 << 1;
 pub const STATE_FLAG_GAPLESS_ARMED: u32 = 1 << 2;
 pub const STATE_FLAG_ENGINE_UNAVAILABLE: u32 = 1 << 3;
-pub const STATE_FLAG_SEEKING: u32 = 1 << 4;
-pub const STATE_FLAG_ENDED: u32 = 1 << 5;
 /// The service is retrying the current row at the stored position.
 pub const STATE_FLAG_RETRYING: u32 = 1 << 6;
 /// Persistent queue shuffle mode.
@@ -587,14 +611,13 @@ impl PlaybackState {
         self.flags & STATE_FLAG_LOADING != 0
     }
 
-    pub fn engine_unavailable(&self) -> bool {
-        self.flags & STATE_FLAG_ENGINE_UNAVAILABLE != 0
-    }
-
-    pub fn seeking(&self) -> bool {
-        self.flags & STATE_FLAG_SEEKING != 0
-    }
-
+    #[cfg_attr(
+        not(feature = "gpuui"),
+        expect(
+            dead_code,
+            reason = "the retry indicator is only read by the GPUI front end"
+        )
+    )]
     pub fn retrying(&self) -> bool {
         self.flags & STATE_FLAG_RETRYING != 0
     }
@@ -755,6 +778,16 @@ impl QueueDelta {
                 write_rows(&mut w, rows)?;
             }
             QueueOp::Remove { indices } => {
+                if indices.len() > usize::from(u16::MAX) {
+                    return Err(ProtocolError::new(
+                        ErrorCode::TooLarge,
+                        format!(
+                            "queue remove carries {} indices, max {}",
+                            indices.len(),
+                            u16::MAX
+                        ),
+                    ));
+                }
                 w.u8(3);
                 w.u16(indices.len() as u16);
                 for index in indices {
@@ -821,6 +854,7 @@ impl QueueDelta {
                 ));
             }
         };
+        r.finish("queue delta")?;
         Ok(Self { rev, op })
     }
 }
@@ -884,6 +918,13 @@ impl Frame {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "flag-carrying frames are only built by the ipc_protocol tests"
+        )
+    )]
     pub fn with_flags(kind: u8, flags: u8, payload: Vec<u8>) -> Self {
         Self {
             kind,
@@ -931,21 +972,6 @@ impl Frame {
         }
         Ok((len, header[4], header[5]))
     }
-
-    pub fn decode(header: &[u8], payload: Vec<u8>) -> Result<Self, ProtocolError> {
-        let (len, kind, flags) = Self::parse_header(header)?;
-        if payload.len() != len {
-            return Err(ProtocolError::new(
-                ErrorCode::BadFrame,
-                format!("frame payload length {len} but got {}", payload.len()),
-            ));
-        }
-        Ok(Self {
-            kind,
-            flags,
-            payload,
-        })
-    }
 }
 
 /// Async frame reader for tokio tasks. `Ok(None)` is a clean EOF.
@@ -954,14 +980,37 @@ where
     R: AsyncRead + Unpin,
 {
     let mut header = [0u8; FRAME_HEADER_BYTES];
-    match reader.read_exact(&mut header).await {
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(error) => return Err(error),
+    // Read the first byte on its own: zero bytes is a clean EOF, while a
+    // frame that stops after 1..FRAME_HEADER_BYTES-1 bytes is a truncated
+    // header and must be reported instead of looking like a clean close (D-26).
+    let mut first = [0u8; 1];
+    loop {
+        match reader.read(&mut first).await {
+            Ok(0) => return Ok(None),
+            Ok(_) => break,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    header[0] = first[0];
+    if let Err(error) = reader.read_exact(&mut header[1..]).await {
+        if error.kind() == io::ErrorKind::UnexpectedEof {
+            return Err(ProtocolError::new(ErrorCode::BadFrame, "truncated frame header").io());
+        }
+        return Err(error);
     }
     let (len, kind, flags) = Frame::parse_header(&header).map_err(|error| error.io())?;
     let mut payload = vec![0u8; len];
-    reader.read_exact(&mut payload).await?;
+    if let Err(error) = reader.read_exact(&mut payload).await {
+        if error.kind() == io::ErrorKind::UnexpectedEof {
+            return Err(ProtocolError::new(
+                ErrorCode::BadFrame,
+                format!("truncated frame payload: expected {len} bytes"),
+            )
+            .io());
+        }
+        return Err(error);
+    }
     Ok(Some(Frame {
         kind,
         flags,
@@ -969,27 +1018,45 @@ where
     }))
 }
 
-/// Async frame writer. The frame is serialized to one buffer first, so a frame
-/// is never partially interleaved with another writer.
-pub async fn write_frame<W>(writer: &mut W, frame: &Frame) -> io::Result<()>
-where
-    W: AsyncWrite + Unpin,
-{
-    let bytes = frame.encode().map_err(|error| error.io())?;
-    writer.write_all(&bytes).await
-}
-
 /// Blocking frame reader for the UI reader thread.
+#[cfg_attr(
+    not(any(test, feature = "gpuui")),
+    expect(
+        dead_code,
+        reason = "the blocking frame path is consumed by the GPUI daemon client"
+    )
+)]
 pub fn read_frame_blocking<R: Read>(reader: &mut R) -> io::Result<Option<Frame>> {
     let mut header = [0u8; FRAME_HEADER_BYTES];
-    match reader.read_exact(&mut header) {
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(error) => return Err(error),
+    // Zero bytes is a clean EOF; a partial header is a protocol error (D-26).
+    let mut first = [0u8; 1];
+    loop {
+        match Read::read(reader, &mut first) {
+            Ok(0) => return Ok(None),
+            Ok(_) => break,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    header[0] = first[0];
+    if let Err(error) = reader.read_exact(&mut header[1..]) {
+        if error.kind() == io::ErrorKind::UnexpectedEof {
+            return Err(ProtocolError::new(ErrorCode::BadFrame, "truncated frame header").io());
+        }
+        return Err(error);
     }
     let (len, kind, flags) = Frame::parse_header(&header).map_err(|error| error.io())?;
     let mut payload = vec![0u8; len];
-    reader.read_exact(&mut payload)?;
+    if let Err(error) = reader.read_exact(&mut payload) {
+        if error.kind() == io::ErrorKind::UnexpectedEof {
+            return Err(ProtocolError::new(
+                ErrorCode::BadFrame,
+                format!("truncated frame payload: expected {len} bytes"),
+            )
+            .io());
+        }
+        return Err(error);
+    }
     Ok(Some(Frame {
         kind,
         flags,
@@ -998,13 +1065,27 @@ pub fn read_frame_blocking<R: Read>(reader: &mut R) -> io::Result<Option<Frame>>
 }
 
 /// Blocking frame writer for the UI writer thread.
+#[cfg_attr(
+    not(any(test, feature = "gpuui")),
+    expect(
+        dead_code,
+        reason = "the blocking frame path is consumed by the GPUI daemon client"
+    )
+)]
 pub fn write_frame_blocking<W: Write>(writer: &mut W, frame: &Frame) -> io::Result<()> {
     let bytes = frame.encode().map_err(|error| error.io())?;
     writer.write_all(&bytes)
 }
 
 impl PlayerRequest {
-    pub fn encode(&self) -> Vec<u8> {
+    #[cfg_attr(
+        not(any(test, feature = "gpuui")),
+        expect(
+            dead_code,
+            reason = "the blocking frame path is consumed by the GPUI daemon client"
+        )
+    )]
+    pub fn encode(&self) -> Result<Vec<u8>, ProtocolError> {
         let mut w = Writer::with_capacity(24);
         w.u32(self.req);
         w.u8(self.op.tag());
@@ -1014,6 +1095,16 @@ impl PlayerRequest {
             | PlayerOp::SeekRelative(volume) => w.f64(*volume),
             PlayerOp::Jump(index) | PlayerOp::Remove(index) => w.u32(*index),
             PlayerOp::RemoveMany(indices) => {
+                if indices.len() > usize::from(u16::MAX) {
+                    return Err(ProtocolError::new(
+                        ErrorCode::TooLarge,
+                        format!(
+                            "player remove-many carries {} indices, max {}",
+                            indices.len(),
+                            u16::MAX
+                        ),
+                    ));
+                }
                 w.u16(indices.len() as u16);
                 for index in indices {
                     w.u32(*index);
@@ -1051,7 +1142,7 @@ impl PlayerRequest {
             PlayerOp::SetNormalization(code) => w.u8(*code),
             PlayerOp::SetCrossfade(enabled) => w.u8(u8::from(*enabled)),
         }
-        w.0
+        Ok(w.0)
     }
 
     pub fn decode(payload: &[u8]) -> Result<Self, ProtocolError> {
@@ -1109,6 +1200,7 @@ impl PlayerRequest {
                 ));
             }
         };
+        r.finish("player request")?;
         Ok(Self { req, op })
     }
 }
@@ -1185,6 +1277,13 @@ fn event_decode(payload: &[u8]) -> Result<Event, ProtocolError> {
     clippy::large_enum_variant,
     reason = "the Event payload is the largest bridge document; boxing it would churn every IPC consumer and test for one allocation"
 )]
+#[cfg_attr(
+    not(feature = "gpuui"),
+    expect(
+        dead_code,
+        reason = "most decoded message payloads are only read by the GPUI daemon client"
+    )
+)]
 pub enum Message {
     Hello(Hello),
     Welcome(Welcome),
@@ -1194,7 +1293,13 @@ pub enum Message {
     /// Ask a UI client to raise/activate its window (`show`).
     Activate,
     Ping(Heartbeat),
-    Pong(Heartbeat),
+    Pong(
+        #[expect(
+            dead_code,
+            reason = "the echoed heartbeat is decoded for framing validation but never inspected"
+        )]
+        Heartbeat,
+    ),
     Request(RequestJson),
     Reply(ReplyJson),
     Event(Event),
@@ -1258,15 +1363,36 @@ impl Writer {
     fn u32(&mut self, value: u32) {
         self.0.extend_from_slice(&value.to_le_bytes());
     }
+    #[cfg_attr(
+        not(any(test, feature = "gpuui")),
+        expect(
+            dead_code,
+            reason = "the blocking frame path is consumed by the GPUI daemon client"
+        )
+    )]
     fn i32(&mut self, value: i32) {
         self.0.extend_from_slice(&value.to_le_bytes());
     }
     fn u64(&mut self, value: u64) {
         self.0.extend_from_slice(&value.to_le_bytes());
     }
+    #[cfg_attr(
+        not(any(test, feature = "gpuui")),
+        expect(
+            dead_code,
+            reason = "the blocking frame path is consumed by the GPUI daemon client"
+        )
+    )]
     fn f64(&mut self, value: f64) {
         self.0.extend_from_slice(&value.to_le_bytes());
     }
+    #[cfg_attr(
+        not(any(test, feature = "gpuui")),
+        expect(
+            dead_code,
+            reason = "the blocking frame path is consumed by the GPUI daemon client"
+        )
+    )]
     fn string(&mut self, value: &str) {
         self.u32(value.len() as u32);
         self.0.extend_from_slice(value.as_bytes());
@@ -1281,6 +1407,21 @@ struct Reader<'a> {
 impl<'a> Reader<'a> {
     fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, pos: 0 }
+    }
+
+    /// Rejects a payload with unconsumed trailing bytes (D-09): a decoder
+    /// that stops early would otherwise silently accept a corrupted frame.
+    fn finish(&self, what: &str) -> Result<(), ProtocolError> {
+        if self.pos == self.bytes.len() {
+            return Ok(());
+        }
+        Err(ProtocolError::new(
+            ErrorCode::BadPayload,
+            format!(
+                "{what}: {} trailing bytes after the payload",
+                self.bytes.len() - self.pos
+            ),
+        ))
     }
 
     fn short(&self, want: usize) -> ProtocolError {
@@ -1325,7 +1466,14 @@ impl<'a> Reader<'a> {
         ]))
     }
     fn f64(&mut self) -> Result<f64, ProtocolError> {
-        Ok(f64::from_bits(self.u64()?))
+        let value = f64::from_bits(self.u64()?);
+        if !value.is_finite() {
+            return Err(ProtocolError::new(
+                ErrorCode::BadPayload,
+                "non-finite float in payload",
+            ));
+        }
+        Ok(value)
     }
     fn string(&mut self) -> Result<String, ProtocolError> {
         let len = self.u32()? as usize;
@@ -1333,5 +1481,29 @@ impl<'a> Reader<'a> {
         std::str::from_utf8(bytes)
             .map(str::to_owned)
             .map_err(|error| ProtocolError::new(ErrorCode::BadPayload, error.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn player_request_decode_rejects_non_finite_floats() {
+        let signaling_nan = f64::from_bits(0x7ff0_0000_0000_0001);
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, signaling_nan] {
+            for op in [
+                PlayerOp::SetVolume(bad),
+                PlayerOp::Seek(bad),
+                PlayerOp::SeekRelative(bad),
+            ] {
+                let bytes = PlayerRequest { req: 7, op }
+                    .encode()
+                    .expect("encode player request");
+                let err =
+                    PlayerRequest::decode(&bytes).expect_err("non-finite float must be rejected");
+                assert_eq!(err.code, ErrorCode::BadPayload);
+            }
+        }
     }
 }

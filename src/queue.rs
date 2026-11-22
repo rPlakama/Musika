@@ -183,6 +183,52 @@ pub async fn playlist_tracks(
     Ok((tracks(dbs, songs).await?, start))
 }
 
+/// Loads the songs of `albums` in the given album order: album-major, then
+/// disc/track order inside each album (the same order [`crate::library::album_songs`]
+/// serves for one album).
+///
+/// One chunked `IN (...)` pair of queries replaces the per-album
+/// `album_songs` loop the artist shuffle used to run (N-20): an artist with
+/// 40 albums paid 40 SQLite round-trips before its queue could start. The
+/// full rows come from [`crate::library::songs_by_ids_refs`], which mirrors
+/// the requested id order, so duplicates and album order survive too.
+pub(crate) async fn songs_of_albums(
+    pool: &sqlx::SqlitePool,
+    albums: &[String],
+) -> anyhow::Result<Vec<crate::library::SongRow>> {
+    if albums.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Pass 1: ordered song ids per album. `album_id` leads the ORDER BY so
+    // each album's rows keep their disc/track order while all albums share
+    // one statement; the loop below restores the caller's album order.
+    let mut by_album: HashMap<String, Vec<String>> = HashMap::with_capacity(albums.len());
+    for chunk in albums.chunks(crate::cache::IN_BATCH) {
+        let mut builder =
+            sqlx::QueryBuilder::new("SELECT id, album_id FROM songs WHERE album_id IN (");
+        crate::cache::push_in_list(&mut builder, chunk);
+        builder.push(" ORDER BY album_id, disc_number, track, title");
+        let rows: Vec<(String, Option<String>)> = builder.build_query_as().fetch_all(pool).await?;
+        for (song_id, album_id) in rows {
+            let Some(album_id) = album_id else {
+                continue;
+            };
+            by_album.entry(album_id).or_default().push(song_id);
+        }
+    }
+    let mut ids: Vec<String> = Vec::new();
+    for album in albums {
+        if let Some(song_ids) = by_album.get(album) {
+            ids.extend(song_ids.iter().cloned());
+        }
+    }
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    crate::library::songs_by_ids_refs(pool, &refs).await
+}
+
 /// The artist's shuffle queue: the artist's albums (the albums table's
 /// mapping) Fisher–Yates shuffled, each expanding to its tracklist — one
 /// album after another until the array ends. The queue holds the songs of
@@ -198,10 +244,7 @@ pub async fn artist_shuffle_tracks(
     }
     let seed = crate::consts::now_nanos();
     shuffle_units(&mut albums, seed);
-    let mut songs: Vec<crate::library::SongRow> = Vec::new();
-    for album in &albums {
-        songs.extend(crate::library::album_songs(&dbs.library, album).await?);
-    }
+    let mut songs = songs_of_albums(&dbs.library, &albums).await?;
     crate::offline::retain_songs(dbs, offline, &mut songs).await?;
     tracks(dbs, songs).await
 }

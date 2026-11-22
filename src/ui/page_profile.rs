@@ -1,6 +1,5 @@
 //! One PageEntry scheme: kind differences are profile variables, not copies.
 
-use crate::ui::scroll_modal::{self, ScrollProfile};
 use crate::ui::state::{PageDescriptor, PageKind, Row, RowKind};
 
 /// Shape knobs shared by every list row. A surface/model supplies the data;
@@ -17,7 +16,6 @@ pub struct RowFlags {
 pub enum PageSource {
     Album,
     ArtistAlbums,
-    ArtistTracks,
     Playlist,
     Radio { seed_kind: String },
 }
@@ -26,7 +24,6 @@ pub enum PageSource {
 pub enum PageAction {
     OpenAlbum,
     PlayAlbum,
-    PlayArtist,
     PlayPlaylist,
     PlayRadio,
 }
@@ -35,16 +32,30 @@ pub enum PageAction {
 pub struct PageProfile {
     pub kind: PageKind,
     pub source: PageSource,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub hero_cover: bool,
     pub collage: bool,
     pub notes: bool,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub rating: bool,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub favorite: bool,
-    pub artist_link: bool,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub show_row_cover: bool,
     pub row_flags: RowFlags,
     pub empty_text: &'static str,
-    pub scroll: ScrollProfile,
 }
 
 impl PageProfile {
@@ -58,7 +69,6 @@ impl PageProfile {
                 notes: true,
                 rating: true,
                 favorite: true,
-                artist_link: true,
                 show_row_cover: false,
                 row_flags: RowFlags {
                     show_cover: false,
@@ -67,7 +77,6 @@ impl PageProfile {
                     compact: true,
                 },
                 empty_text: "No tracks in this album",
-                scroll: scroll_modal::ALBUM,
             },
             PageKind::Artist => Self {
                 kind: PageKind::Artist,
@@ -77,7 +86,6 @@ impl PageProfile {
                 notes: true,
                 rating: true,
                 favorite: true,
-                artist_link: false,
                 show_row_cover: true,
                 row_flags: RowFlags {
                     show_cover: true,
@@ -86,7 +94,6 @@ impl PageProfile {
                     compact: true,
                 },
                 empty_text: "No albums by this artist",
-                scroll: scroll_modal::ALBUM,
             },
             PageKind::Playlist => Self {
                 kind: PageKind::Playlist,
@@ -96,7 +103,6 @@ impl PageProfile {
                 notes: false,
                 rating: false,
                 favorite: false,
-                artist_link: false,
                 show_row_cover: true,
                 row_flags: RowFlags {
                     show_cover: true,
@@ -105,7 +111,6 @@ impl PageProfile {
                     compact: true,
                 },
                 empty_text: "No tracks in this playlist",
-                scroll: scroll_modal::ALBUM,
             },
             PageKind::Radio => Self {
                 kind: PageKind::Radio,
@@ -120,7 +125,6 @@ impl PageProfile {
                 notes: false,
                 rating: false,
                 favorite: false,
-                artist_link: false,
                 show_row_cover: true,
                 row_flags: RowFlags {
                     show_cover: true,
@@ -129,7 +133,6 @@ impl PageProfile {
                     compact: true,
                 },
                 empty_text: "No similar songs found",
-                scroll: scroll_modal::ALBUM,
             },
         }
     }
@@ -138,7 +141,6 @@ impl PageProfile {
         match &self.source {
             PageSource::Album => PageAction::PlayAlbum,
             PageSource::ArtistAlbums => PageAction::OpenAlbum,
-            PageSource::ArtistTracks => PageAction::PlayArtist,
             PageSource::Playlist => PageAction::PlayPlaylist,
             PageSource::Radio { .. } => PageAction::PlayRadio,
         }

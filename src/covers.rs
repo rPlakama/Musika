@@ -51,37 +51,58 @@ const RAW_PREFIX: &str = "raw-";
 /// cover pass must not purge them as unreferenced `getCoverArt` ids.
 const ARTIST_IMAGE_PREFIX: &str = "artist-image:";
 
-/// FIX-2: in-flight registries — a repeated page reload/scroll while a cover
-/// is still missing (or its thumbnail is not generated yet) must not start
-/// the same background work again. Claimed ids are held only inside the
-/// spawned task's life; the lock is taken briefly, never across an await.
+/// FIX-2/N-10: in-flight registries — a repeated page reload/scroll while a
+/// cover is still missing (or its thumbnail is not generated yet) must not
+/// start the same background work again. A claim is owned by an RAII guard
+/// held for the claiming task's life, so a panic or cancellation releases it
+/// instead of leaking the id forever. The lock is taken briefly, never across
+/// an await.
 static ONGOING_FETCHES: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 static ONGOING_THUMBS: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
-pub(crate) fn claim_fetch(id: &str) -> bool {
+/// Owned claim on one registry key; the key is released on drop (N-10).
+pub(crate) struct Claim {
+    set: &'static Mutex<HashSet<String>>,
+    key: String,
+}
+
+impl Claim {
+    pub(crate) fn key(&self) -> &str {
+        &self.key
+    }
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        self.set.lock_unguarded().remove(&self.key);
+    }
+}
+
+/// Claims `id` for a cover fetch, or `None` when another task owns it.
+pub(crate) fn claim_fetch(id: &str) -> Option<Claim> {
     claim(&ONGOING_FETCHES, id)
 }
 
-pub(crate) fn release_fetch(id: String) {
-    release(&ONGOING_FETCHES, id);
-}
-
-pub(crate) fn claim_thumb(name: &str) -> bool {
+/// Claims `name` for a thumbnail job, or `None` when another task owns it.
+pub(crate) fn claim_thumb(name: &str) -> Option<Claim> {
     claim(&ONGOING_THUMBS, name)
 }
 
-pub(crate) fn release_thumb(name: String) {
-    release(&ONGOING_THUMBS, name);
+fn claim(set: &'static Mutex<HashSet<String>>, key: &str) -> Option<Claim> {
+    if !set.lock_unguarded().insert(key.to_string()) {
+        return None;
+    }
+    Some(Claim {
+        set,
+        key: key.to_string(),
+    })
 }
 
-fn claim(set: &Mutex<HashSet<String>>, key: &str) -> bool {
-    set.lock_unguarded().insert(key.to_string())
-}
-
-fn release(set: &Mutex<HashSet<String>>, key: String) {
-    set.lock_unguarded().remove(&key);
+/// Whether a thumbnail job is currently in flight for `name`.
+fn thumb_in_flight(name: &str) -> bool {
+    ONGOING_THUMBS.lock_unguarded().contains(name)
 }
 
 /// Mutex helper that never panics on a poisoned lock (a claim registry
@@ -197,6 +218,41 @@ pub(crate) async fn fetch_ids_forced(
     refresh_inner(pool, client, &ids, &forced, false).await
 }
 
+/// The cached rows [`refresh_inner`] needs to decide what to fetch.
+///
+/// A full pass needs the whole table (it purges and thumbnails every cached
+/// entry). The on-demand path only reads the requested ids: loading the entire
+/// `covers` table just to look up a page's covers was an N+1-style full scan
+/// (N-20), and the `IN (...)` binds are chunked so a large page cannot exceed
+/// SQLite's parameter limit.
+pub(crate) async fn known_covers(
+    pool: &SqlitePool,
+    referenced: &BTreeSet<String>,
+    purge_unreferenced: bool,
+) -> Result<HashMap<String, CoverRow>> {
+    if purge_unreferenced {
+        let existing: Vec<CoverRow> =
+            sqlx::query_as("SELECT id, file, hash, etag, last_modified FROM covers")
+                .fetch_all(pool)
+                .await?;
+        return Ok(existing
+            .into_iter()
+            .map(|row| (row.id.clone(), row))
+            .collect());
+    }
+    let ids: Vec<&String> = referenced.iter().collect();
+    let mut known = HashMap::with_capacity(ids.len());
+    for chunk in ids.chunks(crate::cache::IN_BATCH) {
+        let mut builder = sqlx::QueryBuilder::new(
+            "SELECT id, file, hash, etag, last_modified FROM covers WHERE id IN (",
+        );
+        crate::cache::push_in_list(&mut builder, chunk);
+        let rows: Vec<CoverRow> = builder.build_query_as().fetch_all(pool).await?;
+        known.extend(rows.into_iter().map(|row| (row.id.clone(), row)));
+    }
+    Ok(known)
+}
+
 async fn refresh_inner(
     pool: &SqlitePool,
     client: &Arc<SubsonicClient>,
@@ -207,16 +263,7 @@ async fn refresh_inner(
     let dir = crate::db::covers_dir()?;
     crate::db::ensure_dir(&dir)?;
 
-    let existing: Vec<CoverRow> =
-        sqlx::query_as("SELECT id, file, hash, etag, last_modified FROM covers")
-            .fetch_all(pool)
-            .await?;
-    let known = Arc::new(
-        existing
-            .into_iter()
-            .map(|row| (row.id.clone(), row))
-            .collect::<HashMap<String, CoverRow>>(),
-    );
+    let known = Arc::new(known_covers(pool, referenced, purge_unreferenced).await?);
 
     let ids: Vec<String> = referenced.iter().cloned().collect();
     let forced: Arc<HashSet<String>> = Arc::new(forced.iter().cloned().collect());
@@ -305,12 +352,15 @@ async fn refresh_inner(
         }
     }
     _ = ensure_thumbs(&dir, thumb_jobs).await;
-    remove_orphans(pool, &dir).await?;
-    // Full passes also cap pathological originals already in the cache. This
-    // runs after the orphan sweep and keeps the old blob: removing it here
-    // could break a page whose payload still names the previous URL. The next
-    // sweep collects that orphan.
+    // Only a full (single-cover-pass) refresh may sweep the cache directory:
+    // the on-demand path would race another page's freshly written blob or
+    // temporary file (N-04). The orphan sweep also skips recent temp files.
     if purge_unreferenced {
+        remove_orphans(pool, &dir).await?;
+        // Full passes also cap pathological originals already in the cache.
+        // This runs after the orphan sweep and keeps the old blob: removing it
+        // here could break a page whose payload still names the previous URL.
+        // The next sweep collects that orphan.
         report.capped = cap_cached_oversized(pool, &dir, CAP_MIGRATION_BATCH, false).await?;
     }
 
@@ -331,22 +381,22 @@ pub(crate) async fn apply_fetched(
 ) -> Result<()> {
     match result {
         Ok(art) if art.not_modified => {
-            touch(pool, id).await?;
+            update_validators(pool, id, art.etag.as_deref(), art.last_modified.as_deref()).await?;
             report.unchanged += 1;
         }
         Ok(art) => {
             let Some((bytes, extension, content_type)) =
                 store_art(art.bytes, art.content_type.as_deref())
             else {
-                // Malformed/oversize SVG: never store an undecodable blob,
-                // the placeholder path owns it (ARC-39).
-                eprintln!("covers: rejected undecodable SVG cover {id}");
+                // Undecodable/oversize art: never store a blob the renderer
+                // cannot decode; the placeholder path owns it (ARC-39, N-01).
+                eprintln!("covers: rejected undecodable cover {id}");
                 return Ok(());
             };
             // A provider can serve absurdly large art; cap it once at ingest so
             // every later hero decode (and the on-disk cache) stays bounded.
             let (original, capped) = match tokio::task::spawn_blocking(move || {
-                let capped = cap_oversized_art(&bytes, extension);
+                let capped = cap_oversized_art(&bytes);
                 ((bytes, extension, content_type), capped)
             })
             .await
@@ -357,15 +407,14 @@ pub(crate) async fn apply_fetched(
                     return Ok(());
                 }
             };
-            let (bytes, extension, content_type) =
-                match capped {
-                    Some((capped, capped_extension)) => (
-                        capped,
-                        capped_extension,
-                        Some(content_type_for(capped_extension).to_string()),
-                    ),
-                    None => original,
-                };
+            let (bytes, extension, content_type) = match capped {
+                Some((capped, capped_extension)) => (
+                    capped,
+                    capped_extension,
+                    Some(content_type_for(capped_extension).to_string()),
+                ),
+                None => original,
+            };
 
             let hash = crate::digest::md5_hex(&bytes)?;
             // Content-suffixed: changed art gets a new file/URL, so the UI
@@ -500,12 +549,25 @@ pub async fn hash(pool: &SqlitePool, id: &str) -> Result<Option<String>> {
     Ok(hash.flatten())
 }
 
-async fn touch(pool: &SqlitePool, id: &str) -> Result<()> {
-    sqlx::query("UPDATE covers SET fetched_at = ?2 WHERE id = ?1")
-        .bind(id)
-        .bind(crate::consts::now_secs().to_string())
-        .execute(pool)
-        .await?;
+/// Records a revalidation: refreshes the validators the `304` carried and the
+/// check time, keeping the cached copy untouched (N-21).
+async fn update_validators(
+    pool: &SqlitePool,
+    id: &str,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE covers SET fetched_at = ?2, etag = COALESCE(?3, etag),
+                           last_modified = COALESCE(?4, last_modified)
+         WHERE id = ?1",
+    )
+    .bind(id)
+    .bind(crate::consts::now_secs().to_string())
+    .bind(etag)
+    .bind(last_modified)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -548,44 +610,95 @@ async fn upsert(
     Ok(())
 }
 
+/// Temp/uncommitted files younger than this are never swept: an in-flight
+/// fetch may have written its temp file or renamed blob but not yet committed
+/// the row, and a page may already be painting it (N-04).
+const ORPHAN_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
 /// Deletes temp leftovers and any blob the index does not know about.
+///
+/// Only the single full cover pass calls this (`purge_unreferenced`); the
+/// on-demand and artist-image follow-ups must leave the directory alone while
+/// another pass may be writing into it (N-04). The directory scan runs on the
+/// blocking pool (N-18).
 async fn remove_orphans(pool: &SqlitePool, dir: &std::path::Path) -> Result<()> {
     let kept: Vec<String> = sqlx::query_scalar("SELECT file FROM covers")
         .fetch_all(pool)
         .await?;
     let kept: HashSet<String> = kept.into_iter().collect();
     let kept_thumbs: HashSet<String> = kept.iter().map(|file| thumb_name(file)).collect();
+    let dir = dir.to_path_buf();
+    tokio::task::spawn_blocking(move || sweep_orphans(&dir, &kept, &kept_thumbs))
+        .await
+        .context("cover orphan sweep task failed")?;
+    Ok(())
+}
 
+fn sweep_orphans(dir: &Path, kept: &HashSet<String>, kept_thumbs: &HashSet<String>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return Ok(());
+        return;
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         // The raw blob and its thumbnail are the only files the cache keeps.
+        // A claimed thumbnail is still being generated; a recent file may be a
+        // fetch that has not recorded its row yet. Never delete those (N-04).
+        if kept.contains(&name) || kept_thumbs.contains(&name) || thumb_in_flight(&name) {
+            continue;
+        }
+        let path = entry.path();
+        if is_recent(&path) {
+            continue;
+        }
         // Legacy `<stem>_<edge>x<edge>.<ext>` display copies are stale
         // derivatives (heroes paint the original now) and go with the
         // unknown/temp blobs.
-        if name.ends_with(".tmp") || (!kept.contains(&name) && !kept_thumbs.contains(&name)) {
-            _ = std::fs::remove_file(entry.path());
-        }
+        _ = std::fs::remove_file(path);
     }
-    Ok(())
 }
 
-pub(crate) fn extension(content_type: Option<&str>) -> &'static str {
-    match content_type
-        .unwrap_or("")
-        .split(';')
-        .next()
-        .unwrap_or("")
-        .trim()
-    {
-        "image/jpeg" | "image/jpg" => "jpg",
-        "image/png" => "png",
-        "image/webp" => "webp",
-        "image/gif" => "gif",
-        _ => "img",
+fn is_recent(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age < ORPHAN_MIN_AGE)
+}
+
+/// Maps a sniffed raster format to the cache's extension and MIME type. Only
+/// formats enabled in this build are accepted; every other header format is
+/// not cache art (N-01).
+fn raster_kind(format: image::ImageFormat) -> Option<(&'static str, &'static str)> {
+    // `ImageFormat` is `#[non_exhaustive]`, so it is matched through its
+    // extension table rather than an enum match with a wildcard arm.
+    let extension = *format.extensions_str().first()?;
+    match extension {
+        "jpg" | "png" | "webp" | "gif" => Some((extension, format.to_mime_type())),
+        _ => None,
     }
+}
+
+/// Sniffs and header-validates a raster image: the magic bytes must name a
+/// format this build decodes and the header must report non-zero dimensions.
+///
+/// An error envelope (JSON/XML/HTML) that arrived with an `image/*` content
+/// type fails here (N-01), and a content type that disagrees with the bytes is
+/// ignored in favour of the sniffed format (N-12).
+pub(crate) fn sniff_raster(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let format = image::guess_format(bytes).ok()?;
+    let kind = raster_kind(format)?;
+    let (width, height) = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some(kind)
 }
 
 /// ARC-39: true when fetched art is an SVG, by content type or by sniffing the
@@ -641,22 +754,20 @@ pub(crate) fn rasterize_svg(bytes: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Prepares fetched art for storage: SVG payloads become bounded PNGs here
-/// (ARC-39); everything else passes through with its content type/extension.
-/// `None` means the art is undecodable and must not reach the cache.
+/// (ARC-39); raster payloads must carry a real image header, and the bytes win
+/// over a mismatched `Content-Type` (N-01, N-12). `None` means the body is not
+/// cache art at all and must not reach a file or a row.
 pub(crate) fn store_art(
     bytes: Vec<u8>,
     content_type: Option<&str>,
 ) -> Option<(Vec<u8>, &'static str, Option<String>)> {
-    if !is_svg(&bytes, content_type) {
-        return Some((
-            bytes,
-            extension(content_type),
-            content_type.map(str::to_string),
-        ));
+    if is_svg(&bytes, content_type) {
+        let png = rasterize_svg(&bytes)?;
+        return Some((png, "png", Some("image/png".to_string())));
     }
 
-    let png = rasterize_svg(&bytes)?;
-    Some((png, "png", Some("image/png".to_string())))
+    let (extension, sniffed_type) = sniff_raster(&bytes)?;
+    Some((bytes, extension, Some(sniffed_type.to_string())))
 }
 
 /// Canonical content-suffixed cover filename. The raw prefix is what makes the
@@ -743,16 +854,15 @@ fn content_type_for(extension: &'static str) -> &'static str {
 
 /// Re-encodes one image below [`COVER_MAX_EDGE`].
 ///
-/// Returns `None` when the art is already small enough or cannot be decoded
-/// (the caller then keeps the original bytes rather than rejecting the art).
-/// PNG art keeps its alpha channel as PNG; every other oversized raster is
-/// re-encoded to JPEG, which is what a photographic 2000+ px cover should be.
-fn cap_oversized_art(bytes: &[u8], extension: &'static str) -> Option<(Vec<u8>, &'static str)> {
-    let format = match extension {
-        "jpg" | "jpeg" => image::ImageFormat::Jpeg,
-        "png" => image::ImageFormat::Png,
-        _ => return None,
-    };
+/// Returns `None` when the art is already small enough or is not a raster
+/// format this build decodes (the caller then keeps the original bytes rather
+/// than rejecting the art). The format is sniffed from the bytes, so a wrong
+/// file extension or `Content-Type`, and WebP originals, are handled instead
+/// of skipped (N-12). Art with an alpha channel keeps it as PNG; every other
+/// oversized raster becomes JPEG, which is what a photographic cover is.
+fn cap_oversized_art(bytes: &[u8]) -> Option<(Vec<u8>, &'static str)> {
+    let format = image::guess_format(bytes).ok()?;
+    raster_kind(format)?;
     let (width, height) = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
         .ok()?
@@ -764,20 +874,27 @@ fn cap_oversized_art(bytes: &[u8], extension: &'static str) -> Option<(Vec<u8>, 
     let decoded = image::load_from_memory_with_format(bytes, format).ok()?;
     let resized = decoded.thumbnail(COVER_MAX_EDGE, COVER_MAX_EDGE);
     let mut output = std::io::Cursor::new(Vec::new());
-    if format == image::ImageFormat::Png && decoded.color().has_alpha() {
+    if decoded.color().has_alpha() {
         resized
             .write_to(&mut output, image::ImageFormat::Png)
             .ok()?;
         Some((output.into_inner(), "png"))
     } else {
-        image::codecs::jpeg::JpegEncoder::new_with_quality(
-            &mut output,
-            COVER_CAP_QUALITY,
-        )
-        .encode_image(&resized.to_rgb8())
-        .ok()?;
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, COVER_CAP_QUALITY)
+            .encode_image(&resized.to_rgb8())
+            .ok()?;
         Some((output.into_inner(), "jpg"))
     }
+}
+
+/// One candidate row for [`cap_cached_oversized`].
+#[derive(Debug, sqlx::FromRow)]
+struct CapRow {
+    id: String,
+    file: String,
+    etag: Option<String>,
+    last_modified: Option<String>,
+    size: i64,
 }
 
 /// Downscales already-cached originals above [`COVER_MAX_EDGE`].
@@ -789,6 +906,7 @@ fn cap_oversized_art(bytes: &[u8], extension: &'static str) -> Option<(Vec<u8>, 
 /// `remove_old` is only safe when no UI can hold the previous URL (startup,
 /// before the UI socket exists); a running sync leaves the old blob for the
 /// next orphan sweep instead of breaking a page decoded from the old payload.
+///
 /// Returns how many blobs were re-encoded.
 pub async fn cap_cached_oversized(
     pool: &SqlitePool,
@@ -799,73 +917,95 @@ pub async fn cap_cached_oversized(
     if limit == 0 {
         return Ok(0);
     }
-    let rows: Vec<CoverRow> = sqlx::query_as(
-        "SELECT id, file, hash, etag, last_modified FROM covers
-         WHERE size > ?1 ORDER BY size DESC LIMIT ?2",
-    )
-    .bind(CAP_MIGRATION_MIN_BYTES)
-    .bind(limit as i64)
-    .fetch_all(pool)
-    .await?;
+    const CANDIDATE_BATCH: usize = 32;
     let mut capped = 0usize;
     let mut thumb_jobs: Vec<(String, PathBuf)> = Vec::new();
-    for row in rows {
-        let path = dir.join(&row.file);
-        let Ok((width, height)) = image::image_dimensions(&path) else {
-            continue;
-        };
-        if width.max(height) <= COVER_MAX_EDGE {
-            continue;
-        }
-        let extension: &'static str = match path.extension().and_then(|ext| ext.to_str()) {
-            Some(ext) if ext.eq_ignore_ascii_case("png") => "png",
-            Some(ext) if ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg") => {
-                "jpg"
+    // Keyset cursor over `(size DESC, id ASC)`. The old `LIMIT limit` query
+    // starved: the same top-N largest blobs (many of them already within the
+    // edge, or formats the migration skips) were re-probed every pass while
+    // genuinely oversized rows below them were never reached (N-12).
+    let mut cursor: Option<(i64, String)> = None;
+    'migration: loop {
+        let rows: Vec<CapRow> = match &cursor {
+            None => {
+                sqlx::query_as(
+                    "SELECT id, file, etag, last_modified, size FROM covers
+                     WHERE size > ?1 ORDER BY size DESC, id ASC LIMIT ?2",
+                )
+                .bind(CAP_MIGRATION_MIN_BYTES)
+                .bind(CANDIDATE_BATCH as i64)
+                .fetch_all(pool)
+                .await?
             }
-            _ => continue,
+            Some((size, id)) => {
+                sqlx::query_as(
+                    "SELECT id, file, etag, last_modified, size FROM covers
+                     WHERE size > ?1 AND (size < ?2 OR (size = ?2 AND id > ?3))
+                     ORDER BY size DESC, id ASC LIMIT ?4",
+                )
+                .bind(CAP_MIGRATION_MIN_BYTES)
+                .bind(*size)
+                .bind(id)
+                .bind(CANDIDATE_BATCH as i64)
+                .fetch_all(pool)
+                .await?
+            }
         };
-        let Ok(bytes) = std::fs::read(&path) else {
-            continue;
-        };
-        let capped_art = match tokio::task::spawn_blocking(move || {
-            cap_oversized_art(&bytes, extension)
-        })
-        .await
-        {
-            Ok(capped) => capped,
-            Err(err) => {
-                eprintln!("covers: oversized-art task failed for {}: {err}", row.file);
+        if rows.is_empty() {
+            break;
+        }
+        for row in rows {
+            cursor = Some((row.size, row.id.clone()));
+            if capped >= limit {
+                break 'migration;
+            }
+            // The whole probe (stat, read, header parse, decode) is blocking
+            // disk/CPU work; keep it off the async runtime (N-18).
+            let path = dir.join(&row.file);
+            let capped_art = match tokio::task::spawn_blocking(move || cap_cached_file(&path)).await
+            {
+                Ok(capped) => capped,
+                Err(err) => {
+                    eprintln!("covers: oversized-art task failed for {}: {err}", row.file);
+                    continue;
+                }
+            };
+            let Some((bytes, extension)) = capped_art else {
                 continue;
+            };
+            let hash = crate::digest::md5_hex(&bytes)?;
+            let file = cover_file_name(&row.id, &hash, extension)?;
+            crate::cache::write_atomic(dir, &file, &bytes)?;
+            thumb_jobs.push((thumb_name(&file), dir.join(&file)));
+            upsert(
+                pool,
+                &row.id,
+                &file,
+                &hash,
+                Some(content_type_for(extension)),
+                bytes.len() as i64,
+                row.etag.as_deref(),
+                row.last_modified.as_deref(),
+            )
+            .await?;
+            if remove_old {
+                _ = std::fs::remove_file(dir.join(&row.file));
+                _ = std::fs::remove_file(dir.join(thumb_name(&row.file)));
             }
-        };
-        let Some((bytes, extension)) = capped_art else {
-            continue;
-        };
-        let hash = crate::digest::md5_hex(&bytes)?;
-        let file = cover_file_name(&row.id, &hash, extension)?;
-        crate::cache::write_atomic(dir, &file, &bytes)?;
-        thumb_jobs.push((thumb_name(&file), dir.join(&file)));
-        upsert(
-            pool,
-            &row.id,
-            &file,
-            &hash,
-            Some(content_type_for(extension)),
-            bytes.len() as i64,
-            row.etag.as_deref(),
-            row.last_modified.as_deref(),
-        )
-        .await?;
-        if remove_old {
-            _ = std::fs::remove_file(&path);
-            _ = std::fs::remove_file(dir.join(thumb_name(&row.file)));
+            capped += 1;
         }
-        capped += 1;
     }
     if !thumb_jobs.is_empty() {
         _ = ensure_thumbs(dir, thumb_jobs).await;
     }
     Ok(capped)
+}
+
+/// Blocking half of the migration: probes one cached blob and re-encodes it
+/// when its longest edge exceeds [`COVER_MAX_EDGE`].
+fn cap_cached_file(path: &Path) -> Option<(Vec<u8>, &'static str)> {
+    let bytes = std::fs::read(path).ok()?;
+    cap_oversized_art(&bytes)
 }
 
 /// Generates missing thumbnails on a bounded blocking pool: decoding is CPU
@@ -974,19 +1114,24 @@ pub async fn url_map_of(dbs: &crate::db::Dbs, ids: &[String]) -> Result<HashMap<
     }
 
     // Keep the library responsive: the remote URL is already usable, so the
-    // cache write is a detached follow-up for the next request. FIX-2: ids
-    // already being fetched are skipped — the running job covers them.
-    let missing: Vec<String> = missing.into_iter().filter(|id| claim_fetch(id)).collect();
-    if missing.is_empty() {
+    // cache write is a detached follow-up for the next request. FIX-2/N-10:
+    // ids already being fetched are skipped — the running job covers them,
+    // and its RAII claim releases the ids even if the task is cancelled.
+    let mut claims: Vec<Claim> = Vec::new();
+    for id in missing {
+        if let Some(claim) = claim_fetch(&id) {
+            claims.push(claim);
+        }
+    }
+    if claims.is_empty() {
         return Ok(map);
     }
+    let missing: Vec<String> = claims.iter().map(|claim| claim.key().to_string()).collect();
     let pooled = dbs.covers.clone();
     let client = Arc::new(client);
     crate::app::runtime().spawn(async move {
         let result = fetch_ids(&pooled, &client, &missing).await;
-        for id in &missing {
-            release_fetch(id.clone());
-        }
+        drop(claims);
         if let Err(err) = result {
             eprintln!("covers: on-demand fetch failed: {err:#}");
         }
@@ -1101,10 +1246,15 @@ pub(crate) async fn backfill_missing_thumbs(dbs: &crate::db::Dbs) -> usize {
         }
     };
     let mut jobs: Vec<(String, std::path::PathBuf)> = Vec::new();
+    let mut claims: Vec<Claim> = Vec::new();
     for (_id, file) in rows {
         let source = dir.join(&file);
         let name = thumb_name(&file);
-        if source.is_file() && !dir.join(&name).is_file() && claim_thumb(&name) {
+        if source.is_file()
+            && !dir.join(&name).is_file()
+            && let Some(claim) = claim_thumb(&name)
+        {
+            claims.push(claim);
             jobs.push((name, source));
         }
     }
@@ -1112,11 +1262,8 @@ pub(crate) async fn backfill_missing_thumbs(dbs: &crate::db::Dbs) -> usize {
         return 0;
     }
     let processed = ensure_thumbs(&dir, jobs).await;
-    let count = processed.len();
-    for name in processed {
-        release_thumb(name);
-    }
-    count
+    drop(claims);
+    processed.len()
 }
 
 async fn cached_urls(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<String, String>> {
@@ -1152,19 +1299,22 @@ async fn cached_urls(pool: &SqlitePool, ids: &[String]) -> Result<HashMap<String
     }
     // Never make a library page wait on thumbnail decoding: raw covers are
     // large, and `CoverImage` falls back to the full file until the thumb
-    // lands on disk. FIX-2: thumbs already being generated are skipped too,
-    // so repeated page loads share one job per file.
-    let thumb_jobs: Vec<(String, PathBuf)> = thumb_jobs
-        .into_iter()
-        .filter(|(name, _)| claim_thumb(name))
-        .collect();
-    if !thumb_jobs.is_empty() {
+    // lands on disk. FIX-2/N-10: thumbs already being generated are skipped
+    // too (their claim covers the job), so repeated page loads share one job
+    // per file and a cancelled task releases its claims.
+    let mut claims: Vec<Claim> = Vec::new();
+    let mut claimed_jobs: Vec<(String, PathBuf)> = Vec::new();
+    for (name, path) in thumb_jobs {
+        if let Some(claim) = claim_thumb(&name) {
+            claims.push(claim);
+            claimed_jobs.push((name, path));
+        }
+    }
+    if !claimed_jobs.is_empty() {
         let dir = dir.clone();
         crate::app::runtime().spawn(async move {
-            ensure_thumbs(&dir, thumb_jobs)
-                .await
-                .into_iter()
-                .for_each(release_thumb);
+            ensure_thumbs(&dir, claimed_jobs).await;
+            drop(claims);
         });
     }
     Ok(map)
@@ -1190,6 +1340,18 @@ mod orphan_tests {
         })
     }
 
+    /// Backdates one file so the sweep treats it as abandoned (the recent-file
+    /// guard is what keeps in-flight writes alive, N-04).
+    fn backdate(path: &std::path::Path) {
+        let old =
+            std::time::SystemTime::now() - ORPHAN_MIN_AGE - std::time::Duration::from_secs(60);
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("open fixture");
+        file.set_modified(old).expect("backdate fixture");
+    }
+
     #[test]
     fn sweep_keeps_raw_and_thumb_and_removes_stale_derivatives() {
         let dir = std::env::temp_dir().join(format!(
@@ -1207,28 +1369,47 @@ mod orphan_tests {
             "raw-abc_1024x1024.jpg",
             "raw-abc_256x256.jpg",
             "stray.jpg",
+            "abandoned.tmp",
+            "abandoned.part",
         ] {
             std::fs::write(dir.join(name), b"x").unwrap();
+            backdate(&dir.join(name));
         }
+        // A temp file from a fetch that is still running must never be swept.
+        std::fs::write(dir.join("in-flight.tmp"), b"x").unwrap();
+        // An unknown blob written moments ago may be a fetch whose row has not
+        // landed yet: also kept.
+        std::fs::write(dir.join("fresh-unknown.jpg"), b"x").unwrap();
+
         let pool = memory_pool();
         crate::app::runtime().block_on(async {
-            sqlx::query("INSERT INTO covers (id, file, fetched_at) VALUES ('abc', 'raw-abc.jpg', '0')")
-                .execute(&pool)
-                .await
-                .unwrap();
+            sqlx::query(
+                "INSERT INTO covers (id, file, fetched_at) VALUES ('abc', 'raw-abc.jpg', '0')",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
             remove_orphans(&pool, &dir).await.unwrap();
         });
         assert!(dir.join("raw-abc.jpg").exists(), "raw blob removed");
         assert!(dir.join("raw-abc.thumb.jpg").exists(), "thumb removed");
+        for gone in [
+            "raw-abc_1024x1024.jpg",
+            "raw-abc_256x256.jpg",
+            "stray.jpg",
+            "abandoned.tmp",
+            "abandoned.part",
+        ] {
+            assert!(!dir.join(gone).exists(), "stale file kept: {gone}");
+        }
         assert!(
-            !dir.join("raw-abc_1024x1024.jpg").exists(),
-            "stale display derivative kept"
+            dir.join("in-flight.tmp").exists(),
+            "a recent temp file must survive the sweep"
         );
         assert!(
-            !dir.join("raw-abc_256x256.jpg").exists(),
-            "stale display derivative kept"
+            dir.join("fresh-unknown.jpg").exists(),
+            "a recently written unknown blob must survive the sweep"
         );
-        assert!(!dir.join("stray.jpg").exists(), "unknown blob kept");
         _ = std::fs::remove_dir_all(&dir);
     }
 }
@@ -1236,6 +1417,22 @@ mod orphan_tests {
 #[cfg(test)]
 mod cap_tests {
     use super::*;
+    use std::str::FromStr;
+
+    fn memory_pool() -> SqlitePool {
+        let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options);
+        crate::app::runtime().block_on(async {
+            let pool = pool.await.unwrap();
+            sqlx::migrate!("./migrations_media")
+                .run(&pool)
+                .await
+                .unwrap();
+            pool
+        })
+    }
 
     fn jpeg_bytes(width: u32, height: u32, pixel: [u8; 3]) -> Vec<u8> {
         let image = image::RgbImage::from_pixel(width, height, image::Rgb(pixel));
@@ -1249,7 +1446,7 @@ mod cap_tests {
     #[test]
     fn oversized_art_is_capped_and_small_art_is_left_alone() {
         let big = jpeg_bytes(5000, 2500, [10, 20, 30]);
-        let (capped, extension) = cap_oversized_art(&big, "jpg").expect("large art capped");
+        let (capped, extension) = cap_oversized_art(&big).expect("large art capped");
         assert_eq!(extension, "jpg");
         assert!(
             capped.len() < big.len(),
@@ -1263,7 +1460,7 @@ mod cap_tests {
 
         let small = jpeg_bytes(800, 600, [1, 2, 3]);
         assert!(
-            cap_oversized_art(&small, "jpg").is_none(),
+            cap_oversized_art(&small).is_none(),
             "art within the edge must not be re-encoded"
         );
     }
@@ -1276,12 +1473,100 @@ mod cap_tests {
         image::DynamicImage::ImageRgba8(pixels)
             .write_to(&mut bytes, image::ImageFormat::Png)
             .expect("encode png fixture");
-        let (capped, extension) =
-            cap_oversized_art(&bytes.into_inner(), "png").expect("large png capped");
+        let (capped, extension) = cap_oversized_art(&bytes.into_inner()).expect("large png capped");
         assert_eq!(extension, "png");
         let decoded = image::load_from_memory(&capped).expect("capped png decodes");
         assert_eq!(decoded.width().max(decoded.height()), COVER_MAX_EDGE);
         assert!(decoded.color().has_alpha());
+    }
+
+    #[test]
+    fn oversized_webp_is_capped_to_jpeg() {
+        let image = image::RgbImage::from_pixel(5000, 2500, image::Rgb([9, 21, 33]));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(&mut bytes, image::ImageFormat::WebP)
+            .expect("encode webp fixture");
+        let (capped, extension) =
+            cap_oversized_art(&bytes.into_inner()).expect("large webp capped");
+        assert_eq!(extension, "jpg", "opaque WebP is re-encoded to JPEG");
+        let decoded = image::load_from_memory(&capped).expect("capped art decodes");
+        assert_eq!(decoded.width().max(decoded.height()), COVER_MAX_EDGE);
+    }
+
+    async fn async_memory_pool() -> SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations_media")
+            .run(&pool)
+            .await
+            .unwrap();
+        pool
+    }
+
+    /// N-12: the migration used to fetch only `LIMIT` candidates by descending
+    /// size and stop, so it starved behind the largest blobs whenever those
+    /// were already within the edge. It must walk past them to the genuinely
+    /// oversized rows.
+    #[tokio::test]
+    async fn migration_reaches_oversized_rows_below_the_top_candidates() {
+        let dir = std::env::temp_dir().join(format!(
+            "musika-covers-migration-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        fn solid_jpeg(width: u32, height: u32) -> Vec<u8> {
+            let image = image::RgbImage::from_pixel(width, height, image::Rgb([7, 11, 13]));
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(image)
+                .write_to(&mut bytes, image::ImageFormat::Jpeg)
+                .expect("encode fixture");
+            bytes.into_inner()
+        }
+
+        std::fs::write(dir.join("raw-in-edge.jpg"), solid_jpeg(4000, 4000)).unwrap();
+        std::fs::write(dir.join("raw-oversized.jpg"), solid_jpeg(5000, 2500)).unwrap();
+
+        let pool = async_memory_pool().await;
+        // The row with the largest recorded size is already within the edge;
+        // the oversized row sorts below it.
+        for (id, file, size) in [
+            ("in-edge", "raw-in-edge.jpg", 9_000_000_i64),
+            ("oversized", "raw-oversized.jpg", 3_000_000_i64),
+        ] {
+            sqlx::query(
+                "INSERT INTO covers (id, file, hash, content_type, size, fetched_at)
+                 VALUES (?1, ?2, 'h', 'image/jpeg', ?3, '0')",
+            )
+            .bind(id)
+            .bind(file)
+            .bind(size)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let capped = cap_cached_oversized(&pool, &dir, 1, true)
+            .await
+            .expect("migration");
+        assert_eq!(
+            capped, 1,
+            "the oversized row below the largest candidate must be capped"
+        );
+        let file: String = sqlx::query_scalar("SELECT file FROM covers WHERE id = 'oversized'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_ne!(file, "raw-oversized.jpg", "the blob is content-addressed");
+        assert!(dir.join(&file).is_file(), "capped blob written");
+        _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -1314,12 +1599,14 @@ pub async fn artist_image_urls(
     let cached = cached_urls(&dbs.covers, &keys).await?;
     let mut map = HashMap::new();
     let mut missing = Vec::new();
+    let mut claims: Vec<Claim> = Vec::new();
     for (key, url) in entries {
         if let Some(local) = cached.get(&key) {
             if let Some(artist_id) = artist_id_from_key(&key) {
                 map.insert(artist_id.to_string(), local.clone());
             }
-        } else if claim_fetch(&key) {
+        } else if let Some(claim) = claim_fetch(&key) {
+            claims.push(claim);
             missing.push((key, url));
         }
     }
@@ -1327,18 +1614,15 @@ pub async fn artist_image_urls(
         return Ok(map);
     }
     let Ok(client) = crate::session::client(dbs).await else {
-        for (key, _) in &missing {
-            release_fetch(key.clone());
-        }
         return Ok(map);
     };
     let pooled = dbs.covers.clone();
     let client = Arc::new(client);
     crate::app::runtime().spawn(async move {
-        let result = refresh_external_inner(&pooled, &client, &missing).await;
-        for (key, _) in &missing {
-            release_fetch(key.clone());
-        }
+        // The on-demand path fetches a subset: never sweep the directory from
+        // here, another pass may be writing into it (N-04).
+        let result = refresh_external_inner(&pooled, &client, &missing, false).await;
+        drop(claims);
         if let Err(err) = result {
             eprintln!("covers: artist-image fetch failed: {err:#}");
         }
@@ -1357,13 +1641,16 @@ pub(crate) async fn refresh_artist_images(
         .filter(|(id, url)| !id.is_empty() && !url.is_empty())
         .map(|(id, url)| (artist_image_key(id), url.clone()))
         .collect();
-    refresh_external_inner(pool, client, &items).await
+    // This follow-up runs inside the full cover pass, after a successful
+    // library sync, so it may also sweep the cache directory (N-04).
+    refresh_external_inner(pool, client, &items, true).await
 }
 
 async fn refresh_external_inner(
     pool: &SqlitePool,
     client: &Arc<SubsonicClient>,
     items: &[(String, String)],
+    sweep: bool,
 ) -> Result<CoverReport> {
     let dir = crate::db::covers_dir()?;
     crate::db::ensure_dir(&dir)?;
@@ -1392,10 +1679,7 @@ async fn refresh_external_inner(
                 let etag = cached.and_then(|row| row.etag.clone());
                 let last_modified = cached.and_then(|row| row.last_modified.clone());
                 let Ok(url) = reqwest::Url::parse(&url) else {
-                    return (
-                        key,
-                        Err(anyhow::anyhow!("invalid artist image URL: {url}")),
-                    );
+                    return (key, Err(anyhow::anyhow!("invalid artist image URL: {url}")));
                 };
                 let result = client
                     .get_external_image(url, etag.as_deref(), last_modified.as_deref())
@@ -1422,6 +1706,8 @@ async fn refresh_external_inner(
         }
     }
     _ = ensure_thumbs(&dir, thumb_jobs).await;
-    remove_orphans(pool, &dir).await?;
+    if sweep {
+        remove_orphans(pool, &dir).await?;
+    }
     Ok(report)
 }

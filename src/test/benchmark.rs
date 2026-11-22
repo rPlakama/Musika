@@ -1,23 +1,6 @@
 use super::common::*;
 use super::memory_pool;
 
-fn dbs(library: &SqlitePool, media: &SqlitePool) -> Dbs {
-    Dbs {
-        credentials: library.clone(),
-        library: library.clone(),
-        sync: library.clone(),
-        search: library.clone(),
-        covers: media.clone(),
-        media: media.clone(),
-        lyrics: media.clone(),
-        colors: library.clone(),
-        status: library.clone(),
-        artist_user: library.clone(),
-        download: media.clone(),
-        playlist: library.clone(),
-    }
-}
-
 /// Database open + embedded migrations, against SQLite in memory.
 ///
 /// `cargo test test::benchmark::bench_database_open -- --ignored --nocapture`
@@ -91,9 +74,12 @@ fn bench_cover_load() {
         .save_with_format(&thumb_path, ImageFormat::Jpeg)
         .expect("save thumb");
 
-    #[expect(
-        unused_mut,
-        reason = "the binding is mutated only under the io-uring feature, which is off by default"
+    #[cfg_attr(
+        not(feature = "io-uring"),
+        expect(
+            unused_mut,
+            reason = "the binding is mutated only under the io-uring feature, which is off by default"
+        )
     )]
     let mut readers: Vec<(&str, Reader)> = vec![("std", read_std)];
     #[cfg(feature = "io-uring")]

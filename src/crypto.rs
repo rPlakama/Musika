@@ -17,6 +17,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use anyhow::{Context, Result, anyhow};
 use openssl::rand::rand_bytes;
@@ -26,6 +27,8 @@ pub(crate) const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 
+static KEY_INIT_LOCK: Mutex<()> = Mutex::new(());
+
 /// A 256-bit key used to encrypt secrets before they are written to the
 /// database.
 ///
@@ -34,30 +37,53 @@ const TAG_LEN: usize = 16;
 /// override the location.
 pub struct SecretKey([u8; KEY_LEN]);
 
+impl Drop for SecretKey {
+    fn drop(&mut self) {
+        for byte in &mut self.0 {
+            // SAFETY: `byte` is a valid, aligned mutable reference into `self.0`.
+            unsafe {
+                std::ptr::write_volatile(byte, 0);
+            }
+        }
+        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 impl SecretKey {
     pub fn load() -> Result<Self> {
         let path = key_path()?;
+        Self::load_from(&path)
+    }
+
+    pub(crate) fn load_from(path: &Path) -> Result<Self> {
+        let _guard = KEY_INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         if path.exists() {
-            let contents = fs::read_to_string(&path)
-                .with_context(|| format!("failed to read key file {}", path.display()))?;
-            let bytes = crate::hex::decode(contents.trim())
-                .with_context(|| format!("key file {} is not valid hex", path.display()))?;
-            let key: [u8; KEY_LEN] = bytes.try_into().map_err(|_| {
-                anyhow!(
-                    "key file {} must contain exactly {KEY_LEN} bytes",
-                    path.display()
-                )
-            })?;
-            return Ok(Self(key));
+            return Self::read_existing(path);
         }
 
-        let mut key = [0u8; KEY_LEN];
-        rand_bytes(&mut key).context("failed to generate a random key")?;
+        let mut secret = Self([0u8; KEY_LEN]);
+        rand_bytes(&mut secret.0).context("failed to generate a random key")?;
 
-        crate::db::ensure_parent_dir(&path)?;
-        write_private(&path, crate::hex::encode(key).as_bytes())?;
+        crate::db::ensure_parent_dir(path)?;
+        if write_private(path, crate::hex::encode(secret.0).as_bytes())? {
+            Ok(secret)
+        } else {
+            Self::read_existing(path)
+        }
+    }
 
+    fn read_existing(path: &Path) -> Result<Self> {
+        let contents = fs::read_to_string(path)
+            .with_context(|| format!("failed to read key file {}", path.display()))?;
+        let bytes = crate::hex::decode(contents.trim())
+            .with_context(|| format!("key file {} is not valid hex", path.display()))?;
+        let key: [u8; KEY_LEN] = bytes.try_into().map_err(|_| {
+            anyhow!(
+                "key file {} must contain exactly {KEY_LEN} bytes",
+                path.display()
+            )
+        })?;
         Ok(Self(key))
     }
 
@@ -155,27 +181,26 @@ fn key_path() -> Result<PathBuf> {
     Ok(crate::db::config_dir()?.join("key"))
 }
 
-fn write_private(path: &Path, data: &[u8]) -> Result<()> {
+fn write_private(path: &Path, data: &[u8]) -> Result<bool> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)
-            .with_context(|| format!("failed to create key file {}", path.display()))?;
-        file.write_all(data)
-            .with_context(|| format!("failed to write key file {}", path.display()))?;
+        options.mode(0o600);
     }
 
-    #[cfg(not(unix))]
-    {
-        fs::write(path, data)
-            .with_context(|| format!("failed to write key file {}", path.display()))?;
+    match options.open(path) {
+        Ok(mut file) => {
+            file.write_all(data)
+                .with_context(|| format!("failed to write key file {}", path.display()))?;
+            file.sync_all()
+                .with_context(|| format!("failed to sync key file {}", path.display()))?;
+            Ok(true)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(err) => {
+            Err(err).with_context(|| format!("failed to create key file {}", path.display()))
+        }
     }
-
-    Ok(())
 }

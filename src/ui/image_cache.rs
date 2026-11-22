@@ -32,6 +32,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
@@ -104,6 +105,21 @@ pub(crate) fn new_cache(cx: &mut App) -> Entity<BoundedImageCache> {
     cx.new(|_| BoundedImageCache::new(budget_mib * BYTES_PER_MIB))
 }
 
+/// Requests that every resident cover be dropped at the start of the next
+/// rendered frame, warm slots included.
+///
+/// The daemon's `Wiped { scope: "covers" }` handler runs on the UI event path
+/// where neither a window nor an `App` borrow is available to unload textures,
+/// so it can only flag the (single, app-wide) cache. [`BoundedImageCache::begin_frame`]
+/// consumes the flag with the window in hand and defers the atlas drops until
+/// after that frame has painted.
+pub(crate) fn request_clear() {
+    CLEAR_REQUESTED.store(true, Ordering::Relaxed);
+}
+
+/// Set by [`request_clear`]; consumed by the next frame start.
+static CLEAR_REQUESTED: AtomicBool = AtomicBool::new(false);
+
 /// Parses the `MUSIKA_IMAGE_CACHE_WARM` override, clamped so a typo cannot
 /// pin an unbounded number of covers or disable hero retention.
 fn warm_slots_from(raw: Option<&str>) -> usize {
@@ -138,12 +154,6 @@ pub(crate) struct CacheStats {
     pub load_us: u64,
     /// Number of completed loads in that window.
     pub load_samples: usize,
-}
-
-impl CacheStats {
-    pub(crate) fn mib(self) -> f32 {
-        self.bytes as f32 / BYTES_PER_MIB as f32
-    }
 }
 
 /// Rolling window of completed image-load durations, in microseconds.
@@ -212,6 +222,13 @@ pub(crate) struct BoundedImageCache {
     /// Completed load durations for the debug HUD, written by the background
     /// decode/fetch task when it actually finishes.
     loads: Arc<Mutex<LoadWindow>>,
+    /// Warm-slot keys cached for the current rendered frame. Every frame paints
+    /// up to ~30 covers and runs three eviction passes; each of those queries
+    /// used to sort every resident entry. Entry changes set `warm_frame` back to
+    /// `None`, and a new frame always recomputes the set.
+    warm_cache: HashSet<u64>,
+    /// Frame number `warm_cache` was computed for; `None` invalidates it.
+    warm_frame: Option<u64>,
 }
 
 /// One decode in flight. The task is owned by the cache entry, so dropping
@@ -251,12 +268,9 @@ impl BoundedImageCache {
             touch_seq: 0,
             warm_slots: warm_slots_from(std::env::var("MUSIKA_IMAGE_CACHE_WARM").ok().as_deref()),
             loads: Arc::new(Mutex::new(LoadWindow::default())),
+            warm_cache: HashSet::new(),
+            warm_frame: None,
         }
-    }
-
-    /// Number of large covers retained across page changes.
-    pub(crate) fn warm_slots(&self) -> usize {
-        self.warm_slots
     }
 
     /// Overrides the warm-slot count; tests and diagnostics only.
@@ -278,22 +292,16 @@ impl BoundedImageCache {
     }
 
     /// Keys of the large decoded images protected from stale eviction.
-    fn warm_keys(&self) -> HashSet<u64> {
-        if self.warm_slots == 0 {
-            return HashSet::new();
+    ///
+    /// Cached per rendered frame: the result is recomputed at most once per
+    /// frame and after any entry change, instead of sorting every resident entry
+    /// on each of the frame's cover loads and eviction passes.
+    fn warm_keys(&mut self) -> &HashSet<u64> {
+        if self.warm_frame != Some(self.frame) {
+            self.warm_cache = compute_warm_keys(&self.entries, self.warm_slots);
+            self.warm_frame = Some(self.frame);
         }
-        let mut candidates: Vec<(u64, u64)> = self
-            .entries
-            .iter()
-            .filter(|(_, entry)| entry.retain && matches!(entry.item, EntryItem::Loaded(_)))
-            .map(|(key, entry)| (*key, entry.last_touch))
-            .collect();
-        candidates.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.1));
-        candidates
-            .into_iter()
-            .take(self.warm_slots)
-            .map(|(key, _)| key)
-            .collect()
+        &self.warm_cache
     }
 
     /// Number of resident images (loading requests included).
@@ -301,6 +309,10 @@ impl BoundedImageCache {
         self.entries.len()
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -310,6 +322,10 @@ impl BoundedImageCache {
         self.lru.used
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub(crate) fn budget_bytes(&self) -> usize {
         self.lru.budget
     }
@@ -388,11 +404,6 @@ impl BoundedImageCache {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
-        // Settle decodes that finished for an element that no longer asks for
-        // them (fast page navigation, closed overlays). Without this pass such
-        // an orphaned result would stay `Loading` forever, hold its decoded
-        // bytes and never qualify for eviction.
-        self.settle_loading(window);
         let key = hash(resource);
         let local = cappable_path(resource).is_some();
         let edge = if local {
@@ -421,7 +432,12 @@ impl BoundedImageCache {
             // fullscreen cover at 900 px).
             if !(local && edge > entry.edge) {
                 self.hits = self.hits.saturating_add(1);
+                let retain_added = !entry.retain && retain;
                 entry.retain |= retain;
+                if retain_added {
+                    // The entry may now qualify for a warm slot.
+                    self.warm_frame = None;
+                }
                 let loaded = match &entry.item {
                     EntryItem::Loading(_) => None,
                     EntryItem::Loaded(result) => Some(result.clone()),
@@ -435,7 +451,8 @@ impl BoundedImageCache {
             self.unload(key, window, cx);
         }
         self.misses = self.misses.saturating_add(1);
-        let task = load_image_task(resource, cx, edge, Arc::clone(&self.loads));
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let task = load_image_task(resource, cx, edge, Arc::clone(&self.loads), done_tx);
         self.entries.insert(
             key,
             Entry {
@@ -447,25 +464,37 @@ impl BoundedImageCache {
             },
         );
         self.touch(key);
-        // Keep frames coming until the decode settles: `settle_loading` runs
-        // at the next frame start and swaps the finished task for its image.
-        window.request_animation_frame();
+        // Wake the UI once, when this decode actually finishes. Polling used to
+        // keep an animation-frame spin alive for the whole decode (a remote
+        // fetch can take seconds); this foreground task is parked in the
+        // meantime and asks for the single frame needed to settle the result.
+        window
+            .spawn(cx, async move |async_cx| {
+                if done_rx.await.is_ok() {
+                    _ = async_cx.update(|window, _| window.refresh());
+                }
+            })
+            .detach();
         None
     }
 
-    /// Polls every in-flight decode once and records the decoded size of the
-    /// ones that finished. Decodes run on the background executor; polling at
-    /// frame start means no per-task wakeup closure is needed, and dropping a
-    /// pending entry (navigation, eviction) cancels its decode instead of
-    /// letting it finish unobserved.
-    fn settle_loading(&mut self, window: &Window) {
+    /// Settles every in-flight decode that has finished and records the decoded
+    /// size of the results.
+    ///
+    /// Decodes run on the background executor and wake the UI through the
+    /// per-request completion notification; this pass runs once at frame start
+    /// ([`BoundedImageCache::begin_frame`]) so a frame that paints 30 covers
+    /// cannot rescan the whole entry map 30 times. Settling an orphaned result
+    /// (a page navigated away from, a closed overlay) also keeps it from
+    /// holding decoded bytes forever.
+    fn settle_loading(&mut self) {
         let loading: Vec<u64> = self
             .entries
             .iter()
             .filter(|(_, entry)| matches!(entry.item, EntryItem::Loading(_)))
             .map(|(key, _)| *key)
             .collect();
-        let mut pending = false;
+        let mut settled = false;
         for key in loading {
             let Some(entry) = self.entries.get_mut(&key) else {
                 continue;
@@ -475,15 +504,16 @@ impl BoundedImageCache {
                 finished = (&mut *future).now_or_never();
             }
             let Some(result) = finished else {
-                pending = true;
                 continue;
             };
             let bytes = result.as_ref().map_or(0, image_bytes);
             _ = self.lru.record(key, bytes);
             entry.item = EntryItem::Loaded(result);
+            settled = true;
         }
-        if pending {
-            window.request_animation_frame();
+        if settled {
+            // A loading entry is not a warm candidate; a loaded one may be.
+            self.warm_frame = None;
         }
     }
 
@@ -495,7 +525,7 @@ impl BoundedImageCache {
     /// (page heroes, fullscreen art, the playing cover) stay resident so
     /// album -> artist -> album does not re-decode them.
     pub(crate) fn purge_retired(&mut self, window: &mut Window, cx: &mut App) {
-        let warm = self.warm_keys();
+        let warm = self.warm_keys().clone();
         let keys: Vec<u64> = self
             .entries
             .keys()
@@ -515,9 +545,22 @@ impl BoundedImageCache {
     /// out.
     pub(crate) fn begin_frame(&mut self, window: &mut Window, cx: &mut App) {
         self.frame = self.frame.wrapping_add(1);
-        self.settle_loading(window);
+        if CLEAR_REQUESTED.swap(false, Ordering::Relaxed) {
+            // The cover store was wiped: no decoded texture is reusable, not
+            // even a warm one.
+            self.unload_all(window, cx);
+        }
+        self.settle_loading();
         self.evict_stale(window, cx);
         self.evict_budget(window, cx);
+    }
+
+    /// Unloads every resident cover, warm slots included.
+    fn unload_all(&mut self, window: &mut Window, cx: &mut App) {
+        let keys: Vec<u64> = self.entries.keys().copied().collect();
+        for key in keys {
+            self.unload(key, window, cx);
+        }
     }
 
     /// Drops images that have not been requested for [`STALE_FRAMES`] frames.
@@ -527,7 +570,7 @@ impl BoundedImageCache {
     /// never a candidate.
     fn evict_stale(&mut self, window: &mut Window, cx: &mut App) {
         let frame = self.frame;
-        let warm = self.warm_keys();
+        let warm = self.warm_keys().clone();
         let stale: Vec<u64> = self
             .entries
             .iter()
@@ -549,7 +592,7 @@ impl BoundedImageCache {
     fn evict_budget(&mut self, window: &mut Window, cx: &mut App) {
         while self.lru.over_budget() {
             let frame = self.frame;
-            let warm = self.warm_keys();
+            let warm = self.warm_keys().clone();
             let evictable = |key: u64| {
                 matches!(
                     self.entries.get(&key),
@@ -576,14 +619,25 @@ impl BoundedImageCache {
     /// Removes one entry, its byte accounting and (when decoded) its atlas
     /// texture. A still-loading entry is cancelled: dropping the owned task
     /// aborts the background decode instead of letting it finish unobserved.
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "the cache threads one `&mut Window` through its frame and load entry points; unload only reads it for the deferred drop, and splitting the signature would not simplify any caller"
+    )]
     fn unload(&mut self, key: u64, window: &mut Window, cx: &mut App) {
         let Some(entry) = self.entries.remove(&key) else {
             return;
         };
         _ = self.lru.remove(key);
-        if let EntryItem::Loaded(Ok(image)) = entry.item {
+        self.warm_frame = None;
+        let EntryItem::Loaded(Ok(image)) = entry.item else {
+            return;
+        };
+        // Drop after the frame is painted: an image unloaded from a load path
+        // may still be painted by an element later in the same frame, and
+        // dropping its atlas texture mid-frame blanks that surface.
+        window.defer(cx, move |window, cx| {
             cx.drop_image(image, Some(window));
-        }
+        });
     }
 }
 
@@ -598,6 +652,24 @@ impl ImageCache for BoundedImageCache {
     }
 }
 
+/// Keys of the most recently painted large decoded covers, up to `slots`.
+fn compute_warm_keys(entries: &HashMap<u64, Entry>, slots: usize) -> HashSet<u64> {
+    if slots == 0 {
+        return HashSet::new();
+    }
+    let mut candidates: Vec<(u64, u64)> = entries
+        .iter()
+        .filter(|(_, entry)| entry.retain && matches!(entry.item, EntryItem::Loaded(_)))
+        .map(|(key, entry)| (*key, entry.last_touch))
+        .collect();
+    candidates.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.1));
+    candidates
+        .into_iter()
+        .take(slots)
+        .map(|(key, _)| key)
+        .collect()
+}
+
 /// Whether an image last requested on `last_used` may be unloaded at `frame`.
 ///
 /// Frame numbers only advance when the UI actually renders, so an idle window
@@ -609,12 +681,15 @@ fn is_stale(frame: u64, last_used: u64) -> bool {
 
 /// Builds the loading task for one image: local files decode through the
 /// display-sized fast decoder; everything else (remote provider art, embedded
-/// assets) keeps gpui's stock loader.
+/// assets) keeps gpui's stock loader. `done` is signalled when the decode
+/// finishes, so the UI can be woken exactly once per load instead of spinning
+/// animation frames while the decode is in flight.
 fn load_image_task(
     resource: &Resource,
     cx: &mut App,
     max_edge: u32,
     loads: Arc<Mutex<LoadWindow>>,
+    done: tokio::sync::oneshot::Sender<()>,
 ) -> DecodeFuture {
     let started = Instant::now();
     let Some(path) = cappable_path(resource) else {
@@ -622,6 +697,7 @@ fn load_image_task(
         return Box::pin(cx.background_executor().spawn(async move {
             let result = future.await;
             record_load(&loads, started);
+            _ = done.send(());
             result
         }));
     };
@@ -633,6 +709,7 @@ fn load_image_task(
     Box::pin(cx.background_executor().spawn(async move {
         let result = fast_image::decode_for_display(&path, max_edge);
         record_load(&loads, started);
+        _ = done.send(());
         result
     }))
 }
@@ -676,6 +753,10 @@ fn decode_edge_from(raw: Option<&str>) -> u32 {
 ///
 /// Kept as the cache/benchmark entry point; [`fast_image::decode_for_display`]
 /// owns the DCT-scaled JPEG path, SIMD resize and display-derivative cache.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+)]
 pub(crate) fn decode_capped_file(
     path: &std::path::Path,
     max_edge: u32,
@@ -744,10 +825,7 @@ impl LruBudget {
 
     /// Oldest key accepted by `is_loaded`; loading entries are skipped.
     fn eviction_candidate(&self, is_loaded: impl Fn(u64) -> bool) -> Option<u64> {
-        self.order
-            .iter()
-            .copied()
-            .find(|key| is_loaded(*key))
+        self.order.iter().copied().find(|key| is_loaded(*key))
     }
 }
 
@@ -770,7 +848,10 @@ mod tests {
             lru.touch(key);
             assert!(lru.record(key, bytes));
         }
-        assert!(lru.over_budget(), "9 decoded bytes exceed the 8 byte budget");
+        assert!(
+            lru.over_budget(),
+            "9 decoded bytes exceed the 8 byte budget"
+        );
         assert_eq!(lru.eviction_candidate(|_| true), Some(1));
         lru.remove(1);
         assert!(!lru.over_budget());
@@ -924,6 +1005,22 @@ mod tests {
         );
     }
 
+    fn insert_loading(cache: &mut BoundedImageCache, key: u64, retain: bool) {
+        let error = ImageCacheError::Io(Arc::new(std::io::Error::other("test image")));
+        cache.entries.insert(
+            key,
+            Entry {
+                item: EntryItem::Loading(Box::pin(std::future::ready(Err::<Arc<RenderImage>, _>(
+                    error,
+                )))),
+                last_used: 0,
+                last_touch: 0,
+                edge: 512,
+                retain,
+            },
+        );
+    }
+
     #[test]
     fn warm_keys_keep_the_most_recently_painted_large_covers() {
         let mut cache = BoundedImageCache::new(8 * BYTES_PER_MIB);
@@ -933,7 +1030,7 @@ mod tests {
         insert_loaded(&mut cache, 3, false, 50);
         insert_loaded(&mut cache, 4, true, 20);
         insert_loaded(&mut cache, 5, false, 40);
-        assert_eq!(cache.warm_keys(), HashSet::from([2, 4]));
+        assert_eq!(cache.warm_keys().clone(), HashSet::from([2, 4]));
     }
 
     #[test]
@@ -942,6 +1039,39 @@ mod tests {
         cache.set_warm_slots(0);
         insert_loaded(&mut cache, 1, true, 10);
         assert!(cache.warm_keys().is_empty());
+    }
+
+    #[test]
+    fn warm_keys_are_recomputed_once_per_frame_not_once_per_query() {
+        let mut cache = BoundedImageCache::new(8 * BYTES_PER_MIB);
+        cache.set_warm_slots(1);
+        insert_loaded(&mut cache, 1, true, 10);
+        assert_eq!(cache.warm_keys().clone(), HashSet::from([1]));
+        // A direct entry mutation does not invalidate the set: the point of the
+        // cache is that the frame's 30 cover loads and three eviction passes
+        // share one computation, not that every mutation is visible instantly.
+        insert_loaded(&mut cache, 2, true, 20);
+        assert_eq!(cache.warm_keys().clone(), HashSet::from([1]));
+        // The next rendered frame recomputes it.
+        cache.frame = cache.frame.wrapping_add(1);
+        assert_eq!(cache.warm_keys().clone(), HashSet::from([2]));
+    }
+
+    #[test]
+    fn settling_a_finished_decode_invalidates_the_warm_cache() {
+        let mut cache = BoundedImageCache::new(8 * BYTES_PER_MIB);
+        cache.set_warm_slots(1);
+        insert_loading(&mut cache, 1, true);
+        assert!(
+            cache.warm_keys().is_empty(),
+            "an in-flight decode is not a warm candidate"
+        );
+        cache.settle_loading();
+        assert_eq!(
+            cache.warm_keys().clone(),
+            HashSet::from([1]),
+            "a settled retained decode becomes a warm candidate"
+        );
     }
 
     #[test]

@@ -42,19 +42,18 @@ impl Bridge {
             if generation_counter.load(Ordering::Relaxed) != generation {
                 return;
             }
-            let event =
-                match search_rows(&query, offline, crate::model::SEARCH_FETCH_ROWS).await {
-                    Ok((rows, most_played)) => {
-                        crate::debug_log!("GPUI: search {:?} {} rows", query, rows.len());
-                        Event::Search {
-                            generation,
-                            query,
-                            rows,
-                            most_played,
-                        }
+            let event = match search_rows(&query, offline, crate::model::SEARCH_FETCH_ROWS).await {
+                Ok((rows, most_played)) => {
+                    crate::debug_log!("bridge: search {:?} {} rows", query, rows.len());
+                    Event::Search {
+                        generation,
+                        query,
+                        rows,
+                        most_played,
                     }
-                    Err(err) => Event::Error(format!("Search failed: {err:#}")),
-                };
+                }
+                Err(err) => Event::Error(format!("Search failed: {err:#}")),
+            };
             _ = tx.send(event);
         });
     }
@@ -67,7 +66,7 @@ impl Bridge {
             crate::app::runtime().spawn(async move {
                 let event = match library_rows(scope, order, offline).await {
                     Ok(rows) => {
-                        crate::debug_log!("GPUI: {} {} rows", scope.label(), rows.len());
+                        crate::debug_log!("bridge: {} {} rows", scope.label(), rows.len());
                         Event::Library {
                             generation,
                             scope,
@@ -138,7 +137,7 @@ impl Bridge {
                     });
                 }
                 Err(err) => {
-                    crate::debug_log!("GPUI: row window {surface} failed: {err:#}");
+                    crate::debug_log!("bridge: row window {surface} failed: {err:#}");
                 }
             }
         });
@@ -192,20 +191,30 @@ impl Bridge {
         start: usize,
         end: usize,
     ) {
+        static SUGGEST_GEN: AtomicU64 = AtomicU64::new(0);
+        let ticket = SUGGEST_GEN.fetch_add(1, Ordering::SeqCst) + 1;
         let tx = self.tx.clone();
         let offline = self.offline();
         crate::app::runtime().spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+            if SUGGEST_GEN.load(Ordering::SeqCst) != ticket {
+                return;
+            }
             let Some(dbs) = crate::app::dbs() else { return };
             let Ok(results) = crate::browse::search(&dbs, &query, offline, 8).await else {
-                _ = tx.send(Event::CommandSuggestions {
-                    generation,
-                    start,
-                    end,
-                    rows: Vec::new(),
-                });
+                if SUGGEST_GEN.load(Ordering::SeqCst) == ticket {
+                    _ = tx.send(Event::CommandSuggestions {
+                        generation,
+                        start,
+                        end,
+                        rows: Vec::new(),
+                    });
+                }
                 return;
             };
+            if SUGGEST_GEN.load(Ordering::SeqCst) != ticket {
+                return;
+            }
             let mut rows: Vec<(String, String)> = Vec::new();
             let mut push = |title: &str, detail: &str, kind: &str| {
                 if rows.len() >= 8 || title.is_empty() {
@@ -234,7 +243,11 @@ impl Bridge {
                 crate::ipc_command::SuggestScope::Track => {
                     for song in &results.songs {
                         let subtitle = song.subtitle();
-                        push(&song.title, song.artist.as_deref().unwrap_or(&subtitle), "Track");
+                        push(
+                            &song.title,
+                            song.artist.as_deref().unwrap_or(&subtitle),
+                            "Track",
+                        );
                     }
                 }
                 crate::ipc_command::SuggestScope::Playlist => {
@@ -245,7 +258,11 @@ impl Bridge {
                 crate::ipc_command::SuggestScope::Any => {
                     for song in &results.songs {
                         let subtitle = song.subtitle();
-                        push(&song.title, song.artist.as_deref().unwrap_or(&subtitle), "Track");
+                        push(
+                            &song.title,
+                            song.artist.as_deref().unwrap_or(&subtitle),
+                            "Track",
+                        );
                     }
                     for album in &results.albums {
                         push(&album.title, &album.artist, "Album");

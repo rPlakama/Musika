@@ -15,11 +15,7 @@ impl AppRoot {
 
     pub(in crate::ui) fn start_sync(&mut self, mode: SyncMode) {
         if self.syncing {
-            self.push_toast(
-                "A sync is already running.".to_string(),
-                ToastKind::Notice,
-                None,
-            );
+            self.push_toast("A sync is already running.".to_string(), None);
             return;
         }
         self.clock.tick();

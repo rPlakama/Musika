@@ -52,6 +52,12 @@ const TARGET_SAMPLE: Sample = Sample::F32(ffmpeg::format::sample::Type::Packed);
 /// FFmpeg versions disagree on the casing (FFmpeg often lowercases tags).
 const REPLAYGAIN_TRACK_GAIN: &str = "replaygain_track_gain";
 const REPLAYGAIN_ALBUM_GAIN: &str = "replaygain_album_gain";
+const REPLAYGAIN_TRACK_PEAK: &str = "replaygain_track_peak";
+const REPLAYGAIN_ALBUM_PEAK: &str = "replaygain_album_peak";
+
+/// Maximum consecutive `AVERROR_INVALIDDATA` demux reads before aborting
+/// decode to prevent a 100% CPU infinite loop on corrupt files.
+const MAX_CONSECUTIVE_INVALID_DATA: u32 = 64;
 
 /// Clamps a source rate to a pipeline-supported rate. Rates above
 /// [`MAX_PIPELINE_RATE`] are downsampled; a decoded frame rate of 0 is treated
@@ -74,6 +80,17 @@ fn parse_replaygain_db(value: &str) -> Option<f64> {
     value.parse::<f64>().ok().filter(|gain| gain.is_finite())
 }
 
+/// Parses a ReplayGain linear peak value such as `0.988553` or `1.05`.
+///
+/// Peak values must be strictly positive and finite (`> 0.0`).
+fn parse_replaygain_peak(value: &str) -> Option<f64> {
+    value
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|peak| peak.is_finite() && *peak > 0.0)
+}
+
 /// Extracts the ReplayGain track and album gains from one metadata dictionary.
 fn replaygain_from_metadata(metadata: &DictionaryRef<'_>) -> (Option<f64>, Option<f64>) {
     let mut track = None;
@@ -88,9 +105,35 @@ fn replaygain_from_metadata(metadata: &DictionaryRef<'_>) -> (Option<f64>, Optio
     (track, album)
 }
 
-/// Network read-ahead. The transport worker streams a track instead of
-/// buffering it whole, so AVIO gets a bounded 32 MiB window.
-const STREAM_BUFFER_SIZE: &str = "33554432";
+/// Extracts the ReplayGain track and album peak tags from one metadata dictionary.
+fn replaygain_peaks_from_metadata(metadata: &DictionaryRef<'_>) -> (Option<f64>, Option<f64>) {
+    let mut track = None;
+    let mut album = None;
+    for (key, value) in metadata.iter() {
+        if key.eq_ignore_ascii_case(REPLAYGAIN_TRACK_PEAK) {
+            track = parse_replaygain_peak(value);
+        } else if key.eq_ignore_ascii_case(REPLAYGAIN_ALBUM_PEAK) {
+            album = parse_replaygain_peak(value);
+        }
+    }
+    (track, album)
+}
+
+/// AVIO read-ahead buffer size: 512 KiB for local files and 2 MiB for
+/// HTTP/network streams.
+const LOCAL_BUFFER_SIZE: &str = "524288";
+const STREAM_BUFFER_SIZE: &str = "2097152";
+
+fn stream_buffer_size(url: &str) -> &'static str {
+    let trimmed = url.trim_start();
+    let is_network = (trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("http://"))
+        || (trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("https://"));
+    if is_network {
+        STREAM_BUFFER_SIZE
+    } else {
+        LOCAL_BUFFER_SIZE
+    }
+}
 /// Bytes inspected before stream selection.
 const STREAM_PROBE_SIZE: &str = "1048576";
 /// Microseconds of stream analysis during open.
@@ -160,7 +203,7 @@ fn open_input(url: &str, stop: &Arc<AtomicBool>) -> Result<format::context::Inpu
     }
 
     let mut options = Dictionary::new();
-    options.set("buffer_size", STREAM_BUFFER_SIZE);
+    options.set("buffer_size", stream_buffer_size(url));
     options.set("probesize", STREAM_PROBE_SIZE);
     options.set("analyzeduration", STREAM_ANALYZE_DURATION);
     options.set("fflags", "+fastseek");
@@ -226,6 +269,8 @@ pub(crate) struct Decoder {
     /// ReplayGain tags captured from the format/audio-stream metadata at open.
     replaygain_track_gain_db: Option<f64>,
     replaygain_album_gain_db: Option<f64>,
+    replaygain_track_peak: Option<f64>,
+    replaygain_album_peak: Option<f64>,
     seekable: bool,
     stop: Arc<AtomicBool>,
     /// Frames currently available in `converted`, and how many were consumed.
@@ -283,8 +328,9 @@ impl Decoder {
         // them on the audio stream. Capture both here: the metadata views
         // borrow `input`, which is moved into `Self` below.
         let format_gain = replaygain_from_metadata(&input.metadata());
+        let format_peak = replaygain_peaks_from_metadata(&input.metadata());
 
-        let (stream_index, stream_time_base, duration, parameters, stream_gain) = {
+        let (stream_index, stream_time_base, duration, parameters, stream_gain, stream_peak) = {
             let stream = input
                 .streams()
                 .best(ffmpeg::media::Type::Audio)
@@ -307,17 +353,21 @@ impl Decoder {
             }
 
             let stream_gain = replaygain_from_metadata(&stream.metadata());
+            let stream_peak = replaygain_peaks_from_metadata(&stream.metadata());
             (
                 index,
                 time_base,
                 duration.max(0.0),
                 stream.parameters(),
                 stream_gain,
+                stream_peak,
             )
         };
         // Format-level tags take precedence; stream tags only fill the gaps.
         let track_gain_db = format_gain.0.or(stream_gain.0);
         let album_gain_db = format_gain.1.or(stream_gain.1);
+        let track_peak = format_peak.0.or(stream_peak.0);
+        let album_peak = format_peak.1.or(stream_peak.1);
 
         let mut codec_context = codec::Context::from_parameters(parameters).map_err(|error| {
             context_error("decoder: cannot apply audio codec parameters", error)
@@ -376,6 +426,8 @@ impl Decoder {
             rate: output_rate.map_or(0, pipeline_rate),
             replaygain_track_gain_db: track_gain_db,
             replaygain_album_gain_db: album_gain_db,
+            replaygain_track_peak: track_peak,
+            replaygain_album_peak: album_peak,
             seekable,
             stop,
             pending_frames: 0,
@@ -442,6 +494,18 @@ impl Decoder {
     /// metadata. `None` when the tag is absent or malformed.
     pub(crate) fn replaygain_album_gain_db(&self) -> Option<f64> {
         self.replaygain_album_gain_db
+    }
+
+    /// ReplayGain track peak, captured at open from format or audio-stream
+    /// metadata. `None` when the tag is absent or malformed.
+    pub(crate) fn replaygain_track_peak(&self) -> Option<f64> {
+        self.replaygain_track_peak
+    }
+
+    /// ReplayGain album peak, captured at open from format or audio-stream
+    /// metadata. `None` when the tag is absent or malformed.
+    pub(crate) fn replaygain_album_peak(&self) -> Option<f64> {
+        self.replaygain_album_peak
     }
 
     /// Byte size of the input when the protocol/container reports one,
@@ -655,6 +719,7 @@ impl Decoder {
     /// Read packets until one audio packet is accepted by the codec (or the
     /// demuxer EOF is signalled to the decoder).
     fn feed_decoder(&mut self) -> Result<(), String> {
+        let mut consecutive_invalid_data: u32 = 0;
         loop {
             if self.stop.load(Ordering::Relaxed) {
                 return Err(stopped());
@@ -662,6 +727,7 @@ impl Decoder {
 
             match self.packet.read(&mut self.input) {
                 Ok(()) => {
+                    consecutive_invalid_data = 0;
                     if self.packet.stream() != self.stream_index {
                         self.unref_packet();
                         continue;
@@ -701,7 +767,16 @@ impl Decoder {
                     }
                 }
                 Err(Error::Exit) => return Err(stopped()),
-                Err(Error::InvalidData) => continue,
+                Err(Error::InvalidData) => {
+                    consecutive_invalid_data += 1;
+                    if consecutive_invalid_data >= MAX_CONSECUTIVE_INVALID_DATA {
+                        return Err(context_error(
+                            "decoder: too many consecutive invalid packets",
+                            Error::InvalidData,
+                        ));
+                    }
+                    continue;
+                }
                 Err(error) if is_eagain(error) => {
                     return Err("decoder: audio input is temporarily unavailable".to_string());
                 }
@@ -1043,13 +1118,12 @@ mod tests {
             samples.extend_from_slice(&[tone, tone, 0, 0, 0, 0]);
         }
         let file = wav_fixture(rate, 6, &samples);
-        let mut decoder = Decoder::open(
-            file.path().to_str().expect("utf-8 temp path"),
-            new_stop(),
-        )
-        .expect("open six-channel WAV");
+        let mut decoder = Decoder::open(file.path().to_str().expect("utf-8 temp path"), new_stop())
+            .expect("open six-channel WAV");
         let mut out = vec![0f32; 1024 * 2];
-        let read = decoder.read(&mut out, 1024).expect("decode six-channel WAV");
+        let read = decoder
+            .read(&mut out, 1024)
+            .expect("decode six-channel WAV");
         assert!(read > 0);
         assert!(
             mean_abs(&out[..read * 2]) > 0.001,
@@ -1245,15 +1319,27 @@ mod tests {
         let mut format = ffmpeg::Dictionary::new();
         format.set("REPLAYGAIN_TRACK_GAIN", "-7.23 dB");
         format.set("replaygain_album_gain", "+1.5 dB");
+        format.set("REPLAYGAIN_TRACK_PEAK", "0.988553");
+        format.set("replaygain_album_peak", "1.02");
         assert_eq!(
             super::replaygain_from_metadata(&format),
             (Some(-7.23), Some(1.5))
+        );
+        assert_eq!(
+            super::replaygain_peaks_from_metadata(&format),
+            (Some(0.988553), Some(1.02))
         );
 
         let mut stream = ffmpeg::Dictionary::new();
         stream.set("ReplayGain_Track_Gain", "malformed");
         stream.set("ReplayGain_Album_Gain", "3.5");
+        stream.set("ReplayGain_Track_Peak", "-0.5");
+        stream.set("ReplayGain_Album_Peak", "0.85");
         assert_eq!(super::replaygain_from_metadata(&stream), (None, Some(3.5)));
+        assert_eq!(
+            super::replaygain_peaks_from_metadata(&stream),
+            (None, Some(0.85))
+        );
     }
 
     #[test]
@@ -1266,12 +1352,16 @@ mod tests {
             &[
                 ("REPLAYGAIN_TRACK_GAIN", "-7.2 dB"),
                 ("REPLAYGAIN_ALBUM_GAIN", "+1.5 dB"),
+                ("REPLAYGAIN_TRACK_PEAK", "0.95"),
+                ("REPLAYGAIN_ALBUM_PEAK", "0.99"),
             ],
         );
         let decoder = Decoder::open(file.path().to_str().expect("utf-8 temp path"), new_stop())
             .expect("open tagged WAV");
         assert_eq!(decoder.replaygain_track_gain_db(), Some(-7.2));
         assert_eq!(decoder.replaygain_album_gain_db(), Some(1.5));
+        assert_eq!(decoder.replaygain_track_peak(), Some(0.95));
+        assert_eq!(decoder.replaygain_album_peak(), Some(0.99));
 
         // A fixture without tags reports no gain.
         let plain = wav_fixture(48_000, 2, &samples);
@@ -1279,6 +1369,25 @@ mod tests {
             .expect("open untagged WAV");
         assert_eq!(decoder.replaygain_track_gain_db(), None);
         assert_eq!(decoder.replaygain_album_gain_db(), None);
+        assert_eq!(decoder.replaygain_track_peak(), None);
+        assert_eq!(decoder.replaygain_album_peak(), None);
+    }
+
+    #[test]
+    fn stream_buffer_size_distinguishes_local_and_network_urls() {
+        assert_eq!(
+            super::stream_buffer_size("file:///tmp/track.flac"),
+            "524288"
+        );
+        assert_eq!(super::stream_buffer_size("/tmp/track.flac"), "524288");
+        assert_eq!(
+            super::stream_buffer_size("http://127.0.0.1:4533/rest/stream"),
+            "2097152"
+        );
+        assert_eq!(
+            super::stream_buffer_size("https://music.example.com/rest/stream"),
+            "2097152"
+        );
     }
 
     #[test]

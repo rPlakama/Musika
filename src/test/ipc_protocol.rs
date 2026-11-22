@@ -22,7 +22,14 @@ fn wire_track(id: &str, favorite: bool) -> WireTrack {
 #[test]
 fn frame_round_trips_through_a_stream() {
     let frames = vec![
-        Frame::new(KIND_PING, Heartbeat { nonce: 7, monotonic_ns: 9 }.encode()),
+        Frame::new(
+            KIND_PING,
+            Heartbeat {
+                nonce: 7,
+                monotonic_ns: 9,
+            }
+            .encode(),
+        ),
         Frame::new(KIND_REQUEST_JSON, b"{}".to_vec()),
         Frame::with_flags(
             KIND_PLAYER_REPLY,
@@ -43,7 +50,9 @@ fn frame_round_trips_through_a_stream() {
 
     let mut cursor = Cursor::new(buf);
     for expected in &frames {
-        let frame = read_frame_blocking(&mut cursor).expect("read frame").unwrap();
+        let frame = read_frame_blocking(&mut cursor)
+            .expect("read frame")
+            .unwrap();
         assert_eq!(&frame, expected);
     }
     assert!(read_frame_blocking(&mut cursor).expect("eof").is_none());
@@ -63,13 +72,22 @@ fn oversize_frame_is_rejected_at_encode_and_header_parse() {
 }
 
 #[test]
-fn truncated_frame_reports_eof_instead_of_a_bad_message() {
+fn truncated_frame_reports_a_typed_error_instead_of_a_clean_eof() {
+    // A frame that stops mid-payload is a protocol error: reporting it as a
+    // clean EOF would silently drop a partially written message (D-26).
     let frame = Frame::new(KIND_REQUEST_JSON, b"hello".to_vec());
     let mut bytes = frame.encode().unwrap();
     bytes.truncate(bytes.len() - 1);
     let mut cursor = Cursor::new(bytes);
     let error = read_frame_blocking(&mut cursor).expect_err("short payload must fail");
-    assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+
+    // A partial header is likewise a protocol error, never an EOF.
+    let frame = Frame::new(KIND_REQUEST_JSON, b"hello".to_vec());
+    let bytes = frame.encode().unwrap();
+    let mut cursor = Cursor::new(&bytes[..FRAME_HEADER_BYTES - 1]);
+    let error = read_frame_blocking(&mut cursor).expect_err("short header must fail");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
 }
 
 #[test]
@@ -276,7 +294,7 @@ fn every_player_op_round_trips() {
             req: index as u32,
             op,
         };
-        let bytes = request.encode();
+        let bytes = request.encode().expect("encode player request");
         assert_eq!(PlayerRequest::decode(&bytes).unwrap(), request);
     }
 }
@@ -287,7 +305,10 @@ fn player_request_and_reply_frames_round_trip() {
         req: 99,
         op: PlayerOp::Seek(30.0),
     };
-    let frame = Frame::new(KIND_PLAYER_REQUEST, request.encode());
+    let frame = Frame::new(
+        KIND_PLAYER_REQUEST,
+        request.encode().expect("encode player request"),
+    );
     let message = Message::decode(&frame).unwrap();
     let Message::PlayerRequest(decoded) = message else {
         panic!("expected a player request, got {message:?}");
@@ -327,7 +348,10 @@ fn wire_track_never_carries_a_stream_url() {
     };
     let wire = WireTrack::from(&track);
     let json = serde_json::to_string(&wire).unwrap();
-    assert!(!json.contains("secret"), "the stream URL must stay in the core");
+    assert!(
+        !json.contains("secret"),
+        "the stream URL must stay in the core"
+    );
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert!(
         value.get("url").is_none(),
@@ -347,7 +371,9 @@ fn activate_frame_is_empty_and_typed() {
         panic!("expected activate, got {message:?}");
     };
     assert_eq!(
-        Message::decode(&Frame::new(KIND_ACTIVATE, vec![1])).unwrap_err().code,
+        Message::decode(&Frame::new(KIND_ACTIVATE, vec![1]))
+            .unwrap_err()
+            .code,
         ErrorCode::BadPayload
     );
 }
@@ -468,4 +494,59 @@ fn request_and_reply_json_round_trip() {
     assert_eq!(decoded.code, Some(ErrorCode::InvalidArgs));
     assert_eq!(decoded.message.as_deref(), Some("song_id is required"));
     assert!(ReplyJson::ok(1).ok);
+}
+
+/// Decoders must reject unconsumed trailing bytes and readers must separate a
+/// clean EOF from a truncated header (D-09, D-26).
+#[tokio::test]
+async fn rejects_trailing_bytes_and_truncated_header() {
+    let request = PlayerRequest {
+        req: 3,
+        op: PlayerOp::Seek(12.5),
+    };
+    let mut bytes = request.encode().expect("encode player request");
+    bytes.push(0xFF);
+    let error = PlayerRequest::decode(&bytes).expect_err("trailing byte must be rejected");
+    assert_eq!(error.code, ErrorCode::BadPayload);
+
+    let delta = QueueDelta::reset(1, 5);
+    let mut bytes = delta.encode().expect("encode delta");
+    bytes.push(0);
+    let error = QueueDelta::decode(&bytes).expect_err("trailing byte must be rejected");
+    assert_eq!(error.code, ErrorCode::BadPayload);
+
+    let frame = Frame::new(
+        KIND_PING,
+        Heartbeat {
+            nonce: 1,
+            monotonic_ns: 2,
+        }
+        .encode(),
+    );
+    let encoded = frame.encode().expect("encode frame");
+
+    // Zero bytes read is still a clean EOF.
+    let mut empty: &[u8] = &[];
+    assert!(read_frame(&mut empty).await.expect("clean eof").is_none());
+
+    // 1..FRAME_HEADER_BYTES-1 header bytes are a protocol error, never EOF.
+    for cut in 1..FRAME_HEADER_BYTES {
+        let mut reader = &encoded[..cut];
+        let error = read_frame(&mut reader)
+            .await
+            .expect_err("truncated header must error");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    // A truncated payload is also an error.
+    let mut reader = &encoded[..encoded.len() - 1];
+    let error = read_frame(&mut reader)
+        .await
+        .expect_err("truncated payload must error");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+
+    // The blocking reader agrees.
+    let mut blocking = &encoded[..3];
+    let error = read_frame_blocking(&mut blocking).expect_err("truncated blocking header");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
 }

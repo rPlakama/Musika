@@ -40,11 +40,6 @@ use crate::http_client::SubsonicClient;
 /// Outcome of a [`sync_library`] run.
 #[derive(Debug, Default, Clone)]
 pub struct SyncReport {
-    /// `false` when the server reported no changes and nothing was fetched.
-    pub updated: bool,
-    pub artists: usize,
-    pub albums: usize,
-    pub songs: usize,
     /// The caller starts the asynchronous cover pass after the sync returns.
     pub covers_due: bool,
     /// Whether this pass exercised the deep reconciler, either because the
@@ -55,11 +50,6 @@ pub struct SyncReport {
     pub deep: bool,
     /// Covers whose album art changed, forced past the conditional request.
     pub forced_covers: Vec<String>,
-    /// Lyrics fetched by the bounded sync backfill.
-    pub lyrics: usize,
-    /// ARC-44: server playlists refreshed by this run.
-    #[cfg_attr(not(debug_assertions), allow(dead_code))]
-    pub playlists: usize,
 }
 
 impl SyncReport {
@@ -171,6 +161,26 @@ where
     let mut seen_albums: std::collections::HashSet<String> = std::collections::HashSet::new();
     albums.retain(|album| seen_albums.insert(album.id.clone()));
 
+    // Safety: an empty/partial manifest is far more likely a broken upstream
+    // answer than a library the user emptied. Never wipe a populated local
+    // library from a suspicious shallow manifest, even when `full_sync_due` or
+    // low manifest overlap would escalate `deep`; only an explicit manual
+    // refresh (`deep == true` from the caller) overrides this guard.
+    let manual_deep = deep;
+    let old_artists = before.2.max(0) as usize;
+    if old_artists > 0 && !manual_deep {
+        if artists.is_empty() {
+            bail!("server returned an empty artist index; keeping the local library");
+        }
+        if artists.len() * 2 < old_artists {
+            bail!(
+                "server returned only {}/{} artists; keeping the local library (manual refresh to force)",
+                artists.len(),
+                old_artists
+            );
+        }
+    }
+
     // Shallow passes re-fetch only albums whose stored hash changed (a song
     // move changes the album's count/duration/cover); a deep pass re-fetches
     // every album's songs so silent metadata edits are caught too.
@@ -217,24 +227,6 @@ where
             .filter(|song| !song.id.is_empty())
             .collect();
         songs_by_album.insert(album_id, songs);
-    }
-
-    // Safety: an empty/partial manifest is far more likely a broken upstream
-    // answer than a library the user emptied. Never wipe a populated local
-    // library from a suspicious shallow manifest; a manual (deep) sync is the
-    // explicit override.
-    let old_artists = before.2.max(0) as usize;
-    if old_artists > 0 {
-        if artists.is_empty() && !deep {
-            bail!("server returned an empty artist index; keeping the local library");
-        }
-        if !deep && artists.len() * 2 < old_artists {
-            bail!(
-                "server returned only {}/{} artists; keeping the local library (manual refresh to force)",
-                artists.len(),
-                old_artists
-            );
-        }
     }
 
     report(&mut progress, "Indexing library…", 75);
@@ -371,18 +363,17 @@ where
     .await;
 
     // 6. bounded lyric backfill (the sync button's lyric pass)
-    let lyrics = refresh_lyrics(dbs, &client, &mut progress).await;
+    _ = refresh_lyrics(dbs, &client, &mut progress).await;
 
     // 7. color cache: drop schemes whose cover vanished from covers.db
     best_effort("color cache purge failed", crate::colors::purge(dbs)).await;
 
     // 8. ARC-44: the Subsonic playlist list rides the library sync.
-    let playlists = best_effort(
+    _ = best_effort(
         "could not refresh playlists",
         crate::playlists::refresh_subsonic(dbs, &client),
     )
-    .await
-    .unwrap_or(0);
+    .await;
 
     let after = crate::library::counts(&dbs.library)
         .await
@@ -396,15 +387,9 @@ where
 
     report(&mut progress, "Done", 100);
     Ok(SyncReport {
-        updated,
-        artists: after.2.max(0) as usize,
-        albums: after.1.max(0) as usize,
-        songs: after.0.max(0) as usize,
         covers_due,
         deep,
         forced_covers: changes.covers,
-        lyrics,
-        playlists,
     })
 }
 
@@ -584,4 +569,240 @@ async fn fetch_albums(
         move |c, id| async move { c.get_album(&id).await },
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn test_dbs() -> Dbs {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations_library")
+            .run(&pool)
+            .await
+            .unwrap();
+        let media = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations_media")
+            .run(&media)
+            .await
+            .unwrap();
+        Dbs {
+            credentials: pool.clone(),
+            library: pool.clone(),
+            sync: pool.clone(),
+            search: pool.clone(),
+            covers: media.clone(),
+            media: media.clone(),
+            lyrics: media.clone(),
+            colors: pool.clone(),
+            status: pool.clone(),
+            artist_user: pool.clone(),
+            download: media,
+            playlist: pool,
+        }
+    }
+
+    async fn seed_four_artists(dbs: &Dbs) {
+        let artists: Vec<ArtistID3> = (1..=4)
+            .map(|i| ArtistID3 {
+                id: format!("ar{i}"),
+                name: format!("Artist {i}"),
+                album_count: 1,
+                ..ArtistID3::default()
+            })
+            .collect();
+        let albums: Vec<AlbumID3> = (1..=4)
+            .map(|i| AlbumID3 {
+                id: format!("al{i}"),
+                name: format!("Album {i}"),
+                artist_id: Some(format!("ar{i}")),
+                artist: Some(format!("Artist {i}")),
+                song_count: 1,
+                duration: 120,
+                ..AlbumID3::default()
+            })
+            .collect();
+        let mut songs_by_album: HashMap<String, Vec<Child>> = HashMap::new();
+        for i in 1..=4 {
+            songs_by_album.insert(
+                format!("al{i}"),
+                vec![Child {
+                    id: format!("s{i}"),
+                    album_id: Some(format!("al{i}")),
+                    artist_id: Some(format!("ar{i}")),
+                    title: format!("Song {i}"),
+                    album: Some(format!("Album {i}")),
+                    artist: Some(format!("Artist {i}")),
+                    track: Some(1),
+                    duration: Some(120),
+                    ..Child::default()
+                }],
+            );
+        }
+        crate::library::apply(&dbs.sync, &artists, &albums, &songs_by_album, 100, true)
+            .await
+            .unwrap();
+        // Force `full_sync_due` to return `true` so an automatic sync (`deep = false`)
+        // would escalate `deep = true` if the safety guard ran too late.
+        sqlx::query("DELETE FROM meta WHERE key = 'full_sync_at'")
+            .execute(&dbs.library)
+            .await
+            .unwrap();
+        assert!(crate::library::full_sync_due(&dbs.library).await);
+    }
+
+    async fn spawn_mock_subsonic(
+        indexes_body: String,
+        artist_body: String,
+        album_body: String,
+        album_hits: Arc<AtomicUsize>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buf = [0u8; 4096];
+                let Ok(read) = socket.read(&mut buf).await else {
+                    break;
+                };
+                let req = String::from_utf8_lossy(&buf[..read]);
+                let path_line = req.lines().next().unwrap_or("");
+                let body = if path_line.contains("/rest/getIndexes.view") {
+                    indexes_body.clone()
+                } else if path_line.contains("/rest/getArtist.view") {
+                    artist_body.clone()
+                } else if path_line.contains("/rest/getAlbum.view") {
+                    album_hits.fetch_add(1, Ordering::SeqCst);
+                    album_body.clone()
+                } else {
+                    r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#.to_string()
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[tokio::test]
+    async fn empty_and_shrunk_artist_index_rejected_even_when_full_sync_due() {
+        let artist_json = r#"{"subsonic-response":{"status":"ok","version":"1.16.1","artist":{"id":"ar1","name":"Artist 1","albumCount":1,"album":[{"id":"al1","name":"Album 1","artistId":"ar1","artist":"Artist 1","songCount":1,"duration":120}]}}}"#.to_string();
+        let album_json = r#"{"subsonic-response":{"status":"ok","version":"1.16.1","album":{"id":"al1","name":"Album 1","artistId":"ar1","artist":"Artist 1","songCount":1,"duration":120,"song":[{"id":"s1","albumId":"al1","artistId":"ar1","title":"Song 1","album":"Album 1","artist":"Artist 1","track":1,"duration":120}]}}}"#.to_string();
+        let shrunk_indexes = r#"{"subsonic-response":{"status":"ok","version":"1.16.1","indexes":{"lastModified":200,"index":[{"name":"A","artist":[{"id":"ar1","name":"Artist 1","albumCount":1}]}],"shortcut":[]}}}"#.to_string();
+
+        if std::env::var_os("MUSIKA_TEST_INDEX_MANUAL_DEEP").is_some() {
+            let dbs = test_dbs().await;
+            seed_four_artists(&dbs).await;
+            let hits = Arc::new(AtomicUsize::new(0));
+            let (url, server) =
+                spawn_mock_subsonic(shrunk_indexes, artist_json, album_json, Arc::clone(&hits))
+                    .await;
+            let client = Arc::new(SubsonicClient::new(&url, "alice", "secret"));
+            let report = sync_library(&dbs, client, true, |_| {}).await.unwrap();
+            assert!(report.deep);
+            assert_eq!(hits.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                crate::library::counts(&dbs.library).await.unwrap(),
+                (1, 1, 1)
+            );
+            server.abort();
+            return;
+        }
+
+        let dbs = test_dbs().await;
+        seed_four_artists(&dbs).await;
+        assert_eq!(
+            crate::library::counts(&dbs.library).await.unwrap(),
+            (4, 4, 4)
+        );
+
+        // 1. Empty artist index rejected before fetch_albums even though full_sync_due is true.
+        let empty_hits = Arc::new(AtomicUsize::new(0));
+        let empty_indexes = r#"{"subsonic-response":{"status":"ok","version":"1.16.1","indexes":{"lastModified":200,"index":[],"shortcut":[]}}}"#.to_string();
+        let (empty_url, empty_server) = spawn_mock_subsonic(
+            empty_indexes,
+            artist_json.clone(),
+            album_json.clone(),
+            Arc::clone(&empty_hits),
+        )
+        .await;
+        let client = Arc::new(SubsonicClient::new(&empty_url, "alice", "secret"));
+        let err = sync_library(&dbs, client, false, |_| {}).await.unwrap_err();
+        assert!(err.to_string().contains("empty artist index"));
+        assert_eq!(empty_hits.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            crate::library::counts(&dbs.library).await.unwrap(),
+            (4, 4, 4)
+        );
+        empty_server.abort();
+
+        // 2. Shrunk artist index (1 of 4 artists) rejected before fetch_albums even though full_sync_due is true.
+        let shrunk_hits = Arc::new(AtomicUsize::new(0));
+        let (shrunk_url, shrunk_server) = spawn_mock_subsonic(
+            shrunk_indexes,
+            artist_json,
+            album_json,
+            Arc::clone(&shrunk_hits),
+        )
+        .await;
+        let client = Arc::new(SubsonicClient::new(&shrunk_url, "alice", "secret"));
+        let err = sync_library(&dbs, client, false, |_| {}).await.unwrap_err();
+        assert!(err.to_string().contains("1/4 artists"));
+        assert_eq!(
+            shrunk_hits.load(Ordering::SeqCst),
+            0,
+            "fetch_albums must not run on a rejected shrunk manifest"
+        );
+        assert_eq!(
+            crate::library::counts(&dbs.library).await.unwrap(),
+            (4, 4, 4)
+        );
+        shrunk_server.abort();
+
+        // 3. Explicit manual deep refresh (`deep = true`) overrides the guard.
+        // Run in an isolated subprocess so `sync_library`'s search/mirror side effects
+        // never mutate the parent test process's global `search::index` or user config.
+        let base = std::env::temp_dir().join(format!("musika-index-s04-{}", std::process::id()));
+        _ = std::fs::remove_dir_all(&base);
+        let cfg = base.join("cfg");
+        let cache = base.join("cache");
+        std::fs::create_dir_all(&cfg).unwrap();
+        std::fs::create_dir_all(&cache).unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let output = std::process::Command::new(&exe)
+            .env("XDG_CONFIG_HOME", &cfg)
+            .env("XDG_CACHE_HOME", &cache)
+            .env("MUSIKA_TEST_INDEX_MANUAL_DEEP", "1")
+            .args([
+                "--exact",
+                "index::tests::empty_and_shrunk_artist_index_rejected_even_when_full_sync_due",
+            ])
+            .output()
+            .unwrap();
+        _ = std::fs::remove_dir_all(&base);
+        assert!(
+            output.status.success(),
+            "manual deep child failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

@@ -10,7 +10,6 @@ use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 use crate::db::Dbs;
-use crate::sqlite::Credentials;
 
 const REGISTRY_VERSION: u32 = 1;
 
@@ -51,6 +50,13 @@ impl Registry {
         self.accounts.iter().find(|account| account.id == id)
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "only the account-registry tests exercise this lookup"
+        )
+    )]
     fn by_credentials(&self, server_url: &str, username: &str) -> Option<&StoredAccount> {
         self.accounts
             .iter()
@@ -60,9 +66,15 @@ impl Registry {
 
 #[derive(Debug, Clone)]
 pub struct Account {
-    pub id: String,
     pub server_url: String,
     pub username: String,
+    #[cfg_attr(
+        test,
+        expect(
+            dead_code,
+            reason = "only the non-test session cache reads the decrypted password"
+        )
+    )]
     pub password: String,
     pub server_type: String,
     pub data_root: PathBuf,
@@ -111,30 +123,47 @@ fn load_from_disk() -> Result<Registry> {
 }
 
 fn write_registry(registry: &Registry) -> Result<()> {
+    use std::io::Write;
+
     let path = registry_path()?;
     crate::db::ensure_parent_dir(&path)?;
     let bytes = serde_json::to_vec_pretty(registry)?;
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &bytes).with_context(|| format!("failed to write {}", tmp.display()))?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&tmp)
+        .with_context(|| format!("failed to create {}", tmp.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
     }
+    file.write_all(&bytes)
+        .with_context(|| format!("failed to write {}", tmp.display()))?;
+    file.sync_all()
+        .with_context(|| format!("failed to sync {}", tmp.display()))?;
+    drop(file);
     std::fs::rename(&tmp, &path)
         .with_context(|| format!("failed to replace {}", path.display()))?;
     Ok(())
 }
 
 fn registry() -> &'static RwLock<Registry> {
-    REGISTRY.get_or_init(|| match load_from_disk() {
-        Ok(registry) => {
-            _ = REGISTRY_EXISTED.set(registry_path().is_ok_and(|path| path.exists()));
-            RwLock::new(registry)
-        }
-        Err(err) => {
-            eprintln!("accounts: could not load registry: {err:#}");
-            RwLock::new(Registry::versioned())
+    REGISTRY.get_or_init(|| {
+        let existed = registry_path().map_or(true, |path| path.exists());
+        _ = REGISTRY_EXISTED.set(existed);
+        match load_from_disk() {
+            Ok(registry) => RwLock::new(registry),
+            Err(err) => {
+                eprintln!("accounts: could not load registry: {err:#}");
+                RwLock::new(Registry::versioned())
+            }
         }
     })
 }
@@ -155,6 +184,7 @@ pub fn startup_data_root() -> Result<PathBuf> {
 }
 
 pub fn registry_existed() -> bool {
+    let _ = registry();
     REGISTRY_EXISTED.get().copied().unwrap_or(false)
 }
 
@@ -171,7 +201,6 @@ fn resolve_data_root(value: &str) -> Result<PathBuf> {
 
 fn to_account(stored: &StoredAccount) -> Result<Account> {
     Ok(Account {
-        id: stored.id.clone(),
         server_url: stored.server_url.clone(),
         username: stored.username.clone(),
         password: crate::crypto::decrypt_password(&stored.password)?,
@@ -206,15 +235,13 @@ pub fn active_identity() -> Option<Identity> {
     })
 }
 
-pub fn last_account() -> Option<Account> {
-    let guard = registry().read().unwrap_or_else(|e| e.into_inner());
-    guard
-        .accounts
-        .iter()
-        .max_by_key(|account| account.last_used)
-        .and_then(|stored| to_account(stored).ok())
-}
-
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "only the account-registry tests exercise this lookup"
+    )
+)]
 pub fn account_for(server_url: &str, username: &str) -> Option<Account> {
     let guard = registry().read().unwrap_or_else(|e| e.into_inner());
     guard
@@ -233,7 +260,12 @@ pub fn upsert_and_activate(
     let encrypted = crate::crypto::encrypt_password(password)?;
     let now = crate::consts::now_secs();
     let mut guard = registry().write().unwrap_or_else(|e| e.into_inner());
-    if let Some(existing) = guard.accounts.iter_mut().find(|account| account.id == id) {
+    let mut candidate = guard.clone();
+    if let Some(existing) = candidate
+        .accounts
+        .iter_mut()
+        .find(|account| account.id == id)
+    {
         existing.username = username.to_string();
         existing.server_url = server_url.to_string();
         existing.password = encrypted;
@@ -241,7 +273,7 @@ pub fn upsert_and_activate(
         existing.last_used = now;
     } else {
         let data_root = format!("accounts/{id}");
-        guard.accounts.push(StoredAccount {
+        candidate.accounts.push(StoredAccount {
             id: id.clone(),
             server_url: server_url.to_string(),
             username: username.to_string(),
@@ -252,65 +284,108 @@ pub fn upsert_and_activate(
             last_used: now,
         });
     }
-    guard.active = Some(id);
-    write_registry(&guard)?;
-    to_account(
-        guard
+    candidate.active = Some(id.clone());
+    let account = to_account(
+        candidate
             .accounts
             .iter()
-            .find(|account| account.id == account_id(server_url, username))
+            .find(|account| account.id == id)
             .ok_or_else(|| anyhow!("account was not stored"))?,
-    )
+    )?;
+    write_registry(&candidate)?;
+    *guard = candidate;
+    Ok(account)
 }
 
 /// Select an already-stored account, e.g. F2 offline login.
 pub fn activate_stored(server_url: &str, username: &str) -> Result<Account> {
     let id = account_id(server_url, username);
     let mut guard = registry().write().unwrap_or_else(|e| e.into_inner());
+    let mut candidate = guard.clone();
     let now = crate::consts::now_secs();
-    let stored = guard
+    let stored = candidate
         .accounts
         .iter_mut()
         .find(|account| account.id == id)
         .ok_or_else(|| anyhow!("no saved account for {username} @ {server_url}"))?;
     stored.last_used = now;
     let stored = stored.clone();
-    guard.active = Some(id);
+    candidate.active = Some(id);
     let account = to_account(&stored)?;
-    write_registry(&guard)?;
+    write_registry(&candidate)?;
+    *guard = candidate;
     Ok(account)
 }
 
-/// Remove the active account. `keep_data` leaves its data root on disk.
-/// Returns the next account to activate (or None when no accounts remain).
-pub fn remove_active(keep_data: bool) -> Result<Option<Account>> {
+fn is_removable_account_data_root(data_root: &Path, config_dir: &Path) -> bool {
+    let accounts_dir = config_dir.join("accounts");
+    data_root != config_dir
+        && data_root != accounts_dir
+        && data_root.starts_with(&accounts_dir)
+        && data_root
+            .components()
+            .all(|comp| !matches!(comp, std::path::Component::ParentDir))
+}
+
+/// What an account removal must clean up after the registry was updated.
+struct RemovedAccount {
+    next: Option<Account>,
+    data_root: PathBuf,
+    legacy_root: PathBuf,
+}
+
+/// Remove the active entry from the registry (sync part of
+/// [`remove_active`]): the registry lock is never held across an await point.
+fn unregister_active() -> Result<Option<RemovedAccount>> {
     let mut guard = registry().write().unwrap_or_else(|e| e.into_inner());
     let Some(active) = guard.active.clone() else {
         return Ok(None);
     };
-    let Some(index) = guard
+    let mut candidate = guard.clone();
+    let Some(index) = candidate
         .accounts
         .iter()
         .position(|account| account.id == active)
     else {
-        guard.active = None;
-        write_registry(&guard)?;
+        candidate.active = None;
+        write_registry(&candidate)?;
+        *guard = candidate;
         return Ok(None);
     };
-    let removed = guard.accounts.remove(index);
-    let legacy_root = crate::db::config_dir()?;
-    let data_root = resolve_data_root(&removed.data_root)?;
-    if !keep_data && data_root != legacy_root {
-        _ = std::fs::remove_dir_all(&data_root);
-    }
-    let next = guard
+    let removed = candidate.accounts.remove(index);
+    let next = candidate
         .accounts
         .iter()
         .max_by_key(|account| account.last_used)
         .cloned();
-    guard.active = next.as_ref().map(|account| account.id.clone());
-    write_registry(&guard)?;
-    next.as_ref().map(to_account).transpose()
+    candidate.active = next.as_ref().map(|account| account.id.clone());
+    let next_account = next.as_ref().map(to_account).transpose()?;
+    let legacy_root = crate::db::config_dir()?;
+    let data_root = resolve_data_root(&removed.data_root)?;
+    write_registry(&candidate)?;
+    *guard = candidate;
+    Ok(Some(RemovedAccount {
+        next: next_account,
+        data_root,
+        legacy_root,
+    }))
+}
+
+/// Remove the active account. `keep_data` leaves its data root on disk.
+/// Returns the next account to activate (or None when no accounts remain).
+///
+/// This is async because the data root may only be deleted after every SQLite
+/// pool of the outgoing account is closed: unlinking files under live handles
+/// races the pool teardown and can leave a half-removed directory (S-09).
+pub async fn remove_active(keep_data: bool) -> Result<Option<Account>> {
+    let Some(removed) = unregister_active()? else {
+        return Ok(None);
+    };
+    crate::app::close_dbs().await;
+    if !keep_data && is_removable_account_data_root(&removed.data_root, &removed.legacy_root) {
+        _ = std::fs::remove_dir_all(&removed.data_root);
+    }
+    Ok(removed.next)
 }
 
 /// First-run migration: import the legacy single-account credentials table.
@@ -320,9 +395,7 @@ pub async fn migrate_legacy(dbs: &Dbs) -> Result<()> {
     }
     let credentials = crate::sqlite::all_credentials(&dbs.credentials).await?;
     let mut guard = registry().write().unwrap_or_else(|e| e.into_inner());
-    guard.version = REGISTRY_VERSION;
-    guard.accounts.clear();
-    guard.active = None;
+    let mut candidate = Registry::versioned();
     let latest_id = credentials
         .iter()
         .max_by_key(|credential| credential.created_at)
@@ -330,7 +403,7 @@ pub async fn migrate_legacy(dbs: &Dbs) -> Result<()> {
     for credential in credentials {
         let id = account_id(&credential.server_url, &credential.username);
         let legacy = latest_id.as_deref() == Some(id.as_str());
-        guard.accounts.push(StoredAccount {
+        candidate.accounts.push(StoredAccount {
             id: id.clone(),
             server_url: credential.server_url,
             username: credential.username,
@@ -345,36 +418,16 @@ pub async fn migrate_legacy(dbs: &Dbs) -> Result<()> {
             last_used: credential.created_at,
         });
         if legacy {
-            guard.active = Some(id);
+            candidate.active = Some(id);
         }
     }
-    write_registry(&guard)?;
+    write_registry(&candidate)?;
+    *guard = candidate;
     Ok(())
-}
-
-pub fn active_credentials() -> Option<(String, String, String, String)> {
-    active_account().map(|account| {
-        (
-            account.server_url,
-            account.username,
-            account.password,
-            account.server_type,
-        )
-    })
 }
 
 pub fn ensure_data_root(account: &Account) -> Result<()> {
     crate::db::ensure_dir(&account.data_root)
-}
-
-pub fn credentials_from(account: &Account) -> Credentials {
-    Credentials {
-        username: account.username.clone(),
-        password: account.password.clone(),
-        server_url: account.server_url.clone(),
-        server_type: account.server_type.clone(),
-        created_at: 0,
-    }
 }
 
 #[cfg(test)]
@@ -402,5 +455,116 @@ mod tests {
         let name = "Road Trip";
         let id = account_id("http://one", name);
         assert_eq!(id, account_id("http://one", "Road Trip"));
+    }
+
+    #[test]
+    fn is_removable_account_data_root_confines_to_accounts_subdir() {
+        let cfg = Path::new("/tmp/musika-cfg");
+        assert!(is_removable_account_data_root(
+            &cfg.join("accounts").join("acc1"),
+            cfg
+        ));
+        assert!(!is_removable_account_data_root(cfg, cfg));
+        assert!(!is_removable_account_data_root(&cfg.join("accounts"), cfg));
+        assert!(!is_removable_account_data_root(
+            Path::new("/tmp/other"),
+            cfg
+        ));
+        assert!(!is_removable_account_data_root(
+            &cfg.join("accounts").join("..").join("other"),
+            cfg
+        ));
+    }
+
+    #[test]
+    fn corrupt_registry_marks_existed_and_is_not_overwritten_by_migrate_legacy() {
+        if std::env::var_os("MUSIKA_TEST_CORRUPT_REGISTRY_CHILD").is_some() {
+            assert!(
+                registry_existed(),
+                "corrupt accounts.json on disk must still record REGISTRY_EXISTED = true"
+            );
+            let path = registry_path().unwrap();
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                "{corrupt-json-do-not-overwrite"
+            );
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!("musika-corrupt-reg-{}", std::process::id()));
+        _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let reg_file = dir.join("accounts.json");
+        std::fs::write(&reg_file, b"{corrupt-json-do-not-overwrite").unwrap();
+
+        let exe = std::env::current_exe().unwrap();
+        let output = std::process::Command::new(&exe)
+            .env("MUSIKA_ACCOUNTS_FILE", &reg_file)
+            .env("MUSIKA_TEST_CORRUPT_REGISTRY_CHILD", "1")
+            .args([
+                "--exact",
+                "accounts::tests::corrupt_registry_marks_existed_and_is_not_overwritten_by_migrate_legacy",
+            ])
+            .output()
+            .unwrap();
+        _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            output.status.success(),
+            "corrupt registry child failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn registry_writes_0600_and_rolls_back_in_memory_on_disk_failure() {
+        if std::env::var_os("MUSIKA_TEST_REGISTRY_WRITE_CHILD").is_some() {
+            crate::crypto::use_test_key();
+            let reg_file = registry_path().unwrap();
+            let acc =
+                upsert_and_activate("https://music.example", "alice", "pw", "navidrome").unwrap();
+            assert_eq!(acc.username, "alice");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(&reg_file).unwrap().permissions().mode() & 0o777;
+                assert_eq!(mode, 0o600);
+            }
+
+            // Replace the registry path's temp target `.json.tmp` with a directory so
+            // the next `write_registry` fails; in-memory state must remain `alice`.
+            let tmp_dir = reg_file.with_extension("json.tmp");
+            std::fs::create_dir_all(&tmp_dir).unwrap();
+            assert!(
+                upsert_and_activate("https://music.example", "bob", "pw2", "navidrome").is_err()
+            );
+            assert_eq!(active_account().unwrap().username, "alice");
+            assert!(account_for("https://music.example", "bob").is_none());
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!("musika-reg-write-{}", std::process::id()));
+        _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let reg_file = dir.join("accounts.json");
+
+        let exe = std::env::current_exe().unwrap();
+        let output = std::process::Command::new(&exe)
+            .env("MUSIKA_ACCOUNTS_FILE", &reg_file)
+            .env("XDG_CONFIG_HOME", &dir)
+            .env("MUSIKA_TEST_REGISTRY_WRITE_CHILD", "1")
+            .args([
+                "--exact",
+                "accounts::tests::registry_writes_0600_and_rolls_back_in_memory_on_disk_failure",
+            ])
+            .output()
+            .unwrap();
+        _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            output.status.success(),
+            "registry write child failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

@@ -250,11 +250,7 @@ impl AppRoot {
                             .px_3()
                             .rounded_sm()
                             .cursor_pointer()
-                            .bg(if selected {
-                                rgb(palette::secondary_container())
-                            } else {
-                                gpui::rgba(hover_fill)
-                            })
+                            .bg(super::library::row_bg_color(selected, hover_fill))
                             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                                 target_row_hover_fill(
                                     &mut this.page_hover_fill,

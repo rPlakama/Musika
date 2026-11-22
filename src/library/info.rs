@@ -119,17 +119,41 @@ pub async fn artist_info(pool: &SqlitePool, artist_id: &str) -> Result<Option<Ar
 
 /// Drops cached biographies for artists the API just changed, so the next
 /// open refetches the description.
+///
+/// The row itself stays: `artist_info` also caches the provider's similar-
+/// artist graph, which artist metadata changes do not invalidate (N-06). The
+/// empty `fetched_at` marks the biography as "not cached" for the reader, so
+/// a page open refetches it while the radio graph survives.
 pub async fn invalidate_artist_info(pool: &SqlitePool, ids: &[String]) -> Result<()> {
-    crate::cache::delete_in(pool, "DELETE FROM artist_info WHERE artist_id IN (", ids).await
+    if ids.is_empty() {
+        return Ok(());
+    }
+    for chunk in ids.chunks(crate::cache::IN_BATCH) {
+        let mut builder = sqlx::QueryBuilder::new(
+            "UPDATE artist_info SET biography = '', url = '', fetched_at = ''
+             WHERE artist_id IN (",
+        );
+        crate::cache::push_in_list(&mut builder, chunk);
+        builder.build().execute(pool).await?;
+    }
+    Ok(())
 }
 
 /// Drops cached biographies fetched before the provider's last library
 /// update: the provider has newer metadata, so the old text must not win.
+///
+/// Biography-only, deliberately (N-06): [`upsert_artist_similar`] writes
+/// `fetched_at = ''` for graph-only rows, and a row-level delete here would
+/// wipe the similar-artist graph on the very next sync. The similarity graph
+/// has its own TTL (`similar_fetched_at`).
 pub async fn invalidate_artist_info_before(pool: &SqlitePool, before: i64) -> Result<u64> {
-    let result = sqlx::query("DELETE FROM artist_info WHERE CAST(fetched_at AS INTEGER) < ?1")
-        .bind(before)
-        .execute(pool)
-        .await?;
+    let result = sqlx::query(
+        "UPDATE artist_info SET biography = '', url = '', fetched_at = ''
+         WHERE fetched_at != '' AND CAST(fetched_at AS INTEGER) < ?1",
+    )
+    .bind(before)
+    .execute(pool)
+    .await?;
     Ok(result.rows_affected())
 }
 
@@ -179,7 +203,8 @@ pub async fn upsert_album_info(pool: &SqlitePool, album_id: &str, notes: &str) -
 /// PATH-8: drops cached descriptions for albums the API just changed, so the
 /// next open refetches the notes.
 pub async fn invalidate_album_info(pool: &SqlitePool, ids: &[String]) -> Result<()> {
-    crate::cache::delete_in(pool, "DELETE FROM album_info WHERE album_id IN (", ids).await
+    let mut conn = pool.acquire().await?;
+    crate::cache::delete_in(&mut conn, "DELETE FROM album_info WHERE album_id IN (", ids).await
 }
 
 /// Drops cached album notes fetched before the provider's last library

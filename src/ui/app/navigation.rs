@@ -463,21 +463,35 @@ impl AppRoot {
         self.retract_playback();
         self.status_focus = None;
         self.pending_page_reveal = None;
-        let profile = page_profile::PageProfile::for_descriptor(&descriptor);
-        if profile.notes {
-            if descriptor.kind == PageKind::Artist {
-                self.bridge.request_artist_notes(descriptor.id.clone());
-            } else {
-                self.bridge.request_notes(descriptor.id.clone());
-            }
-        }
+        self.request_page_notes(&descriptor);
         self.remember_current();
         self.hovered_page = None;
         self.travel.open(descriptor.clone());
         self.page = Some(PageState::new(descriptor.clone()));
-        self.page_generation = self.page_generation.wrapping_add(1);
+        // `page_generation` is the highest accepted reply token, assigned by
+        // the bridge per request. Never reset it on navigation: the bridge
+        // counter is monotonic, so keeping the last accepted value lets a
+        // delayed reply for an earlier request (same descriptor reopened
+        // before the first answer landed) be rejected as stale. Resetting it
+        // to 0 made every such reply look current.
         self.bridge.load_page(descriptor);
         self.follow_page(false);
+    }
+
+    /// Requests the description notes for a page whose profile carries them.
+    /// `back_page`/`step_travel` open a page exactly like `open_descriptor`
+    /// does, so they must ask too; the bridge serves its cache first and only
+    /// then hits the server, so repeated visits stay cheap.
+    fn request_page_notes(&self, descriptor: &PageDescriptor) {
+        let profile = page_profile::PageProfile::for_descriptor(descriptor);
+        if !profile.notes {
+            return;
+        }
+        if descriptor.kind == PageKind::Artist {
+            self.bridge.request_artist_notes(descriptor.id.clone());
+        } else {
+            self.bridge.request_notes(descriptor.id.clone());
+        }
     }
 
     pub(in crate::ui) fn open_descriptor_reveal(
@@ -497,12 +511,15 @@ impl AppRoot {
             Some(descriptor) => {
                 self.hovered_page = None;
                 self.page = Some(PageState::new(descriptor.clone()));
-                self.page_generation = self.page_generation.wrapping_add(1);
+                self.request_page_notes(&descriptor);
                 self.bridge.load_page(descriptor);
                 self.follow_page(false);
             }
             None => {
                 self.page = None;
+                // Keep `page_generation` monotonic (see `open_descriptor`): a
+                // late reply for the page just left matches no open page now,
+                // but must not be accepted after the next page opens.
                 // Arriving Home ends the travel session; a later page must not
                 // inherit places from before the trip to Home.
                 self.travel.clear();
@@ -520,7 +537,7 @@ impl AppRoot {
         if let Some(descriptor) = self.travel.step(delta) {
             self.retract_playback();
             self.page = Some(PageState::new(descriptor.clone()));
-            self.page_generation = self.page_generation.wrapping_add(1);
+            self.request_page_notes(&descriptor);
             self.bridge.load_page(descriptor);
             self.follow_page(false);
         }
@@ -571,7 +588,6 @@ impl AppRoot {
         let action = profile.row_action(row);
         let index = page.list.cursor;
         let descriptor = page.descriptor.clone();
-        let song_id = row.song_id.clone();
         let album_id = row.album_id.clone();
         match action {
             page_profile::PageAction::OpenAlbum => {
@@ -583,13 +599,6 @@ impl AppRoot {
                 if let Some(page) = self.page.as_ref() {
                     self.bridge
                         .play_album(page.descriptor.id.clone(), page.list.cursor);
-                }
-            }
-            page_profile::PageAction::PlayArtist => {
-                if !song_id.is_empty() {
-                    self.last_play = Some((song_id.clone(), self.view.order_label().to_string()));
-                    self.bridge
-                        .play_song(song_id, self.view.order_label().to_string());
                 }
             }
             page_profile::PageAction::PlayPlaylist => {
@@ -676,10 +685,14 @@ mod tests {
     }
 
     fn scales() -> HashMap<(LineSurface, usize, usize), RowEmphasis> {
-        [(LineSurface::Page, 1), (LineSurface::Page, 2), (LineSurface::Library, 0)]
-            .into_iter()
-            .map(|(surface, scope)| ((surface, scope, 0), RowEmphasis::new(false)))
-            .collect()
+        [
+            (LineSurface::Page, 1),
+            (LineSurface::Page, 2),
+            (LineSurface::Library, 0),
+        ]
+        .into_iter()
+        .map(|(surface, scope)| ((surface, scope, 0), RowEmphasis::new(false)))
+        .collect()
     }
 
     #[test]
@@ -695,7 +708,10 @@ mod tests {
             !needs_page_prune(Some((3, false)), 3, false),
             "same home state is a no-op"
         );
-        assert!(needs_page_prune(Some((3, false)), 0, false), "account reset");
+        assert!(
+            needs_page_prune(Some((3, false)), 0, false),
+            "account reset"
+        );
     }
 
     #[test]
@@ -733,7 +749,10 @@ mod tests {
         let window = [("s1", "a1"), ("s2", "a2")];
         let scrolled = [("s2", "a2"), ("s3", "a3")];
         let base = marks_signature(0, Some(("p1", "pa")), rows(&window));
-        assert_ne!(base, marks_signature(0, Some(("p1", "pa")), rows(&scrolled)));
+        assert_ne!(
+            base,
+            marks_signature(0, Some(("p1", "pa")), rows(&scrolled))
+        );
         assert_ne!(base, marks_signature(0, Some(("p2", "pa")), rows(&window)));
         assert_ne!(base, marks_signature(0, None, rows(&window)));
         assert_ne!(base, marks_signature(1, Some(("p1", "pa")), rows(&window)));

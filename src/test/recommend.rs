@@ -25,9 +25,21 @@ async fn fixture() -> Dbs {
     for (id, artist, name, year, genre) in [
         ("al1", "ar1", "Heroes", 1977, Some("Rock")),
         ("al2", "ar1", "Low", 1977, Some("Rock")),
-        ("al3", "ar2", "The Dark Side of the Moon", 1973, Some("Rock")),
+        (
+            "al3",
+            "ar2",
+            "The Dark Side of the Moon",
+            1973,
+            Some("Rock"),
+        ),
         ("al4", "ar2", "The Wall", 1979, Some("Rock")),
-        ("al5", "ar3", "In the Court of the Crimson King", 1969, Some("Rock")),
+        (
+            "al5",
+            "ar3",
+            "In the Court of the Crimson King",
+            1969,
+            Some("Rock"),
+        ),
         ("al6", "ar4", "Nevermind", 1991, Some("Alternative Rock")),
         ("al7", "ar5", "Clube da Esquina", 1972, Some("MPB")),
         ("al8", "ar6", "One Song", 1977, Some("Rock")),
@@ -51,9 +63,33 @@ async fn fixture() -> Dbs {
         ("s1b", "al2", "ar1", "Speed of Life", 1977, Some("Rock"), 2),
         ("s2", "al3", "ar2", "Time", 1973, Some("Rock"), 5),
         ("s3", "al3", "ar2", "Money", 1973, Some("Rock"), 8),
-        ("s4", "al4", "ar2", "Another Brick in the Wall", 1979, Some("Rock"), 9),
-        ("s5", "al5", "ar3", "21st Century Schizoid Man", 1969, Some("Rock"), 4),
-        ("s6", "al6", "ar4", "Smells Like Teen Spirit", 1991, Some("Alternative Rock"), 7),
+        (
+            "s4",
+            "al4",
+            "ar2",
+            "Another Brick in the Wall",
+            1979,
+            Some("Rock"),
+            9,
+        ),
+        (
+            "s5",
+            "al5",
+            "ar3",
+            "21st Century Schizoid Man",
+            1969,
+            Some("Rock"),
+            4,
+        ),
+        (
+            "s6",
+            "al6",
+            "ar4",
+            "Smells Like Teen Spirit",
+            1991,
+            Some("Alternative Rock"),
+            7,
+        ),
         ("s7", "al7", "ar5", "Travessia", 1972, Some("MPB"), 3),
         ("s7b", "al7", "ar5", "Nuvem Cigana", 1972, Some("MPB"), 2),
         ("s8", "al8", "ar6", "Only Hit", 1977, Some("Rock"), 1),
@@ -149,7 +185,10 @@ async fn expansion_is_deterministic_and_excludes_seed_album() {
     let ids: Vec<&str> = first.iter().map(|song| song.id.as_str()).collect();
     let again: Vec<&str> = second.iter().map(|song| song.id.as_str()).collect();
     assert_eq!(ids, again, "a fixed RNG seed must be reproducible");
-    assert!(!ids.contains(&"s1"), "the seed song is never in its own radio");
+    assert!(
+        !ids.contains(&"s1"),
+        "the seed song is never in its own radio"
+    );
     assert!(
         first
             .iter()
@@ -193,8 +232,7 @@ async fn offline_expansion_only_returns_downloaded_songs() {
     let allowed: HashSet<&str> = ["s2", "s3", "s6"].into_iter().collect();
     assert!(!rows.is_empty());
     assert!(
-        rows.iter()
-            .all(|song| allowed.contains(song.id.as_str())),
+        rows.iter().all(|song| allowed.contains(song.id.as_str())),
         "offline radio must only offer downloaded songs: {:?}",
         rows.iter().map(|song| &song.id).collect::<Vec<_>>()
     );

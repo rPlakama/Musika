@@ -16,7 +16,7 @@
 
 //! Library sync writes: the whole-table replace and the index mirror.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
 use futures_util::TryStreamExt;
@@ -238,11 +238,23 @@ pub async fn last_modified(pool: &SqlitePool) -> Result<i64> {
 }
 
 /// Snapshot shown by the right status bar.
+///
+/// N-16: the sync calls this after every pass, including shallow no-ops. The
+/// library revision recorded by [`apply`] lets an unchanged library skip the
+/// full-table read and the file rewrite; the file must still exist, so a
+/// deleted mirror is recreated on the next sync.
 pub async fn write_mirror(pool: &SqlitePool) -> Result<()> {
     use std::fmt::Write as _;
     use tokio::io::AsyncWriteExt as _;
 
     let path = crate::db::mirror_path()?;
+    let revision = library_revision(pool).await?;
+    if let Some(revision) = revision
+        && meta_revision(pool, "mirror_rev").await? == Some(revision)
+        && tokio::fs::try_exists(&path).await.unwrap_or(false)
+    {
+        return Ok(());
+    }
     crate::db::ensure_parent_dir(&path)?;
     let file = tokio::fs::File::create(&path)
         .await
@@ -277,6 +289,9 @@ pub async fn write_mirror(pool: &SqlitePool) -> Result<()> {
         .flush()
         .await
         .with_context(|| format!("failed to flush {}", path.display()))?;
+    if let Some(revision) = revision {
+        upsert_meta(pool, "mirror_rev", &revision.to_string()).await?;
+    }
     Ok(())
 }
 
@@ -293,6 +308,50 @@ where
     .execute(executor)
     .await?;
     Ok(())
+}
+
+/// Reads one integer-valued `meta` row; malformed values count as absent.
+async fn meta_revision(pool: &SqlitePool, key: &str) -> Result<Option<i64>> {
+    let value: Option<String> = sqlx::query_scalar("SELECT value FROM meta WHERE key = ?1")
+        .bind(key)
+        .fetch_optional(pool)
+        .await?;
+    Ok(value.and_then(|value| value.trim().parse().ok()))
+}
+
+/// Current library revision (`meta.library_rev`): a monotonic counter bumped
+/// by every sync pass that actually wrote the catalog. The derived caches (the
+/// FTS table, the `index.txt` mirror, the in-memory search catalog) record the
+/// revision they were built from and skip an unchanged rebuild (N-16).
+pub async fn library_revision(pool: &SqlitePool) -> Result<Option<i64>> {
+    meta_revision(pool, "library_rev").await
+}
+
+/// Seeds [`library_revision`] on a pre-revision database. Without this, a
+/// no-op sync would leave the revision unknown (`None`) forever and the
+/// derived caches could never start short-circuiting on an upgraded library.
+async fn ensure_library_revision(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Result<()> {
+    let current: Option<String> =
+        sqlx::query_scalar("SELECT value FROM meta WHERE key = 'library_rev'")
+            .fetch_optional(&mut **tx)
+            .await?;
+    if current.is_none() {
+        upsert_meta(&mut **tx, "library_rev", "1").await?;
+    }
+    Ok(())
+}
+
+/// Bumps [`library_revision`] inside the sync transaction.
+async fn bump_library_revision(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Result<()> {
+    let current: Option<String> =
+        sqlx::query_scalar("SELECT value FROM meta WHERE key = 'library_rev'")
+            .fetch_optional(&mut **tx)
+            .await?;
+    let next = current
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .unwrap_or(0)
+        .saturating_add(1);
+    upsert_meta(&mut **tx, "library_rev", &next.to_string()).await
 }
 
 /// A compact pre-fetch view of one album row, used to decide whether its
@@ -379,6 +438,13 @@ pub async fn full_sync_due(pool: &SqlitePool) -> bool {
 /// a stale/partial upstream index can never delete the rest of the library.
 /// The full manifest must already be checked by the caller; empty IDs are
 /// filtered here for servers that emit malformed rows.
+///
+/// N-16: this is a real fast path. It hashes only the songs of the albums it
+/// re-fetched (a shallow no-op fetches none, so the full `songs` scan is
+/// skipped), stages only the temp tables the deletes below use, rewrites only
+/// rows that actually changed, and bumps [`library_revision`] only when the
+/// catalog changed — which is what lets the post-sync FTS/catalog rebuilds and
+/// the mirror rewrite short-circuit.
 pub async fn apply(
     pool: &SqlitePool,
     artists: &[ArtistID3],
@@ -389,7 +455,10 @@ pub async fn apply(
 ) -> Result<SyncChanges> {
     let artists: Vec<&ArtistID3> = artists.iter().filter(|a| !a.id.is_empty()).collect();
     let albums: Vec<&AlbumID3> = albums.iter().filter(|a| !a.id.is_empty()).collect();
-    let album_ids: Vec<&str> = albums.iter().map(|a| a.id.as_str()).collect();
+    // N-16: membership used to be an O(albums) `Vec::contains` for every
+    // fetched song and every fetched-songs key; a hash set keeps the whole
+    // pass linear in its input sizes.
+    let album_ids: HashSet<&str> = albums.iter().map(|album| album.id.as_str()).collect();
 
     let mut tx = pool.begin().await?;
     let mut removed = 0usize;
@@ -407,6 +476,20 @@ pub async fn apply(
             old_albums.insert(album.id.clone(), (snapshot_hash(&album), album.cover_art));
         }
     }
+    // The snapshot hash deliberately omits server-owned fields that a sync
+    // still rewrites (`starred`/`rating` on albums, `starred` on artists), so
+    // the no-op fast path below compares them separately.
+    let mut old_album_flags: HashMap<String, (Option<String>, i64)> = HashMap::new();
+    {
+        let rows: Vec<(String, Option<String>, i64)> =
+            sqlx::query_as("SELECT id, starred, rating FROM albums")
+                .fetch_all(&mut *tx)
+                .await?;
+        old_album_flags.extend(
+            rows.into_iter()
+                .map(|(id, starred, rating)| (id, (starred, rating))),
+        );
+    }
     let mut old_artists: HashMap<String, u64> = HashMap::new();
     {
         let mut rows = sqlx::query_as::<_, ArtistSnapshot>(
@@ -417,15 +500,31 @@ pub async fn apply(
             old_artists.insert(artist.id.clone(), snapshot_hash(&artist));
         }
     }
-    // Compact id -> hash; only songs the caller will write are diffed.
-    let mut old_songs: HashMap<String, u64> = HashMap::new();
+    let mut old_artist_starred: HashMap<String, Option<String>> = HashMap::new();
     {
-        let mut rows = sqlx::query_as::<_, SongSnapshot>(
+        let rows: Vec<(String, Option<String>)> = sqlx::query_as("SELECT id, starred FROM artists")
+            .fetch_all(&mut *tx)
+            .await?;
+        old_artist_starred.extend(rows);
+    }
+
+    // N-16: diff only the songs of the albums this pass re-fetched. A shallow
+    // sync that fetched no album cannot touch the songs table at all, so its
+    // full-table scan is skipped entirely.
+    let fetched_album_ids: Vec<&str> = fetched_songs
+        .keys()
+        .filter(|album_id| album_ids.contains(album_id.as_str()))
+        .map(String::as_str)
+        .collect();
+    let mut old_songs: HashMap<String, u64> = HashMap::new();
+    for chunk in fetched_album_ids.chunks(crate::cache::IN_BATCH) {
+        let mut builder = sqlx::QueryBuilder::new(
             "SELECT id, album_id, artist_id, title, album, artist, track, disc_number, year,
                     genre, duration, bit_rate, suffix, size, path, cover_art, created
-             FROM songs",
-        )
-        .fetch(&mut *tx);
+             FROM songs WHERE album_id IN (",
+        );
+        crate::cache::push_in_list(&mut builder, chunk);
+        let mut rows = builder.build_query_as::<SongSnapshot>().fetch(&mut *tx);
         while let Some(song) = rows.try_next().await? {
             old_songs.insert(song.id.clone(), snapshot_hash(&song));
         }
@@ -433,12 +532,15 @@ pub async fn apply(
 
     let mut changes = SyncChanges::default();
     let mut write_songs: Vec<&Child> = Vec::new();
+    // One song can be listed under two albums (N-06). The id is what matters
+    // for the diff/keep-set, so keep the first listing and skip the repeat.
+    let mut written_ids: HashSet<&str> = HashSet::with_capacity(fetched_songs.len());
     for (album_id, songs) in fetched_songs {
-        if !album_ids.contains(&album_id.as_str()) {
+        if !album_ids.contains(album_id.as_str()) {
             continue;
         }
         for song in songs {
-            if song.id.is_empty() {
+            if song.id.is_empty() || !written_ids.insert(song.id.as_str()) {
                 continue;
             }
             write_songs.push(song);
@@ -450,39 +552,83 @@ pub async fn apply(
             }
         }
     }
+    let mut write_albums: Vec<&AlbumID3> = Vec::new();
     for album in &albums {
         let seen = old_albums.get(&album.id);
-        if seen.is_some_and(|(hash, _)| *hash == album_hash(album)) {
+        if seen.is_none_or(|(hash, _)| *hash != album_hash(album)) {
+            write_albums.push(*album);
+            changes.albums.push(album.id.clone());
+            let cover_changed = seen.is_none_or(|(_, cover)| cover != &album.cover_art);
+            if cover_changed
+                && let Some(cover) = album.cover_art.clone().filter(|cover| !cover.is_empty())
+            {
+                changes.covers.push(cover);
+            }
             continue;
         }
-        changes.albums.push(album.id.clone());
-        let cover_changed = seen.is_none_or(|(_, cover)| cover != &album.cover_art);
-        if cover_changed
-            && let Some(cover) = album.cover_art.clone().filter(|cover| !cover.is_empty())
-        {
-            changes.covers.push(cover);
+        // Metadata is unchanged; the row is still rewritten when a server-
+        // owned field the hash omits changed (album rating/favourite).
+        let rating = i64::from(album.user_rating.unwrap_or(0).clamp(0, 5));
+        let flags_changed = old_album_flags
+            .get(&album.id)
+            .is_none_or(|(starred, old_rating)| starred != &album.starred || *old_rating != rating);
+        if flags_changed {
+            write_albums.push(*album);
         }
     }
+    let mut write_artists: Vec<&ArtistID3> = Vec::new();
     for artist in &artists {
-        if old_artists
+        let metadata_changed = old_artists
             .get(&artist.id)
-            .is_none_or(|old| *old != artist_hash(artist))
-        {
+            .is_none_or(|old| *old != artist_hash(artist));
+        if metadata_changed {
+            write_artists.push(*artist);
             changes.artists.push(artist.id.clone());
+            continue;
+        }
+        // Same rule as albums: the artist favourite timestamp is not part of
+        // the snapshot hash but a sync must still import a server-side star.
+        let star_changed = old_artist_starred
+            .get(&artist.id)
+            .is_none_or(|starred| starred != &artist.starred);
+        if star_changed {
+            write_artists.push(*artist);
         }
     }
     drop(old_songs);
     drop(old_albums);
+    drop(old_album_flags);
     drop(old_artists);
+    drop(old_artist_starred);
 
-    // Stage the full new id sets in TEMP tables; the deletes below are
+    // N-16 fast path: a shallow pass that re-fetched no album and found no row
+    // to write cannot delete or rewrite anything (shallow deletes live only
+    // inside re-fetched albums). Skip the temp-table staging, the catalogue
+    // rewrites and the revision bump; only the sync bookkeeping advances, so
+    // the post-sync derived-cache rebuilds can short-circuit too.
+    if !deep && fetched_album_ids.is_empty() && write_albums.is_empty() && write_artists.is_empty()
+    {
+        upsert_meta(&mut *tx, "last_modified", &last_modified.to_string()).await?;
+        upsert_meta(
+            &mut *tx,
+            "last_sync",
+            &crate::consts::now_secs().to_string(),
+        )
+        .await?;
+        ensure_library_revision(&mut tx).await?;
+        tx.commit().await?;
+        return Ok(changes);
+    }
+
+    // Stage the id sets the deletes below need in TEMP tables; the deletes are
     // set-difference based, so a partial fetch can never erase the catalog.
-    for table in [
-        "_sync_new_artists",
-        "_sync_new_albums",
-        "_sync_fetched_albums",
-        "_sync_new_songs",
-    ] {
+    // `_sync_new_artists`/`_sync_new_albums` only drive the deep prune, so a
+    // shallow pass does not pay for them.
+    let mut staged: Vec<&'static str> = vec!["_sync_fetched_albums", "_sync_new_songs"];
+    if deep {
+        staged.extend(["_sync_new_artists", "_sync_new_albums"]);
+    }
+    for table in staged {
         sqlx::query(AssertSqlSafe(format!(
             "CREATE TEMP TABLE IF NOT EXISTS {table} (id TEXT PRIMARY KEY)"
         )))
@@ -492,36 +638,41 @@ pub async fn apply(
             .execute(&mut *tx)
             .await?;
     }
-    crate::cache::insert_many(
-        &mut tx,
-        "INSERT INTO _sync_new_artists (id) ",
-        &artists,
-        |mut row, artist| {
-            row.push_bind(&artist.id);
-        },
-    )
-    .await?;
-    crate::cache::insert_many(
-        &mut tx,
-        "INSERT INTO _sync_new_albums (id) ",
-        &albums,
-        |mut row, album| {
-            row.push_bind(&album.id);
-        },
-    )
-    .await?;
-    for album_id in fetched_songs.keys() {
-        if !album_ids.contains(&album_id.as_str()) {
-            continue;
-        }
-        sqlx::query("INSERT OR REPLACE INTO _sync_fetched_albums (id) VALUES (?1)")
-            .bind(album_id)
-            .execute(&mut *tx)
-            .await?;
+    if deep {
+        crate::cache::insert_many(
+            &mut tx,
+            "INSERT OR IGNORE INTO _sync_new_artists (id) ",
+            &artists,
+            |mut row, artist| {
+                row.push_bind(&artist.id);
+            },
+        )
+        .await?;
+        crate::cache::insert_many(
+            &mut tx,
+            "INSERT OR IGNORE INTO _sync_new_albums (id) ",
+            &albums,
+            |mut row, album| {
+                row.push_bind(&album.id);
+            },
+        )
+        .await?;
     }
     crate::cache::insert_many(
         &mut tx,
-        "INSERT INTO _sync_new_songs (id) ",
+        "INSERT OR IGNORE INTO _sync_fetched_albums (id) ",
+        &fetched_album_ids,
+        |mut row, album_id| {
+            row.push_bind(*album_id);
+        },
+    )
+    .await?;
+    // N-06: one song can be listed under two albums; the id is the temp
+    // table's primary key, so a plain INSERT aborted the whole sync with a
+    // UNIQUE violation. The row is only a keep-set marker, so ignore repeats.
+    crate::cache::insert_many(
+        &mut tx,
+        "INSERT OR IGNORE INTO _sync_new_songs (id) ",
         &write_songs,
         |mut row, song| {
             row.push_bind(&song.id);
@@ -529,11 +680,12 @@ pub async fn apply(
     )
     .await?;
 
-    // Artists/albums: replace authoritative metadata, then drop the vanished.
+    // Artists/albums: replace the authoritative metadata of the rows that
+    // changed, then drop the vanished ones on a deep pass.
     crate::cache::insert_many(
         &mut tx,
         "INSERT OR REPLACE INTO artists (id, name, album_count, cover_art, image_url, starred) ",
-        &artists,
+        &write_artists,
         |mut row, artist| {
             row.push_bind(&artist.id)
                 .push_bind(&artist.name)
@@ -557,7 +709,7 @@ pub async fn apply(
         "INSERT OR REPLACE INTO albums
              (id, artist_id, name, artist, year, genre, song_count, duration, cover_art, starred,
               rating, created) ",
-        &albums,
+        &write_albums,
         |mut row, album| {
             row.push_bind(&album.id)
                 .push_bind(&album.artist_id)
@@ -631,6 +783,16 @@ pub async fn apply(
         .execute(&mut *tx)
         .await?
         .rows_affected() as usize;
+    }
+
+    // N-16: only a pass that actually changed rows advances the revision the
+    // derived caches (FTS table, in-memory catalog, index.txt mirror) watch.
+    if !write_albums.is_empty()
+        || !write_artists.is_empty()
+        || !write_songs.is_empty()
+        || removed > 0
+    {
+        bump_library_revision(&mut tx).await?;
     }
 
     upsert_meta(&mut *tx, "last_modified", &last_modified.to_string()).await?;

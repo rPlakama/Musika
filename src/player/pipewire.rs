@@ -4,6 +4,7 @@
 //! code left in this path is the external system `libpipewire`/`libav*` code
 //! reached through the `pipewire` and `ffmpeg-next` bindings.
 
+#[cfg(feature = "alsa-backend")]
 mod alsa;
 mod decode;
 mod devices;

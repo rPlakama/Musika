@@ -27,16 +27,3 @@ pub(crate) mod search;
 pub use search::search;
 #[cfg(test)]
 pub(crate) use search::{merge_hits, search_results_index};
-
-pub async fn album_notes(dbs: &crate::db::Dbs, album_id: &str) -> String {
-    let Ok(client) = crate::session::client(dbs).await else {
-        return String::new();
-    };
-    match client.get_album_info2(album_id).await {
-        Ok(info) => info.notes.unwrap_or_default(),
-        Err(err) => {
-            eprintln!("album: could not fetch info for {album_id}: {err:#}");
-            String::new()
-        }
-    }
-}

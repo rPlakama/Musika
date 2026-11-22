@@ -10,12 +10,17 @@ use gpui::{UniformListScrollHandle, point, px};
 
 use crate::ui::metrics;
 
+/// How many nominal rows a *single-row* list may grow into when it fills the
+/// free space below its last row. Without the cap a one-track page/list
+/// stretched its lone row (and the 0.78× cover drawn inside it) to the whole
+/// viewport height.
+const SINGLE_ROW_MAX_NOMINAL_ROWS: f32 = 4.0;
+
 #[derive(Debug, Clone, Copy)]
 pub struct ScrollProfile {
     pub row_ratio: f32,
     pub nominal_row_h: f32,
     pub min_row_h: f32,
-    pub overscan_rows: usize,
     pub follow_ms: f32,
     /// Whether the row height adapts to the measured viewport. Fixed-height
     /// surfaces (search) keep the nominal stride.
@@ -26,7 +31,6 @@ pub const LIBRARY: ScrollProfile = ScrollProfile {
     row_ratio: 0.105,
     nominal_row_h: 58.0,
     min_row_h: metrics::MIN_ROW_HEIGHT,
-    overscan_rows: 10,
     follow_ms: 300.0,
     adaptive: true,
 };
@@ -34,7 +38,6 @@ pub const ALBUM: ScrollProfile = ScrollProfile {
     row_ratio: 0.06,
     nominal_row_h: 36.0,
     min_row_h: metrics::MIN_ROW_HEIGHT,
-    overscan_rows: 10,
     follow_ms: 300.0,
     adaptive: true,
 };
@@ -45,7 +48,6 @@ pub const SEARCH: ScrollProfile = ScrollProfile {
     row_ratio: 0.12,
     nominal_row_h: 56.0,
     min_row_h: metrics::MIN_ROW_HEIGHT,
-    overscan_rows: 10,
     follow_ms: 300.0,
     adaptive: false,
 };
@@ -53,7 +55,6 @@ pub const QUEUE: ScrollProfile = ScrollProfile {
     row_ratio: 0.10,
     nominal_row_h: 56.0,
     min_row_h: metrics::MIN_ROW_HEIGHT,
-    overscan_rows: 10,
     follow_ms: 300.0,
     adaptive: true,
 };
@@ -222,6 +223,10 @@ impl ScrollModal {
 
     /// Capture the first stable viewport once, then use the legacy UI profile ratio.
     /// Returns true when the row height changed.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn ensure_metrics(&mut self, viewport: f32) -> bool {
         self.ensure_metrics_ref(viewport)
     }
@@ -245,7 +250,15 @@ impl ScrollModal {
             // Reserve a little vertical padding so a filled list does not
             // immediately overflow its own scroll surface.
             let usable = (self.viewport_height() - 24.0).max(1.0);
-            base.max(usable / count as f32).ceil()
+            let filled = base.max(usable / count as f32).ceil();
+            if count == 1 {
+                // One row must not become a full-window cover: cap the fill at
+                // four nominal rows, but never below the adaptive base (which
+                // already accounts for very tall windows).
+                filled.min((self.profile.nominal_row_h * SINGLE_ROW_MAX_NOMINAL_ROWS).max(base))
+            } else {
+                filled
+            }
         } else {
             base
         };
@@ -264,6 +277,10 @@ impl ScrollModal {
         self.row_h = self.profile.nominal_row_h;
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn ensure_metrics_ref(&mut self, reference: f32) -> bool {
         self.ensure_metrics_for_rows(reference, 0)
     }
@@ -350,7 +367,6 @@ mod tests {
             row_ratio: 0.001,
             nominal_row_h: 1.0,
             min_row_h: metrics::MIN_ROW_HEIGHT,
-            overscan_rows: 1,
             follow_ms: 0.0,
             adaptive: true,
         };
@@ -379,9 +395,11 @@ mod tests {
         library.ensure_metrics_for_rows(800.0, 3);
         assert_eq!(library.row_h, ((600.0_f32 - 24.0) / 3.0).ceil());
 
+        // A one-row list is capped at four nominal rows instead of growing
+        // into a full-viewport cover.
         let mut queue = ScrollModal::new(QUEUE);
         queue.ensure_metrics_for_rows(800.0, 1);
-        assert_eq!(queue.row_h, 600.0 - 24.0);
+        assert_eq!(queue.row_h, QUEUE.nominal_row_h * 4.0);
     }
 
     #[test]

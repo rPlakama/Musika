@@ -19,15 +19,13 @@
 //!
 //! `MUSIKA_STARTUP_TRACE=1` prints one mark per startup phase to stderr;
 //! when it is unset the environment is read once and every later mark is a
-//! cached boolean check. `MUSIKA_STARTUP_EXIT=1` closes the window after the
-//! first rendered frame so the whole startup can be benchmarked.
+//! cached boolean check.
 
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 static PROCESS_START: OnceLock<Instant> = OnceLock::new();
 static TRACE: OnceLock<bool> = OnceLock::new();
-static EXIT_AFTER_READY: OnceLock<bool> = OnceLock::new();
 
 /// Starts the process-wide clock. Call once, after the `--version` probe.
 pub(crate) fn start() {
@@ -51,11 +49,6 @@ pub(crate) fn trace_elapsed(label: &str, elapsed: Duration) {
 
 fn trace_enabled() -> bool {
     *TRACE.get_or_init(|| env_flag("MUSIKA_STARTUP_TRACE"))
-}
-
-/// Whether the benchmark mode should quit after the first frame.
-pub(crate) fn exit_after_ready() -> bool {
-    *EXIT_AFTER_READY.get_or_init(|| env_flag("MUSIKA_STARTUP_EXIT"))
 }
 
 fn env_flag(name: &str) -> bool {

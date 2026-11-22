@@ -23,6 +23,25 @@ fn temp_dir(name: &str) -> PathBuf {
     dir
 }
 
+/// A `Dbs` whose media/download/covers side lives on the media pool and the
+/// library side on the library pool (the production split, see `db::init`).
+fn test_dbs(media: SqlitePool, library: SqlitePool) -> crate::db::Dbs {
+    crate::db::Dbs {
+        credentials: library.clone(),
+        library: library.clone(),
+        sync: library.clone(),
+        search: library.clone(),
+        covers: media.clone(),
+        lyrics: media.clone(),
+        colors: library.clone(),
+        status: library.clone(),
+        artist_user: library.clone(),
+        media: media.clone(),
+        download: media,
+        playlist: library,
+    }
+}
+
 /// The streamed-download adoption: the `.part` file is renamed into the
 /// tier, its size recorded from the stream (not from a buffer) and a
 /// failed adopt leaves no ledger row behind.
@@ -164,20 +183,7 @@ async fn purge_drops_vanished_songs_and_rule_orphans() {
         .unwrap();
     }
 
-    let dbs = crate::db::Dbs {
-        credentials: library.clone(),
-        library: library.clone(),
-        sync: library.clone(),
-        search: library.clone(),
-        covers: library.clone(),
-        lyrics: library.clone(),
-        colors: library.clone(),
-        status: library.clone(),
-        artist_user: library.clone(),
-        media: media.clone(),
-        download: library.clone(),
-        playlist: library.clone(),
-    };
+    let dbs = test_dbs(media.clone(), library.clone());
     assert_eq!(purge(&dbs).await.unwrap(), 2);
 
     let left: Vec<String> = sqlx::query_scalar("SELECT song_id FROM media ORDER BY song_id")
@@ -365,20 +371,14 @@ async fn prune_uncovered_drops_scope_mismatches_only() {
         .unwrap();
     }
 
-    let dbs = crate::db::Dbs {
-        credentials: library.clone(),
-        library: library.clone(),
-        sync: library.clone(),
-        search: library.clone(),
-        covers: library.clone(),
-        lyrics: library.clone(),
-        colors: library.clone(),
-        status: library.clone(),
-        artist_user: library.clone(),
-        media: media.clone(),
-        download: library.clone(),
-        playlist: library.clone(),
-    };
+    // N-05: the ledger rows of the pruned songs must follow their blobs.
+    for song in ["s1", "s2", "s4"] {
+        crate::download::set_state(&media, song, crate::download::DONE, None)
+            .await
+            .unwrap();
+    }
+
+    let dbs = test_dbs(media.clone(), library.clone());
     assert_eq!(prune_uncovered(&dbs).await.unwrap(), 1);
 
     let mut left: Vec<String> = sqlx::query_scalar("SELECT song_id FROM media")
@@ -387,6 +387,17 @@ async fn prune_uncovered_drops_scope_mismatches_only() {
         .unwrap();
     left.sort();
     assert_eq!(left, vec!["s1", "s3", "s4"]);
+
+    let mut ledger: Vec<String> =
+        sqlx::query_scalar("SELECT song_id FROM download ORDER BY song_id")
+            .fetch_all(&media)
+            .await
+            .unwrap();
+    ledger.sort();
+    assert!(
+        !ledger.contains(&"s2".to_string()),
+        "a pruned download must leave the offline ledger: {ledger:?}"
+    );
 }
 
 #[tokio::test]
@@ -397,9 +408,18 @@ async fn playback_cache_cap_evicts_only_playback_rows() {
         ("new", KIND_PLAYBACK, 10, 3),
         ("download", KIND_PERMANENT, 100, 2),
     ] {
-        record(&pool, song, kind, &format!("{song}.mp3"), size, "original", "fp", None)
-            .await
-            .unwrap();
+        record(
+            &pool,
+            song,
+            kind,
+            &format!("{song}.mp3"),
+            size,
+            "original",
+            "fp",
+            None,
+        )
+        .await
+        .unwrap();
         sqlx::query("UPDATE media SET last_used = ?2 WHERE song_id = ?1")
             .bind(song)
             .bind(used)
@@ -422,4 +442,169 @@ async fn playback_cache_cap_evicts_only_playback_rows() {
             ("new".to_string(), KIND_PLAYBACK.to_string()),
         ]
     );
+}
+
+/// N-09: recency — not size — decides eviction. The old newest-first greedy
+/// pass deleted the large mid-age blob and kept a smaller oldest one, i.e. it
+/// did not behave like an LRU at all.
+#[tokio::test]
+async fn playback_cache_cap_evicts_the_oldest_rows_first() {
+    let pool = media_pool().await;
+    for (song, size, used) in [
+        ("newest-large", 100, 30),
+        ("mid", 10, 20),
+        ("oldest-small", 5, 10),
+    ] {
+        record(
+            &pool,
+            song,
+            KIND_PLAYBACK,
+            &format!("{song}.mp3"),
+            size,
+            "original",
+            "fp",
+            None,
+        )
+        .await
+        .unwrap();
+        sqlx::query("UPDATE media SET last_used = ?2 WHERE song_id = ?1")
+            .bind(song)
+            .bind(used)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    // Total is 115 bytes; the cap keeps the 100-byte newest blob and must
+    // evict strictly from the old end (oldest-small, then mid).
+    let removed = enforce_playback_cap(&pool, 105).await.unwrap();
+    assert_eq!(removed, 2);
+    let left: Vec<String> = sqlx::query_scalar("SELECT song_id FROM media ORDER BY song_id")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        left,
+        vec!["newest-large"],
+        "the newest blob survives; eviction is oldest-first"
+    );
+}
+
+/// N-05: a crash's `active` rows are recovered to `error`, so the song
+/// can be retried instead of being locked out forever.
+#[tokio::test]
+async fn reset_stale_downloads_recovers_active_rows_only() {
+    let media = media_pool().await;
+    let library = library_pool().await;
+    for (song, state) in [
+        ("stuck", crate::download::ACTIVE),
+        ("done", crate::download::DONE),
+        ("queued", crate::download::QUEUED),
+    ] {
+        crate::download::set_state(&media, song, state, None)
+            .await
+            .unwrap();
+    }
+
+    let dbs = test_dbs(media.clone(), library);
+    assert_eq!(reset_stale_downloads(&dbs).await.unwrap(), 1);
+    let (state, error): (String, Option<String>) =
+        sqlx::query_as("SELECT state, error FROM download WHERE song_id = 'stuck'")
+            .fetch_one(&media)
+            .await
+            .unwrap();
+    assert_eq!(state, crate::download::ERROR);
+    assert!(
+        error.is_some(),
+        "the recovery leaves a reason for the retry UI"
+    );
+    let done: String = sqlx::query_scalar("SELECT state FROM download WHERE song_id = 'done'")
+        .fetch_one(&media)
+        .await
+        .unwrap();
+    assert_eq!(done, crate::download::DONE);
+}
+
+/// N-04: the temp sweep must leave an in-flight `.part` alone and only remove
+/// files old enough to be abandoned.
+#[test]
+fn temp_sweep_keeps_active_part_files_and_removes_stale_ones() {
+    let dir = temp_dir("temp-sweep");
+    let active = dir.join(".1.2.1.part");
+    std::fs::write(&active, b"in-flight").unwrap();
+    let stale_part = dir.join(".1.2.2.part");
+    std::fs::write(&stale_part, b"abandoned").unwrap();
+    let stale_tmp = dir.join(".1.2.3.tmp");
+    std::fs::write(&stale_tmp, b"abandoned").unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(11 * 60);
+    for path in [&stale_part, &stale_tmp] {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("open stale fixture");
+        file.set_modified(old).expect("backdate fixture");
+    }
+    let kept = dir.join("blob.flac");
+    std::fs::write(&kept, b"blob").unwrap();
+
+    remove_temp_files(&dir);
+
+    assert!(active.exists(), "an active `.part` must never be swept");
+    assert!(!stale_part.exists(), "an abandoned `.part` is garbage");
+    assert!(!stale_tmp.exists(), "an abandoned `.tmp` is garbage");
+    assert!(kept.exists(), "the sweep only touches temp files");
+    _ = std::fs::remove_dir_all(dir);
+}
+
+/// N-05: the media upsert refuses to downgrade a downloaded blob to the
+/// purgeable playback cache, atomically inside the SQL statement.
+#[tokio::test]
+async fn record_refuses_downgrading_a_download_to_playback_cache() {
+    let pool = media_pool().await;
+    record(
+        &pool,
+        "s1",
+        KIND_PERMANENT,
+        "s1.flac",
+        10,
+        "original",
+        "fp",
+        None,
+    )
+    .await
+    .unwrap();
+    record(
+        &pool,
+        "s1",
+        KIND_RULE,
+        "s1.flac",
+        10,
+        "original",
+        "fp",
+        Some("r1"),
+    )
+    .await
+    .unwrap();
+
+    let error = record(
+        &pool,
+        "s1",
+        KIND_PLAYBACK,
+        "s1.flac",
+        10,
+        "original",
+        "fp",
+        None,
+    )
+    .await
+    .expect_err("a download must not be replaced by a playback copy");
+    assert!(
+        format!("{error:#}").contains("refusing"),
+        "the refusal must name itself, got: {error:#}"
+    );
+    let kind: String = sqlx::query_scalar("SELECT kind FROM media WHERE song_id = 's1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(kind, KIND_RULE, "the config-tier row survives untouched");
 }

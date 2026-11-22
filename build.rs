@@ -20,6 +20,13 @@
 //! Emit the watch list explicitly (sqlx's recommended build.rs).
 
 fn main() {
+    // A-03: production embeds exactly two schema sets — `migrations_library`
+    // (library.db) and `migrations_media` (media.db). The per-domain legacy
+    // dirs below are left in place (and watched) until the hygiene pass deletes
+    // them: `src/test/{playlists,lyrics,colors,covers,browse,queue}.rs` still
+    // build their own isolated pools from them. `migrations_artist_user` and
+    // `migrations_download` are no longer embedded by anything after A-03;
+    // their watch entries go away with the directories.
     for dir in [
         "migrations",
         "migrations_artist_user",

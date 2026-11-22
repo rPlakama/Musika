@@ -1,14 +1,14 @@
 //! Socket / `:` command context resolution for shuffle, radio and download.
 
-use crate::ipc_command::{self, RadioSeed, ShuffleTarget};
 use super::super::*;
+use crate::ipc_command::{self, RadioSeed, ShuffleTarget};
 
 impl AppRoot {
     pub(in crate::ui) fn execute_shuffle(&mut self, target: ShuffleTarget) {
         match target {
             ShuffleTarget::Queue => {
                 if self.player.is_empty() {
-                    self.push_toast("The queue is empty.".to_string(), ToastKind::Error, None);
+                    self.push_toast("The queue is empty.".to_string(), None);
                     return;
                 }
                 // Permute the visible queue and restart at its new head
@@ -36,11 +36,9 @@ impl AppRoot {
                     Some(id) => {
                         self.bridge.shuffle_album(id);
                     }
-                    None => self.push_toast(
-                        "Open an album or pass an album name.".to_string(),
-                        ToastKind::Error,
-                        None,
-                    ),
+                    None => {
+                        self.push_toast("Open an album or pass an album name.".to_string(), None)
+                    }
                 }
             }
             ShuffleTarget::Artist(Some(query)) => {
@@ -56,11 +54,9 @@ impl AppRoot {
                     Some(id) => {
                         self.bridge.shuffle_artist(id);
                     }
-                    None => self.push_toast(
-                        "Open an artist or pass an artist name.".to_string(),
-                        ToastKind::Error,
-                        None,
-                    ),
+                    None => {
+                        self.push_toast("Open an artist or pass an artist name.".to_string(), None)
+                    }
                 }
             }
         }
@@ -84,11 +80,9 @@ impl AppRoot {
                     self.open_descriptor(PageDescriptor::radio(kind, id.clone()));
                     self.bridge.play_radio(kind.to_string(), id, 0);
                 }
-                None => self.push_toast(
-                    "Nothing is playing to start radio from.".to_string(),
-                    ToastKind::Error,
-                    None,
-                ),
+                None => {
+                    self.push_toast("Nothing is playing to start radio from.".to_string(), None)
+                }
             },
             RadioSeed::Album(None) => {
                 let id = self
@@ -102,11 +96,9 @@ impl AppRoot {
                         self.open_descriptor(PageDescriptor::radio("album", id.clone()));
                         self.bridge.play_radio("album".to_string(), id, 0);
                     }
-                    None => self.push_toast(
-                        "Open an album or pass an album name.".to_string(),
-                        ToastKind::Error,
-                        None,
-                    ),
+                    None => {
+                        self.push_toast("Open an album or pass an album name.".to_string(), None)
+                    }
                 }
             }
             RadioSeed::Song(None) => {
@@ -121,11 +113,7 @@ impl AppRoot {
                         self.open_descriptor(PageDescriptor::radio("song", id.clone()));
                         self.bridge.play_radio("song".to_string(), id, 0);
                     }
-                    None => self.push_toast(
-                        "Select a song or pass a song name.".to_string(),
-                        ToastKind::Error,
-                        None,
-                    ),
+                    None => self.push_toast("Select a song or pass a song name.".to_string(), None),
                 }
             }
         }

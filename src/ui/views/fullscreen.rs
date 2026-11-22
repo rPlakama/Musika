@@ -124,7 +124,7 @@ impl AppRoot {
         progress: f32,
         window: &Window,
         cx: &Context<Self>,
-    ) -> gpui::Div {
+    ) -> gpui::Stateful<gpui::Div> {
         let track = self.player.current().cloned();
         let (title, artist, cover) = match &track {
             // Identity-cached full source: a same-album track change reuses
@@ -136,6 +136,7 @@ impl AppRoot {
             ),
             None => ("No track playing".to_string(), String::new(), None),
         };
+        let cover_fade = self.current_cover.fade_id("fullscreen", cover.as_ref());
         let title_size = (metrics::font_size("headline", self.win_h)
             * metrics::width_scale(self.win_w))
         .clamp(18.0, 32.0);
@@ -191,9 +192,12 @@ impl AppRoot {
         let volume = self.player.volume();
         let muted = self.player.muted();
         let lyrics = self.lyrics.as_ref();
-        let lines = lyrics
-            .map(|lyrics| lyrics.lines.clone())
-            .unwrap_or_default();
+        // Borrow the lyrics document instead of cloning every line each frame:
+        // the layout cache already guarantees the per-frame work is bounded.
+        let lines: &[(Option<i64>, String)] = match lyrics {
+            Some(lyrics) => lyrics.lines.as_slice(),
+            None => &[],
+        };
         let lyrics_label = match lyrics {
             Some(lyrics) if lyrics.lines.is_empty() => "No lyrics".to_string(),
             Some(lyrics) if lyrics_focus => {
@@ -212,7 +216,7 @@ impl AppRoot {
         let lyric_children = self
             .lyrics_layout
             .as_ref()
-            .map(|layout| self.lyric_line_elements(layout, &lines, lyrics_synced))
+            .map(|layout| self.lyric_line_elements(layout, lines, lyrics_synced))
             .unwrap_or_default();
         // The overlay is a centered lyrics panel over the full player: keep the
         // cover as the backdrop instead of hiding it and splitting the pane.
@@ -223,11 +227,17 @@ impl AppRoot {
             (self.win_w * 0.95).min(self.win_h * 0.62)
         };
         div()
+            .id("fullscreen-backdrop")
             .absolute()
             .inset_0()
             .size_full()
             .opacity(progress)
             .bg(rgb(palette::background()))
+            // The player is a full-window modal: its opaque backdrop still has
+            // to claim clicks and wheel deltas, otherwise the library/page
+            // hitboxes painted underneath keep receiving them (U-24).
+            .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
+            .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.stop_propagation()))
             .flex()
             .flex_col()
             .p(px(16.0))
@@ -270,15 +280,7 @@ impl AppRoot {
                                 cover_side,
                                 gpui::ObjectFit::Contain,
                                 4.0,
-                                self.current_cover.changed().then(|| {
-                                    gpui::SharedString::from(format!(
-                                        "cover-fade:fullscreen:{}",
-                                        self.current_cover
-                                            .full()
-                                            .as_ref()
-                                            .map_or_else(|| "none".to_string(), |source| source.key())
-                                    ))
-                                }),
+                                cover_fade,
                             )),
                     )
                     .child(
@@ -366,9 +368,8 @@ impl AppRoot {
                                                 + f32::from(bounds.size.height),
                                         );
                                     }
-                                    title_anchor_slot
-                                        .borrow_mut()
-                                        .title = Some(((left + right) * 0.5, (top + bottom) * 0.5));
+                                    title_anchor_slot.borrow_mut().title =
+                                        Some(((left + right) * 0.5, (top + bottom) * 0.5));
                                 }
                             })
                             .child(

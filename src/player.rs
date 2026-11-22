@@ -249,6 +249,10 @@ impl Normalization {
         }
     }
 
+    #[cfg_attr(
+        not(feature = "gpuui"),
+        expect(dead_code, reason = "consumed by the GPUI front end")
+    )]
     pub fn label(self) -> &'static str {
         match self {
             Self::Off => "off",
@@ -263,22 +267,4 @@ pub enum State {
     Stopped,
     Playing,
     Paused,
-}
-
-impl State {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Stopped => "stopped",
-            Self::Playing => "playing",
-            Self::Paused => "paused",
-        }
-    }
-
-    pub fn mpris_status(self) -> &'static str {
-        match self {
-            Self::Stopped => "Stopped",
-            Self::Playing => "Playing",
-            Self::Paused => "Paused",
-        }
-    }
 }

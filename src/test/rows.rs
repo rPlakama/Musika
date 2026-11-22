@@ -145,3 +145,99 @@ async fn downloaded_order_filters_every_scope_before_windowing() {
         4
     );
 }
+
+/// N-08: filtered album/artist rows describe the downloaded catalog, not the
+/// full server counts (an album with 1 downloaded track out of 5 says
+/// "1 tracks"; an artist with 1 downloaded album out of 2 says "1 album").
+#[tokio::test]
+async fn downloaded_order_rows_report_downloaded_counts() {
+    let _guard = lock_offline_catalog().await;
+    crate::offline::clear_cache();
+    let library = library_pool().await;
+    let media = media_pool().await;
+    let download = download_pool().await;
+    sqlx::query("INSERT INTO artists (id, name, album_count) VALUES ('ar1', 'Alpha', 2)")
+        .execute(&library)
+        .await
+        .unwrap();
+    for (id, name) in [("al1", "First"), ("al2", "Second")] {
+        sqlx::query(
+            "INSERT INTO albums (id, artist_id, name, artist, year, song_count, duration)
+             VALUES (?1, 'ar1', ?2, 'Alpha', 2026, 5, 900)",
+        )
+        .bind(id)
+        .bind(name)
+        .execute(&library)
+        .await
+        .unwrap();
+    }
+    for (id, album_id, track) in [("s1", "al1", 1), ("s2", "al2", 1)] {
+        sqlx::query(
+            "INSERT INTO songs (id, title, artist, artist_id, album, album_id, track, duration)
+             VALUES (?1, ?1, 'Alpha', 'ar1', 'First', ?2, ?3, 60)",
+        )
+        .bind(id)
+        .bind(album_id)
+        .bind(track)
+        .execute(&library)
+        .await
+        .unwrap();
+    }
+    crate::download::set_state(&download, "s1", crate::download::DONE, None)
+        .await
+        .unwrap();
+    crate::download::mark_queued(&download, "s2", None)
+        .await
+        .unwrap();
+
+    let dbs = dbs_with_download(&library, &media, &download);
+    assert_eq!(
+        crate::rows::count(&dbs, "albums", "", "Downloaded", false)
+            .await
+            .unwrap(),
+        1
+    );
+    let albums = crate::rows::window(&dbs, "albums", "", "Downloaded", 0, 10, false)
+        .await
+        .unwrap();
+    assert_eq!(albums.len(), 1);
+    assert_eq!(
+        albums[0].meta, "1 tracks",
+        "the downloaded track count, not the album's 5 server tracks"
+    );
+
+    let artists = crate::rows::window(&dbs, "artists", "", "Downloaded", 0, 10, false)
+        .await
+        .unwrap();
+    assert_eq!(artists.len(), 1);
+    assert_eq!(
+        artists[0].meta, "1 album",
+        "the downloaded album count, not the artist's 2 server albums"
+    );
+
+    // The album count/window also honour the artist-name scope in SQL.
+    assert_eq!(
+        crate::rows::count(&dbs, "albums", "Alpha", "Downloaded", false)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        crate::rows::window(&dbs, "albums", "Beta", "Downloaded", 0, 10, false)
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
+
+    let songs = crate::rows::window(&dbs, "songs", "", "Downloaded", 0, 10, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        songs
+            .iter()
+            .map(|row| row.song_id.as_str())
+            .collect::<Vec<_>>(),
+        ["s1"]
+    );
+}

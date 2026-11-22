@@ -221,7 +221,10 @@ fn contrast_knob_changes_roles() {
     assert_ne!(standard, contrast);
 
     let desaturated = scheme::build(seed, VariantChoice::TonalSpot, 0.0, 0.0, -1.0, Spec::Dms).1;
-    assert_ne!(standard, desaturated, "-1 saturation must greyscale the seed");
+    assert_ne!(
+        standard, desaturated,
+        "-1 saturation must greyscale the seed"
+    );
 
     // A high-chroma seed can already be at the sRGB gamut limit; use a soft
     // seed to prove that +1 actually raises chroma rather than clamping to the

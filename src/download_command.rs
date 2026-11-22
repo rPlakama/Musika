@@ -294,7 +294,13 @@ fn no_match(scope: DownloadScope, query: &str) -> anyhow::Error {
 }
 
 /// Download every resolved song. All songs are attempted even after a
-/// failure; the first error is reported with a success/failure summary.
+/// failure; the first error (in completion order) is reported with a
+/// success/failure summary.
+///
+/// Songs are fetched with [`crate::consts::DOWNLOAD_CONCURRENCY`] independent
+/// downloads in flight (N-19): a slow or stalled song no longer serialises the
+/// whole album/artist behind it, while the shared pool keeps the server load
+/// polite.
 async fn download(dbs: &Dbs, resolved: ResolvedIds) -> Result<()> {
     let song_ids = resolved.song_ids();
     if song_ids.is_empty() {
@@ -303,14 +309,26 @@ async fn download(dbs: &Dbs, resolved: ResolvedIds) -> Result<()> {
     let total = song_ids.len();
     let mut failures = 0usize;
     let mut first_failure: Option<(String, anyhow::Error)> = None;
-    for song_id in song_ids {
-        if let Err(err) = crate::media_actions::download_one(dbs, song_id).await {
-            failures += 1;
-            if first_failure.is_none() {
-                first_failure = Some((song_id.clone(), err));
+    // Each task needs its own pool handles (`Dbs` is a bundle of `SqlitePool`
+    // clones), so the closure captures an owned copy and clones it per song.
+    let dbs = Dbs::clone(dbs);
+    crate::fanout::for_each_windowed(
+        song_ids,
+        crate::consts::DOWNLOAD_CONCURRENCY,
+        move |song_id| {
+            let dbs = dbs.clone();
+            async move { crate::media_actions::download_one(&dbs, &song_id).await }
+        },
+        |song_id, result| {
+            if let Err(err) = result {
+                failures += 1;
+                if first_failure.is_none() {
+                    first_failure = Some((song_id, err));
+                }
             }
-        }
-    }
+        },
+    )
+    .await;
     let Some((song_id, err)) = first_failure else {
         return Ok(());
     };

@@ -101,11 +101,6 @@ impl ListState {
         self.cursor = if len == 0 { 0 } else { index.min(len - 1) };
     }
 
-    /// The id of the row under the cursor, or `None` on an empty surface.
-    pub fn row_id<'a>(&self, rows: impl FnOnce(usize) -> Option<&'a Row>) -> Option<&'a str> {
-        rows(self.cursor).map(|row| row.id.as_str())
-    }
-
     /// Back to the head with no visual range.
     pub fn clear(&mut self) {
         self.cursor = 0;
@@ -146,9 +141,6 @@ pub struct ViewState {
     pub list: ListState,
     pub loading: bool,
     pub error: Option<String>,
-    /// Container state for the superior bar's contextual chips (Album/Artist).
-    pub container_cached: bool,
-    pub container_downloading: bool,
     /// Resolved cover per live row (offset by `rows.live_start`), built when a
     /// window/payload is installed instead of per frame.
     pub covers: Vec<Option<Arc<CoverSource>>>,
@@ -163,8 +155,6 @@ impl Default for ViewState {
             list: ListState::default(),
             loading: true,
             error: None,
-            container_cached: false,
-            container_downloading: false,
             covers: Vec::new(),
         }
     }
@@ -295,10 +285,7 @@ mod tests {
         let rows = vec![row("one", "https://img/one")];
         page.install_payload(header(), rows);
         let first = page.covers[0].as_ref().expect("remote cover").clone();
-        let rows = vec![
-            row("one", "https://img/one"),
-            row("two", "https://img/two"),
-        ];
+        let rows = vec![row("one", "https://img/one"), row("two", "https://img/two")];
         page.install_payload(header(), rows);
         let kept = page.covers[0].as_ref().expect("remote cover").clone();
         assert!(std::sync::Arc::ptr_eq(&first, &kept));
@@ -431,6 +418,10 @@ impl PageState {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the GPUI unit tests exercise this helper")
+    )]
     pub fn rebuild_covers(&mut self) {
         self.covers = cover_sources(
             self.rows
@@ -450,10 +441,8 @@ impl PageState {
         if self.rows == rows {
             return;
         }
-        let mut reused: std::collections::HashMap<
-            (String, String),
-            std::sync::Arc<CoverSource>,
-        > = std::collections::HashMap::new();
+        let mut reused: std::collections::HashMap<(String, String), std::sync::Arc<CoverSource>> =
+            std::collections::HashMap::new();
         for (row, cover) in self.rows.iter().zip(self.covers.iter()) {
             if let Some(cover) = cover {
                 reused

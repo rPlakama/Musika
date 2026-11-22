@@ -89,3 +89,110 @@ fn track_controls_submit_canonical_commands() {
         assert_eq!(canonical_string(&command), canonical);
     }
 }
+
+/// D-01: MPRIS `Volume` is `0.0..=1.0` while the core's `mpris_volume:` parser
+/// is `0..=100`, so the payload must be scaled exactly once.
+/// D-02/D-03: MPRIS `SetShuffle` switches the persistent shuffle *mode*; it must
+/// not submit `shuffle queue`, which permutes and restarts the play queue.
+#[test]
+fn volume_scales_0_to_100_and_shuffle_toggles_mode() {
+    use crate::ipc_command::{CommandTarget, IpcCommand, canonical_string, parse};
+    use crate::ipc_protocol::PlayerOp;
+
+    assert_eq!(volume_command(0.5).as_deref(), Some("mpris_volume:50.00"));
+    assert_eq!(volume_command(1.0).as_deref(), Some("mpris_volume:100.00"));
+    assert_eq!(volume_command(0.0).as_deref(), Some("mpris_volume:0.00"));
+    assert_eq!(
+        volume_command(2.5).as_deref(),
+        Some("mpris_volume:100.00"),
+        "out-of-range volumes clamp to the MPRIS maximum"
+    );
+    assert_eq!(volume_command(-0.5).as_deref(), Some("mpris_volume:0.00"));
+    assert_eq!(volume_command(f64::NAN), None, "non-finite volume rejected");
+    assert_eq!(
+        volume_command(f64::INFINITY),
+        None,
+        "non-finite volume rejected"
+    );
+
+    // The parser stores the 0..=100 percentage; there is no second scaling.
+    let volume =
+        parse(&volume_command(0.5).expect("finite volume")).expect("volume command parses");
+    assert_eq!(volume, IpcCommand::SetVolume(50.0));
+    assert_eq!(volume.player_op(), Some(PlayerOp::SetVolume(50.0)));
+    assert_eq!(canonical_string(&volume), "set_volume 50");
+
+    // MPRIS writes are conditional: a same-state set is not repeated.
+    assert_eq!(
+        shuffle_command(false, true).as_deref(),
+        Some("mpris_shuffle:on")
+    );
+    assert_eq!(
+        shuffle_command(true, false).as_deref(),
+        Some("mpris_shuffle:off")
+    );
+    assert_eq!(shuffle_command(false, false), None);
+    assert_eq!(shuffle_command(true, true), None);
+
+    let shuffle =
+        parse(&shuffle_command(false, true).expect("shuffle change")).expect("shuffle parses");
+    assert_eq!(shuffle, IpcCommand::ShuffleMode { enabled: true });
+    assert_eq!(shuffle.target(), CommandTarget::CorePlayback);
+    assert_eq!(
+        shuffle.player_op(),
+        Some(PlayerOp::ShuffleQueue),
+        "the persistent mode toggle, not the queue permutation (ShuffleQueueOrder)"
+    );
+    assert_eq!(canonical_string(&shuffle), "mpris_shuffle:on");
+    assert!(parse("mpris_shuffle:maybe").is_err());
+    assert!(parse("mpris_shuffle:").is_err());
+
+    // End-to-end through the daemon's text dispatcher: the MPRIS command lands
+    // on the persistent mode command, never on the queue permutation.
+    assert!(matches!(
+        crate::daemon::playback::command_for_text(&shuffle),
+        Some(crate::player::core::CoreCommand::ShuffleQueue)
+    ));
+    let permutation = parse("shuffle queue").expect("shuffle queue parses");
+    assert!(matches!(
+        crate::daemon::playback::command_for_text(&permutation),
+        Some(crate::player::core::CoreCommand::ShuffleQueueOrder(_))
+    ));
+}
+
+/// D-25(b): the idle snapshot must expose spec-valid MPRIS enum strings, and a
+/// malformed publisher value must never leak through the property getters.
+#[test]
+fn snapshot_default_uses_spec_valid_strings() {
+    let state = Snapshot::default();
+    assert_eq!(state.playback_status, "Stopped");
+    assert_eq!(state.loop_status, "None");
+    assert!(!state.shuffle);
+    assert_eq!(state.duration_us, 0);
+    assert_eq!(state.volume, 0.0);
+    assert_eq!(
+        track_path(&state.track_id),
+        "/org/mpris/MediaPlayer2/TrackList/NoTrack"
+    );
+
+    assert_eq!(playback_status("Playing"), "Playing");
+    assert_eq!(playback_status("Paused"), "Paused");
+    assert_eq!(playback_status(""), "Stopped");
+    assert_eq!(playback_status("playing"), "Stopped");
+    assert_eq!(loop_status("Track"), "Track");
+    assert_eq!(loop_status("Playlist"), "Playlist");
+    assert_eq!(loop_status(""), "None");
+    assert_eq!(loop_status("Repeat"), "None");
+}
+
+/// D-25(c): `SetPosition` must ignore negative positions, positions past the
+/// track length and any position when the length is unknown.
+#[test]
+fn set_position_ignores_negative_and_past_end_positions() {
+    assert_eq!(seeks_within_track(0, 0), None, "unknown track length");
+    assert_eq!(seeks_within_track(0, 10_000), Some(0));
+    assert_eq!(seeks_within_track(5_000, 10_000), Some(5_000));
+    assert_eq!(seeks_within_track(10_000, 10_000), Some(10_000));
+    assert_eq!(seeks_within_track(10_001, 10_000), None);
+    assert_eq!(seeks_within_track(-1, 10_000), None);
+}

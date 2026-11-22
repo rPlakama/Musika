@@ -12,7 +12,7 @@
 //! [`crate::player::core::PlaybackCore`].
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -37,6 +37,7 @@ pub(crate) enum AudioCommand {
         paused: bool,
         generation: u64,
     },
+    SetNextUrl(Option<String>),
     Pause,
     Resume,
     Seek(f64),
@@ -46,6 +47,13 @@ pub(crate) enum AudioCommand {
     /// ReplayGain loudness normalization mode.
     SetNormalization(Normalization),
     /// Optional equal-length crossfade between tracks.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "only the ignored crossfade integration test emits the plain toggle"
+        )
+    )]
     SetCrossfade(bool),
     SetCrossfadeConfig(crate::player::CrossfadeConfig),
     SetCrossfadeAllowed(bool),
@@ -103,8 +111,8 @@ pub(crate) struct EngineClock {
     pub played_frames: u64,
     pub buffered_frames: u64,
     pub underruns: u64,
+    pub sample_rate: u32,
     pub loading: bool,
-    pub failed: bool,
 }
 
 #[derive(Debug, Default)]
@@ -112,8 +120,8 @@ struct ClockState {
     played_frames: AtomicU64,
     buffered_frames: AtomicU64,
     underruns: AtomicU64,
+    sample_rate: AtomicU32,
     loading: AtomicBool,
-    failed: AtomicBool,
 }
 
 /// Handle to the engine thread. Dropping it shuts the engine down.
@@ -189,12 +197,9 @@ impl Engine {
         EngineClock {
             played_frames: self.clock.played_frames.load(Ordering::Relaxed),
             buffered_frames: self.clock.buffered_frames.load(Ordering::Relaxed),
-            underruns: self
-                .clock
-                .underruns
-                .load(Ordering::Relaxed),
+            underruns: self.clock.underruns.load(Ordering::Relaxed),
+            sample_rate: self.clock.sample_rate.load(Ordering::Relaxed),
             loading: self.clock.loading.load(Ordering::Relaxed),
-            failed: self.clock.failed.load(Ordering::Relaxed),
         }
     }
 
@@ -295,8 +300,8 @@ fn engine_thread(
             .buffered_frames
             .store(native.buffered_frames(), Ordering::Relaxed);
         clock.underruns.store(native.underruns(), Ordering::Relaxed);
+        clock.sample_rate.store(native.rate(), Ordering::Relaxed);
         clock.loading.store(native.loading(), Ordering::Relaxed);
-        clock.failed.store(native.failed(), Ordering::Relaxed);
     }
 }
 
@@ -313,6 +318,7 @@ fn apply_command(native: &Native, command: AudioCommand, paused: &mut bool) {
             native.load_with_next_generation(&url, next_url, load_paused, generation);
             *paused = load_paused;
         }
+        AudioCommand::SetNextUrl(next_url) => native.set_next_url(next_url),
         AudioCommand::Pause => {
             native.set_paused(true);
             *paused = true;

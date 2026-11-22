@@ -22,7 +22,7 @@
 //! when present; metadata similarity fills the rest. Page and queue share the
 //! same cached order, and `offline` restricts both to downloaded songs.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::LazyLock;
 use std::sync::Mutex;
 
@@ -30,33 +30,83 @@ use anyhow::{Result, anyhow};
 
 use crate::library::SongRow;
 
+/// How many seed expansions the process keeps in [`RADIO_ROWS`]. N-11: the
+/// map used to grow for the whole session; every opened radio would pin its
+/// row window. A handful of recent radios is enough to make the page/queue
+/// pair (and quick re-opens) reuse one order.
+const RADIO_CACHE_CAP: usize = 32;
+
 /// The page rows are the queue order. Caching them keeps a click from
-/// re-running `getSimilarSongs` and playing a different random row.
-static RADIO_ROWS: LazyLock<Mutex<HashMap<String, Vec<SongRow>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+/// re-running the expansion and playing a different random row.
+///
+/// The cache is LRU-bounded by insertion: a hit moves the seed to the back and
+/// the least recently used seed order is evicted past [`RADIO_CACHE_CAP`].
+#[derive(Default)]
+struct RadioRowsCache {
+    rows: HashMap<String, Vec<SongRow>>,
+    order: VecDeque<String>,
+}
+
+impl RadioRowsCache {
+    fn get(&mut self, key: &str) -> Option<Vec<SongRow>> {
+        let rows = self.rows.get(key)?.clone();
+        self.touch(key);
+        Some(rows)
+    }
+
+    fn insert(&mut self, key: String, rows: Vec<SongRow>) {
+        if self.rows.insert(key.clone(), rows).is_none() {
+            self.order.push_back(key);
+        } else {
+            self.touch(&key);
+        }
+        while self.order.len() > RADIO_CACHE_CAP {
+            if let Some(oldest) = self.order.pop_front() {
+                self.rows.remove(&oldest);
+            }
+        }
+    }
+
+    fn touch(&mut self, key: &str) {
+        if let Some(position) = self.order.iter().position(|cached| cached == key)
+            && let Some(key) = self.order.remove(position)
+        {
+            self.order.push_back(key);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.rows.clear();
+        self.order.clear();
+    }
+}
+
+static RADIO_ROWS: LazyLock<Mutex<RadioRowsCache>> =
+    LazyLock::new(|| Mutex::new(RadioRowsCache::default()));
 
 /// Serializes the first expansion for a seed. Opening the page and starting
-/// its queue can race, and two `getSimilarSongs` calls may return different
-/// random lists; the first caller owns the cached order.
+/// its queue can race, and two expansions may return different random lists;
+/// the first caller owns the cached order.
 static RADIO_FETCH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-fn cache_key(kind: &str, id: &str) -> String {
-    format!("{kind}:{id}")
+fn cache_key(kind: &str, id: &str, offline: bool) -> String {
+    // N-08: the offline expansion selects only downloaded candidates, so the
+    // two modes are different orders and must not share a cache entry.
+    format!("{kind}:{id}:{}", if offline { "offline" } else { "online" })
 }
 
-fn remember_rows(kind: &str, id: &str, rows: &[SongRow]) {
-    let mut cache = RADIO_ROWS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    cache.insert(cache_key(kind, id), rows.to_vec());
-}
-
-fn cached_rows(kind: &str, id: &str) -> Option<Vec<SongRow>> {
+fn remember_rows(kind: &str, id: &str, offline: bool, rows: &[SongRow]) {
     RADIO_ROWS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .get(&cache_key(kind, id))
-        .cloned()
+        .insert(cache_key(kind, id, offline), rows.to_vec());
+}
+
+fn cached_rows(kind: &str, id: &str, offline: bool) -> Option<Vec<SongRow>> {
+    RADIO_ROWS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&cache_key(kind, id, offline))
 }
 
 /// Result of the Tool > Save Radio action. Local save is authoritative; the
@@ -65,22 +115,39 @@ fn cached_rows(kind: &str, id: &str) -> Option<Vec<SongRow>> {
 #[derive(Debug, Clone)]
 pub struct SavedRadio {
     pub name: String,
-    pub path: std::path::PathBuf,
     pub remote_error: Option<String>,
 }
 
 /// The generated rows for a radio seed: the cached page order when available,
 /// otherwise a fresh local expansion recorded for playback.
+///
+/// This is the full (online) mix, used by the save/download actions. The page
+/// and queue paths use [`radio_rows_mode`] so an offline expansion restricts
+/// candidates *before* selection instead of filtering a full mix afterwards.
 pub async fn radio_rows(
     dbs: &crate::db::Dbs,
     seed_kind: &str,
     seed_id: &str,
 ) -> Result<Vec<SongRow>> {
-    if let Some(rows) = cached_rows(seed_kind, seed_id) {
+    radio_rows_mode(dbs, seed_kind, seed_id, false).await
+}
+
+/// The expansion backing the page and queue. `offline` is passed into
+/// [`crate::recommend::similar_songs`] (N-08): candidates are restricted to
+/// downloaded songs before the weighted pick, so an offline radio fills its
+/// window with playable rows instead of randomly picking server-only ones and
+/// filtering them away afterwards.
+async fn radio_rows_mode(
+    dbs: &crate::db::Dbs,
+    seed_kind: &str,
+    seed_id: &str,
+    offline: bool,
+) -> Result<Vec<SongRow>> {
+    if let Some(rows) = cached_rows(seed_kind, seed_id, offline) {
         return Ok(rows);
     }
     let _guard = RADIO_FETCH.lock().await;
-    if let Some(rows) = cached_rows(seed_kind, seed_id) {
+    if let Some(rows) = cached_rows(seed_kind, seed_id, offline) {
         return Ok(rows);
     }
     let mut rows = crate::recommend::similar_songs(
@@ -88,7 +155,7 @@ pub async fn radio_rows(
         seed_kind,
         seed_id,
         crate::recommend::RADIO_COUNT,
-        false,
+        offline,
         crate::consts::now_nanos() as u64,
     )
     .await?;
@@ -99,7 +166,7 @@ pub async fn radio_rows(
             row.cover_art = Some(cover.clone());
         }
     }
-    remember_rows(seed_kind, seed_id, &rows);
+    remember_rows(seed_kind, seed_id, offline, &rows);
     Ok(rows)
 }
 
@@ -192,9 +259,10 @@ pub async fn page(
         };
     // The page and the playback queue must share one expansion. `radio_rows`
     // caches under a fetch lock; use it here instead of fetching again. The
-    // cache holds the full local mix; offline filtering happens per read so
-    // flipping the flag never changes the cached order.
-    let mut rows = radio_rows(dbs, seed_kind, seed_id).await?;
+    // offline flag is part of the expansion (N-08), so the cached order only
+    // ever holds playable rows; the final `retain_songs` re-checks the download
+    // catalog in case it changed since the expansion was cached.
+    let mut rows = radio_rows_mode(dbs, seed_kind, seed_id, offline).await?;
     crate::offline::retain_songs(dbs, offline, &mut rows).await?;
     let cover_ids = std::iter::once(&seed.cover_art).chain(rows.iter().map(|row| &row.cover_art));
     let covers = crate::covers::url_map_for(dbs, cover_ids.clone()).await?;
@@ -270,7 +338,7 @@ pub async fn tracks(
     start: i64,
     offline: bool,
 ) -> Result<(Vec<crate::player::Track>, i64)> {
-    let mut songs = radio_rows(dbs, seed_kind, seed_id).await?;
+    let mut songs = radio_rows_mode(dbs, seed_kind, seed_id, offline).await?;
     crate::offline::retain_songs(dbs, offline, &mut songs).await?;
     let start = start.clamp(0, songs.len().saturating_sub(1) as i64);
     Ok((crate::queue::tracks(dbs, songs).await?, start))
@@ -284,12 +352,15 @@ pub async fn shuffled_tracks(
     seed_id: &str,
     offline: bool,
 ) -> Result<Vec<crate::player::Track>> {
-    let mut songs = radio_rows(dbs, seed_kind, seed_id).await?;
+    let mut songs = radio_rows_mode(dbs, seed_kind, seed_id, offline).await?;
+    // N-08: filter *before* the emptiness check, so an offline radio whose
+    // cached order has no downloaded rows reports "no songs" instead of
+    // returning a silent empty queue.
+    crate::offline::retain_songs(dbs, offline, &mut songs).await?;
     if songs.is_empty() {
         return Err(anyhow!("this radio has no songs to shuffle"));
     }
     crate::queue::shuffle_songs(&mut songs, crate::consts::now_nanos());
-    crate::offline::retain_songs(dbs, offline, &mut songs).await?;
     crate::queue::tracks(dbs, songs).await
 }
 
@@ -316,7 +387,7 @@ pub async fn save_radio(
     };
 
     let dir = crate::playlists::m3u_dir()?;
-    let path = write_radio_m3u(dbs, &dir, &name, &rows).await?;
+    _ = write_radio_m3u(dbs, &dir, &name, &rows).await?;
 
     // The server playlist carries the same invariant as every other playlist:
     // no duplicate entries, even if the radio expansion ever repeats a song.
@@ -337,11 +408,7 @@ pub async fn save_radio(
         },
         Err(err) => Some(format!("{err:#}")),
     };
-    Ok(SavedRadio {
-        name,
-        path,
-        remote_error,
-    })
+    Ok(SavedRadio { name, remote_error })
 }
 
 /// Save the radio only as an app-owned local M3U (`radio save --offline`).
@@ -361,10 +428,9 @@ pub async fn save_radio_local(
         name.trim().to_string()
     };
     let dir = crate::playlists::m3u_dir()?;
-    let path = write_radio_m3u(dbs, &dir, &name, &rows).await?;
+    _ = write_radio_m3u(dbs, &dir, &name, &rows).await?;
     Ok(SavedRadio {
         name,
-        path,
         remote_error: None,
     })
 }
@@ -494,8 +560,11 @@ mod tests {
     #[test]
     fn cached_page_rows_keep_the_displayed_order() {
         let rows = vec![row("b"), row("a"), row("c")];
-        remember_rows("album", "order-test", &rows);
-        let cached = cached_rows("album", "order-test").expect("cached rows");
+        let mut cache = RadioRowsCache::default();
+        cache.insert(cache_key("album", "order-test", false), rows);
+        let cached = cache
+            .get(&cache_key("album", "order-test", false))
+            .expect("cached rows");
         assert_eq!(
             cached
                 .iter()
@@ -503,6 +572,60 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["b", "a", "c"]
         );
-        assert!(cached_rows("song", "order-test").is_none());
+        assert!(cache.get(&cache_key("song", "order-test", false)).is_none());
+        assert!(
+            cache.get(&cache_key("album", "order-test", true)).is_none(),
+            "offline and online expansions are separate cache entries"
+        );
+    }
+
+    /// N-11: the cache must never grow past its cap.
+    #[test]
+    fn row_cache_is_bounded_and_evicts_oldest_seeds() {
+        let mut cache = RadioRowsCache::default();
+        for seed in 0..(RADIO_CACHE_CAP + 8) {
+            cache.insert(
+                cache_key("album", &format!("seed-{seed}"), false),
+                vec![row("a")],
+            );
+        }
+        assert_eq!(cache.rows.len(), RADIO_CACHE_CAP);
+        assert_eq!(cache.order.len(), RADIO_CACHE_CAP);
+        assert!(
+            cache
+                .rows
+                .contains_key(&cache_key("album", "seed-8", false))
+        );
+        assert!(
+            !cache
+                .rows
+                .contains_key(&cache_key("album", "seed-0", false)),
+            "the oldest seed order is evicted first"
+        );
+    }
+
+    /// A cache hit refreshes the entry's recency so hot radios survive.
+    #[test]
+    fn row_cache_hit_refreshes_recency() {
+        let mut cache = RadioRowsCache::default();
+        cache.insert(cache_key("album", "hot", false), vec![row("a")]);
+        for seed in 0..(RADIO_CACHE_CAP - 1) {
+            cache.insert(
+                cache_key("album", &format!("cold-{seed}"), false),
+                vec![row("b")],
+            );
+        }
+        let _ = cache.get(&cache_key("album", "hot", false));
+        cache.insert(cache_key("album", "newest", false), vec![row("c")]);
+        assert!(
+            cache.rows.contains_key(&cache_key("album", "hot", false)),
+            "a recently read seed is not the eviction victim"
+        );
+        assert!(
+            !cache
+                .rows
+                .contains_key(&cache_key("album", "cold-0", false)),
+            "the least recently used seed is evicted"
+        );
     }
 }

@@ -37,6 +37,13 @@ const REFERENCE_FRAMES: usize = 524_288;
 /// `REFERENCE_FRAMES * (MAX_RATE / DEFAULT_RATE)` = 2,097,152 frames.
 pub(crate) const RING_FRAMES: usize =
     REFERENCE_FRAMES * (MAX_RATE as usize / DEFAULT_RATE as usize);
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the ring capacity assertion is only used by the ring tests"
+    )
+)]
 pub(crate) const RING_BYTES: usize = RING_FRAMES * CHANNELS * std::mem::size_of::<f32>();
 const RING_MASK: u64 = (RING_FRAMES as u64) - 1;
 
@@ -127,6 +134,10 @@ impl Ring {
         self.played.load(Ordering::Acquire)
     }
 
+    pub(crate) fn read_frames(&self) -> u64 {
+        self.read.load(Ordering::Acquire)
+    }
+
     pub(crate) fn buffered_frames(&self) -> u64 {
         self.write
             .load(Ordering::Acquire)
@@ -134,7 +145,7 @@ impl Ring {
     }
 
     /// Absolute frame number of the next producer write. Used as the gapless
-    /// boundary marker: the sink's played counter shares this frame space.
+    /// boundary marker: the sink's read counter shares this frame space.
     pub(crate) fn written_frames(&self) -> u64 {
         self.write.load(Ordering::Acquire)
     }
@@ -146,6 +157,13 @@ impl Ring {
 
     /// Frames of the allocated ring that the producer may use at the current
     /// pipeline rate (the rest keeps the same temporal headroom at lower rates).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the usable-frame budget is only asserted by the ring tests"
+        )
+    )]
     pub(crate) fn usable_frames(&self) -> u64 {
         self.limit.load(Ordering::Acquire)
     }
@@ -169,6 +187,13 @@ impl Ring {
         self.closed.load(Ordering::Relaxed)
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "only the PipeWire sink tests inspect the failure flag"
+        )
+    )]
     pub(crate) fn failed(&self) -> bool {
         self.failed.load(Ordering::Relaxed)
     }
@@ -581,5 +606,52 @@ mod tests {
         let pcm = vec![1.0f32; 2 * RING_FRAMES];
         ring.write(&pcm, old);
         assert_eq!(ring.buffered_frames(), 0);
+    }
+
+    #[test]
+    fn boundary_in_read_space_survives_flush_and_reset() {
+        let ring = Ring::new().unwrap();
+        let mut out = vec![0.0f32; 512 * CHANNELS];
+
+        // Cycle 1: write 200 frames, play 50, flush the remaining 150.
+        let epoch0 = ring.epoch();
+        ring.write(&vec![1.0f32; 200 * CHANNELS], epoch0);
+        assert_eq!(ring.read_into(&mut out, 50), 50);
+        ring.flush();
+        assert_eq!(ring.read_into(&mut out, 0), 0);
+        assert_eq!(ring.read_frames(), 200);
+        assert_eq!(ring.played_frames(), 50);
+
+        // Cycle 2: write 300 frames, play 100, reset the remaining 200.
+        ring.write(&vec![0.5f32; 300 * CHANNELS], epoch0);
+        assert_eq!(ring.read_into(&mut out, 100), 100);
+        ring.reset();
+        assert_eq!(ring.read_into(&mut out, 0), 0);
+        assert_eq!(ring.read_frames(), 500);
+        assert_eq!(ring.played_frames(), 150);
+
+        // Now write 120 frames of track A, arm the gapless boundary in
+        // write/read frame space, and write 80 frames of track B.
+        let epoch1 = ring.epoch();
+        ring.write(&vec![0.25f32; 120 * CHANNELS], epoch1);
+        let boundary_frame = ring.written_frames();
+        assert_eq!(boundary_frame, 620);
+        ring.write(&vec![0.75f32; 80 * CHANNELS], epoch1);
+
+        // Consume 119 frames of track A: still 1 frame before the boundary.
+        assert_eq!(ring.read_into(&mut out, 119), 119);
+        assert_eq!(ring.read_frames(), boundary_frame - 1);
+
+        // Consume the 120th frame of track A: read_frames reaches boundary_frame
+        // at the exact boundary sample, while played_frames lags by the 350
+        // flushed frames from earlier cycles.
+        assert_eq!(ring.read_into(&mut out, 1), 1);
+        assert_eq!(out[0], 0.25);
+        assert_eq!(ring.read_frames(), boundary_frame);
+        assert_eq!(ring.played_frames(), boundary_frame - 350);
+
+        // Next frame is the first sample of track B.
+        assert_eq!(ring.read_into(&mut out, 1), 1);
+        assert_eq!(out[0], 0.75);
     }
 }

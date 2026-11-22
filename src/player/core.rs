@@ -141,7 +141,6 @@ pub(crate) struct PlaybackCore {
     /// the engine can stall on an HTTP connect.
     offline: bool,
     last_error: Option<String>,
-    last_failure: Option<crate::player::PlaybackError>,
     /// A retryable failure is waiting for the service's retry timer; the row
     /// stays selected and the transport advertises the retrying flag.
     retrying: bool,
@@ -186,7 +185,6 @@ impl PlaybackCore {
             loaded_current: false,
             offline: false,
             last_error: None,
-            last_failure: None,
             retrying: false,
             shuffle: false,
             shuffle_plan: Vec::new(),
@@ -262,16 +260,20 @@ impl PlaybackCore {
     }
 
     /// Last track/engine error (diagnostics and UI toasts).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the playback tests read this getter")
+    )]
     pub(crate) fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the playback tests read this getter")
+    )]
     pub(crate) fn offline(&self) -> bool {
         self.offline
-    }
-
-    pub(crate) fn last_failure(&self) -> Option<&crate::player::PlaybackError> {
-        self.last_failure.as_ref()
     }
 
     pub(crate) fn retrying(&self) -> bool {
@@ -297,13 +299,27 @@ impl PlaybackCore {
     pub(crate) fn position_at(&self, now_ns: u64) -> f64 {
         let base = self.anchor_position.max(0.0);
         // A load or seek has not been re-anchored to a real clock yet; the
-        // playhead is still at its target, and a paused/stopped transport never
-        // advances.
-        if self.state != State::Playing || self.loading || self.rebase {
+        // playhead is still at its target, and a paused/stopped/retrying
+        // transport never advances.
+        if self.state != State::Playing || self.loading || self.retrying || self.rebase {
             return self.clamp_position(base);
         }
         let elapsed = now_ns.saturating_sub(self.anchor_ns) as f64 / NANOS_PER_SECOND;
         self.clamp_position(base + elapsed)
+    }
+
+    /// Re-anchors the extrapolated playhead to the hardware-reported position
+    /// while playing and not loading or retrying.
+    pub(crate) fn reconcile_clock(&mut self, hw_position: f64, now_ns: u64) {
+        if self.state != State::Playing || self.loading || self.retrying || self.rebase {
+            return;
+        }
+        if !hw_position.is_finite() || hw_position < 0.0 {
+            return;
+        }
+        self.anchor_position = self.clamp_position(hw_position);
+        self.anchor_ns = now_ns;
+        self.now_ns = now_ns;
     }
 
     /// Audio commands that re-apply the current volume/mute to a freshly
@@ -417,12 +433,24 @@ impl PlaybackCore {
                 self.set_crossfade_config(config, &mut outcome)
             }
             CoreCommand::CycleRepeat => {
+                let old_next_url = self.next_url();
+                let old_crossfade = self.crossfade_allowed();
                 self.repeat = self.repeat.cycle();
+                if self.shuffle && self.shuffle_plan.is_empty() && self.repeat == Repeat::All {
+                    self.rebuild_shuffle_plan();
+                }
+                self.sync_gapless_next(old_next_url, old_crossfade, &mut outcome);
                 outcome.changed = true;
             }
             CoreCommand::SetRepeat(repeat) => {
                 if self.repeat != repeat {
+                    let old_next_url = self.next_url();
+                    let old_crossfade = self.crossfade_allowed();
                     self.repeat = repeat;
+                    if self.shuffle && self.shuffle_plan.is_empty() && self.repeat == Repeat::All {
+                        self.rebuild_shuffle_plan();
+                    }
+                    self.sync_gapless_next(old_next_url, old_crossfade, &mut outcome);
                     outcome.changed = true;
                 }
             }
@@ -446,7 +474,6 @@ impl PlaybackCore {
     /// Replaces the queue and starts at `start`.
     pub(crate) fn load(&mut self, tracks: Vec<Track>, start: usize, paused: bool) -> Outcome {
         let mut outcome = Outcome::default();
-        self.repeat = Repeat::Off;
         self.queue = Arc::new(tracks);
         self.index = start.min(self.queue.len().saturating_sub(1));
         self.revision += 1;
@@ -526,7 +553,6 @@ impl PlaybackCore {
                     format!("{title}: {}", error.message)
                 });
                 self.failed = true;
-                self.last_failure = Some(error.clone());
                 outcome.failure = Some(error.clone());
 
                 let remote = self
@@ -545,6 +571,8 @@ impl PlaybackCore {
                 if error.retryable() {
                     // Keep the row/index and let the service reopen the
                     // stream at the stored position. No advance, no toast yet.
+                    self.anchor_position = failure_position;
+                    self.rebase = true;
                     self.retrying = true;
                     self.loading = false;
                     outcome.changed = true;
@@ -680,10 +708,11 @@ impl PlaybackCore {
     }
 
     fn clear_loading(&mut self, now_ns: u64, outcome: &mut Outcome) {
-        if !self.loading {
+        if !self.loading && !self.retrying {
             return;
         }
         self.loading = false;
+        self.retrying = false;
         // Start the playhead from *now*, not from the load, so a slow stream
         // does not show a position that was never audible.
         self.anchor_ns = now_ns;
@@ -715,7 +744,6 @@ impl PlaybackCore {
         if index >= self.queue.len() {
             return;
         }
-        self.repeat = Repeat::Off;
         self.history_push(self.index);
         if self.shuffle {
             self.shuffle_plan.retain(|candidate| *candidate != index);
@@ -926,8 +954,14 @@ impl PlaybackCore {
         self.index = next;
         if self.shuffle {
             self.shuffle_plan.retain(|candidate| *candidate != next);
+            if self.shuffle_plan.is_empty() && self.repeat == Repeat::All {
+                self.rebuild_shuffle_plan();
+            }
         }
         self.gapless_next = self.gapless_index();
+        outcome
+            .audio
+            .push(AudioCommand::SetNextUrl(self.next_url()));
         if self.crossfade.enabled {
             outcome
                 .audio
@@ -1093,6 +1127,8 @@ impl PlaybackCore {
         if index >= self.queue.len() {
             return;
         }
+        let old_next_url = self.next_url();
+        let old_crossfade = self.crossfade_allowed();
         let was_current = index == self.index;
         Arc::make_mut(&mut self.queue).remove(index);
         self.revision += 1;
@@ -1119,7 +1155,7 @@ impl PlaybackCore {
             self.start_current(false, outcome);
             return;
         }
-        self.gapless_next = self.gapless_index();
+        self.sync_gapless_next(old_next_url, old_crossfade, outcome);
     }
 
     fn remove_many(&mut self, indices: &[usize], outcome: &mut Outcome) {
@@ -1133,6 +1169,8 @@ impl PlaybackCore {
         if indices.is_empty() {
             return;
         }
+        let old_next_url = self.next_url();
+        let old_crossfade = self.crossfade_allowed();
         let old_index = self.index;
         let removed_current = indices.binary_search(&old_index).is_ok();
         let below = indices.partition_point(|&index| index < old_index);
@@ -1163,7 +1201,7 @@ impl PlaybackCore {
         if removed_current {
             self.start_current(false, outcome);
         } else {
-            self.gapless_next = self.gapless_index();
+            self.sync_gapless_next(old_next_url, old_crossfade, outcome);
         }
     }
 
@@ -1171,6 +1209,8 @@ impl PlaybackCore {
         if from >= self.queue.len() || to >= self.queue.len() || from == to {
             return;
         }
+        let old_next_url = self.next_url();
+        let old_crossfade = self.crossfade_allowed();
         let queue = Arc::make_mut(&mut self.queue);
         let track = queue.remove(from);
         queue.insert(to, track);
@@ -1194,7 +1234,7 @@ impl PlaybackCore {
             },
         });
         self.shuffle_after_edit();
-        self.gapless_next = self.gapless_index();
+        self.sync_gapless_next(old_next_url, old_crossfade, outcome);
     }
 
     fn move_block(&mut self, start: usize, len: usize, delta: i32, outcome: &mut Outcome) {
@@ -1211,6 +1251,8 @@ impl PlaybackCore {
         if new_start == start {
             return;
         }
+        let old_next_url = self.next_url();
+        let old_crossfade = self.crossfade_allowed();
         let old_index = self.index;
         let block: Vec<Track> = Arc::make_mut(&mut self.queue).drain(start..end).collect();
         Arc::make_mut(&mut self.queue).splice(new_start..new_start, block);
@@ -1240,13 +1282,15 @@ impl PlaybackCore {
             outcome.queue_reset = true;
         }
         self.shuffle_after_edit();
-        self.gapless_next = self.gapless_index();
+        self.sync_gapless_next(old_next_url, old_crossfade, outcome);
     }
 
     fn insert_rows(&mut self, at: usize, tracks: Vec<Track>, outcome: &mut Outcome) {
         if tracks.is_empty() {
             return;
         }
+        let old_next_url = self.next_url();
+        let old_crossfade = self.crossfade_allowed();
         let at = at.min(self.queue.len());
         let count = tracks.len();
         let was_empty = self.queue.is_empty();
@@ -1279,7 +1323,7 @@ impl PlaybackCore {
         } else {
             outcome.queue_reset = true;
         }
-        self.gapless_next = self.gapless_index();
+        self.sync_gapless_next(old_next_url, old_crossfade, outcome);
     }
 
     /// `shuffle queue`: permute the actual queue rows and restart from the
@@ -1313,6 +1357,8 @@ impl PlaybackCore {
         if self.shuffle == enabled {
             return;
         }
+        let old_next_url = self.next_url();
+        let old_crossfade = self.crossfade_allowed();
         self.shuffle = enabled;
         self.shuffle_plan.clear();
         if enabled {
@@ -1320,7 +1366,35 @@ impl PlaybackCore {
             // A single-row queue is still a valid (trivial) shuffle mode; the
             // flag is user state, not a promise that the next row differs.
         }
+        self.sync_gapless_next(old_next_url, old_crossfade, outcome);
         outcome.changed = true;
+    }
+
+    /// Recomputes `gapless_next` after an edit or mode change and notifies the
+    /// engine when a track is loaded and the upcoming URL or crossfade gate
+    /// changed.
+    fn sync_gapless_next(
+        &mut self,
+        old_next_url: Option<String>,
+        old_crossfade: bool,
+        outcome: &mut Outcome,
+    ) {
+        if self.state == State::Stopped || self.queue.is_empty() {
+            self.gapless_next = None;
+            return;
+        }
+        self.gapless_next = self.gapless_index();
+        let next_url = self.next_url();
+        let crossfade_allowed = self.crossfade_allowed();
+        let url_changed = next_url != old_next_url;
+        if url_changed {
+            outcome.audio.push(AudioCommand::SetNextUrl(next_url));
+        }
+        if self.crossfade.enabled && (url_changed || crossfade_allowed != old_crossfade) {
+            outcome
+                .audio
+                .push(AudioCommand::SetCrossfadeAllowed(crossfade_allowed));
+        }
     }
 
     fn set_track_favorite(&mut self, id: &str, favorite: bool, outcome: &mut Outcome) {
@@ -1405,5 +1479,111 @@ fn seconds_to_ms(seconds: f64) -> u32 {
         u32::MAX
     } else {
         millis as u32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::player::{ErrorStage, PlaybackError};
+
+    const SECOND: u64 = 1_000_000_000;
+
+    fn sample_tracks(count: usize) -> Vec<Track> {
+        (0..count)
+            .map(|index| Track {
+                item: crate::model::ItemMeta {
+                    id: index.to_string(),
+                    title: format!("Song {index}"),
+                    ..crate::model::ItemMeta::default()
+                },
+                artist: String::new(),
+                album: String::new(),
+                favorite: false,
+                duration: 100.0,
+                url: format!("file:///{index}.flac"),
+                cover_art: String::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn set_next_url_emitted_on_boundary_queue_edit_repeat_and_shuffle() {
+        let mut core = PlaybackCore::new();
+        core.load(sample_tracks(3), 0, false);
+        core.on_engine(EngineEvent::LoadingCleared, 0);
+
+        // 1. Boundary advances 0 -> 1 and arms 2 via SetNextUrl.
+        let boundary = core.on_engine(
+            EngineEvent::Boundary {
+                duration: 100.0,
+                stream_size: 1_000,
+                position: 0.0,
+            },
+            SECOND,
+        );
+        assert_eq!(core.index(), 1);
+        assert_eq!(
+            boundary.audio,
+            vec![AudioCommand::SetNextUrl(Some("file:///2.flac".to_string()))]
+        );
+
+        // 2. Queue edit removing the gapless-next row updates SetNextUrl(None).
+        let removed = core.apply(CoreCommand::Remove(2));
+        assert_eq!(removed.audio, vec![AudioCommand::SetNextUrl(None)]);
+
+        // 3. Appending a new row while at the tail arms it via SetNextUrl.
+        let appended = core.apply(CoreCommand::Append(vec![sample_tracks(4)[3].clone()]));
+        assert_eq!(
+            appended.audio,
+            vec![AudioCommand::SetNextUrl(Some("file:///3.flac".to_string()))]
+        );
+
+        // 4. Repeat One points gapless_next at the current row.
+        let repeat_one = core.apply(CoreCommand::CycleRepeat);
+        assert_eq!(core.repeat(), Repeat::One);
+        assert_eq!(
+            repeat_one.audio,
+            vec![AudioCommand::SetNextUrl(Some("file:///1.flac".to_string()))]
+        );
+
+        // 5. At the tail with Repeat Off, enabling Shuffle arms a shuffled row.
+        core.apply(CoreCommand::SetRepeat(Repeat::Off));
+        core.apply(CoreCommand::Jump(2));
+        assert_eq!(core.next_url(), None);
+        let shuffled = core.apply(CoreCommand::SetShuffle(true));
+        let expected_next = core.next_url();
+        assert!(expected_next.is_some());
+        assert_eq!(
+            shuffled.audio,
+            vec![AudioCommand::SetNextUrl(expected_next)]
+        );
+    }
+
+    #[test]
+    fn position_freezes_while_retrying() {
+        let mut core = PlaybackCore::new();
+        core.load(sample_tracks(2), 0, false);
+        core.on_engine(EngineEvent::FirstPcm, 0);
+        core.snapshot(1, 0);
+
+        // Play for 5 seconds, then hit a retryable network read error.
+        assert!((core.position_at(5 * SECOND) - 5.0).abs() < 1e-6);
+        let outcome = core.on_engine(
+            EngineEvent::Failed {
+                error: PlaybackError::classify(
+                    ErrorStage::Read,
+                    "decoder: connection reset by peer",
+                ),
+            },
+            5 * SECOND,
+        );
+        assert!(core.retrying());
+        assert_eq!(outcome.failure_position, Some(5.0));
+
+        // Even across snapshots and 7 seconds of retry backoff, the playhead stays at 5.0s.
+        let snap = core.snapshot(2, 6 * SECOND);
+        assert_eq!(snap.position_ms, 5_000);
+        assert!((core.position_at(12 * SECOND) - 5.0).abs() < 1e-6);
     }
 }

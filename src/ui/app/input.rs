@@ -25,26 +25,29 @@ impl AppRoot {
             self.line_search_key(event, _window, cx);
             return;
         }
-        if self.settings_open {
-            let key = event.keystroke.key.as_str();
-            let direction = match key {
-                "h" | "left" => -1,
-                "l" | "right" => 1,
-                _ => 0,
-            };
-            if direction != 0 {
-                cx.stop_propagation();
-                self.adjust_settings_row(direction);
-                cx.notify();
-                return;
-            }
+        // The Alt board is a surface above every overlay and keeps its raw
+        // modifier+key path while a modal is open; modal contexts only replace
+        // the `main` key map, so this must stay in front of them.
+        if self.alt_held || self.alt.armed {
+            cx.stop_propagation();
+            self.on_alt_key(event, cx);
+            return;
         }
-        if self.fullscreen
-            && !self.lyrics_overlay
-            && !self.alt_held
-            && !self.alt.armed
-            && !(self.search.is_some() && self.search_open)
-        {
+        // U-24: an open settings/description modal owns the keyboard. Its key
+        // context (set in `render.rs`) stops the `main` bindings from
+        // dispatching underneath it, so the modal's own keys are re-driven
+        // from the raw key stream here and everything else is swallowed.
+        if self.settings_open {
+            cx.stop_propagation();
+            self.settings_key(event, _window, cx);
+            return;
+        }
+        if self.description.is_some() {
+            cx.stop_propagation();
+            self.description_key(event, _window, cx);
+            return;
+        }
+        if self.fullscreen && !self.lyrics_overlay && !(self.search.is_some() && self.search_open) {
             let key = event.keystroke.key.as_str();
             if key == "tab" || key == "backtab" {
                 cx.stop_propagation();
@@ -53,16 +56,8 @@ impl AppRoot {
                 return;
             }
         }
-        if self.alt_held || self.alt.armed {
-            cx.stop_propagation();
-            self.on_alt_key(event, cx);
-            return;
-        }
-        let search_typing = self.search_open
-            && self
-                .search
-                .as_ref()
-                .is_some_and(|search| search.typing);
+        let search_typing =
+            self.search_open && self.search.as_ref().is_some_and(|search| search.typing);
         if !search_typing
             && let Some(key) = batchable_playback_key(
                 event.keystroke.key.as_str(),
@@ -159,15 +154,16 @@ impl AppRoot {
                     }
                     self.activate_search_result(cx);
                 }
-                "tab" | "l" | "right" => {
-                    if search_scope_backward(key, shift) {
-                        self.on_search_scope_prev(&SearchScopePrev, _window, cx);
-                    } else {
-                        self.on_search_scope_next(&SearchScopeNext, _window, cx);
+                // One h/l-style scope step; Shift-Tab reverses. The uppercase
+                // spellings cover the backends/IMEs that report the typed
+                // character in `key` (Shift-L arrives as `"L"` there; on
+                // X11/Wayland it is `"l"` plus the shift modifier).
+                "tab" | "backtab" | "l" | "right" | "L" | "h" | "left" | "H" => {
+                    match search_scope_step(key, shift) {
+                        Some(1) => self.on_search_scope_next(&SearchScopeNext, _window, cx),
+                        Some(-1) => self.on_search_scope_prev(&SearchScopePrev, _window, cx),
+                        Some(_) | None => {}
                     }
-                }
-                "backtab" | "h" | "left" => {
-                    self.on_search_scope_prev(&SearchScopePrev, _window, cx);
                 }
                 "v" | "V" => {
                     if let Some(search) = self.search.as_mut() {
@@ -182,7 +178,7 @@ impl AppRoot {
                     }
                     cx.notify();
                 }
-                "j" | "down" | "ctrl-n" | "ctrl-j" => {
+                "j" | "down" => {
                     if let Some(search) = self.search.as_mut() {
                         if shift {
                             let cursor = search.cursor();
@@ -193,7 +189,7 @@ impl AppRoot {
                     self.follow_search(true);
                     cx.notify();
                 }
-                "k" | "up" | "ctrl-p" | "ctrl-k" => {
+                "k" | "up" => {
                     if let Some(search) = self.search.as_mut() {
                         if shift {
                             let cursor = search.cursor();
@@ -218,27 +214,31 @@ impl AppRoot {
                     self.follow_search(true);
                     cx.notify();
                 }
-                "pagedown" | "ctrl-d" => {
-                    if let Some(search) = self.search.as_mut() {
-                        for _ in 0..state::SEARCH_VISIBLE_ROWS {
-                            search.move_cursor(1);
-                        }
-                    }
-                    self.follow_search(true);
+                "pagedown" => {
+                    self.search_move_page(1, state::SEARCH_VISIBLE_ROWS);
                     cx.notify();
                 }
-                "pageup" | "ctrl-u" => {
-                    if let Some(search) = self.search.as_mut() {
-                        for _ in 0..state::SEARCH_VISIBLE_ROWS {
-                            search.move_cursor(-1);
-                        }
-                    }
-                    self.follow_search(true);
+                "pageup" => {
+                    self.search_move_page(-1, state::SEARCH_VISIBLE_ROWS);
                     cx.notify();
                 }
-                "g" => {
+                // Vim half-page motions: GPUI spells a bare Ctrl chord as the
+                // letter plus the `control` modifier, so `"ctrl-d"` never
+                // matched before.
+                "d" if control => {
+                    self.search_move_page(1, half_page_rows());
+                    cx.notify();
+                }
+                "u" if control => {
+                    self.search_move_page(-1, half_page_rows());
+                    cx.notify();
+                }
+                // Vim `G`: jump to the last row of the scope. `Shift-G` is
+                // `"g"`+shift on X11/Wayland and `"G"` on the IME path.
+                "g" if shift => {
                     if let Some(search) = self.search.as_mut() {
-                        search.scope_cursors[search.scope] = 0;
+                        search.scope_cursors[search.scope] =
+                            search.scope_count(search.scope).saturating_sub(1);
                     }
                     self.follow_search(false);
                     cx.notify();
@@ -247,6 +247,13 @@ impl AppRoot {
                     if let Some(search) = self.search.as_mut() {
                         search.scope_cursors[search.scope] =
                             search.scope_count(search.scope).saturating_sub(1);
+                    }
+                    self.follow_search(false);
+                    cx.notify();
+                }
+                "g" => {
+                    if let Some(search) = self.search.as_mut() {
+                        search.scope_cursors[search.scope] = 0;
                     }
                     self.follow_search(false);
                     cx.notify();
@@ -284,14 +291,14 @@ impl AppRoot {
                 return;
             }
             "tab" | "backtab" => {
-                if search_scope_backward(key, shift) {
-                    self.on_search_scope_prev(&SearchScopePrev, _window, cx);
-                } else {
-                    self.on_search_scope_next(&SearchScopeNext, _window, cx);
+                match search_scope_step(key, shift) {
+                    Some(1) => self.on_search_scope_next(&SearchScopeNext, _window, cx),
+                    Some(-1) => self.on_search_scope_prev(&SearchScopePrev, _window, cx),
+                    Some(_) | None => {}
                 }
                 return;
             }
-            "up" | "ctrl-p" | "ctrl-k" => {
+            "up" => {
                 if let Some(search) = self.search.as_mut() {
                     search.move_cursor(-1);
                 }
@@ -299,7 +306,7 @@ impl AppRoot {
                 cx.notify();
                 return;
             }
-            "down" | "ctrl-n" | "ctrl-j" => {
+            "down" => {
                 if let Some(search) = self.search.as_mut() {
                     search.move_cursor(1);
                 }
@@ -324,22 +331,12 @@ impl AppRoot {
                 return;
             }
             "u" if control => {
-                if let Some(search) = self.search.as_mut() {
-                    for _ in 0..state::SEARCH_VISIBLE_ROWS {
-                        search.move_cursor(-1);
-                    }
-                }
-                self.follow_search(true);
+                self.search_move_page(-1, state::SEARCH_VISIBLE_ROWS);
                 cx.notify();
                 return;
             }
             "d" if control => {
-                if let Some(search) = self.search.as_mut() {
-                    for _ in 0..state::SEARCH_VISIBLE_ROWS {
-                        search.move_cursor(1);
-                    }
-                }
-                self.follow_search(true);
+                self.search_move_page(1, state::SEARCH_VISIBLE_ROWS);
                 cx.notify();
                 return;
             }
@@ -395,6 +392,96 @@ impl AppRoot {
         cx.notify();
     }
 
+    /// Keys of the isolated settings-modal context (U-24).
+    ///
+    /// The modal's own key context (set in `render.rs`) disables the `main`
+    /// key map, so the handlers those bindings used to call are re-driven from
+    /// the raw key stream here. Every other `main` chord is swallowed: it must
+    /// not move the list, toggle playback or walk the top bar behind the panel.
+    fn settings_key(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = event.keystroke.key.as_str();
+        let modifiers = event.keystroke.modifiers;
+        // Alt is dispatched to the Alt board before this handler runs; Alt
+        // without an armed board and the Super/Command chords belonged to the
+        // `main` map, so they stay inert under the modal.
+        if modifiers.alt || modifiers.platform {
+            return;
+        }
+        if modifiers.control {
+            if modifiers.shift {
+                // Ctrl-Shift-* shortcuts of the main map (queue reorder, EQ,
+                // normalization...) are not settings chords.
+                return;
+            }
+            match key {
+                "j" => self.on_move_down(&MoveDown, window, cx),
+                "k" => self.on_move_up(&MoveUp, window, cx),
+                // `Ctrl-,` opened the panel: keep the same chord closing it.
+                "," | "comma" => self.on_settings_overlay(&SettingsOverlay, window, cx),
+                _ => {}
+            }
+            return;
+        }
+        if modifiers.shift {
+            // Shifted letters were main-mode bindings (Shift-J/K, Shift-Q
+            // home, Shift-Enter fullscreen...): swallow them.
+            return;
+        }
+        match key {
+            "j" | "down" => self.on_move_down(&MoveDown, window, cx),
+            "k" | "up" => self.on_move_up(&MoveUp, window, cx),
+            "h" | "left" => {
+                self.adjust_settings_row(-1);
+                cx.notify();
+            }
+            "l" | "right" => {
+                self.adjust_settings_row(1);
+                cx.notify();
+            }
+            "enter" => self.on_enter(&Enter, window, cx),
+            "escape" | "q" => self.on_back(&Back, window, cx),
+            _ => {}
+        }
+    }
+
+    /// Keys of the isolated description-reader context (U-24).
+    ///
+    /// Mirrors the `main` chords the reader used to receive (j/k, Ctrl-D/U,
+    /// PageUp/PageDown, `g g`, `G`, Esc/q) and swallows the rest.
+    fn description_key(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let modifiers = event.keystroke.modifiers;
+        let armed_g = DESCRIPTION_PENDING_G.with(std::cell::Cell::get);
+        let (stroke, next_armed) = description_stroke(
+            event.keystroke.key.as_str(),
+            modifiers.control,
+            modifiers.shift,
+            modifiers.alt,
+            modifiers.platform,
+            armed_g,
+        );
+        DESCRIPTION_PENDING_G.with(|slot| slot.set(next_armed));
+        match stroke {
+            DescriptionStroke::ScrollDown => self.on_move_down(&MoveDown, window, cx),
+            DescriptionStroke::ScrollUp => self.on_move_up(&MoveUp, window, cx),
+            DescriptionStroke::PageDown => self.on_page_down(&PageDown, window, cx),
+            DescriptionStroke::PageUp => self.on_page_up(&PageUp, window, cx),
+            DescriptionStroke::Top => self.on_top(&Top, window, cx),
+            DescriptionStroke::Bottom => self.on_bottom(&Bottom, window, cx),
+            DescriptionStroke::Close => self.on_back(&Back, window, cx),
+            DescriptionStroke::ArmedG | DescriptionStroke::Ignored => {}
+        }
+    }
+
     pub(in crate::ui) fn on_key_up(
         &mut self,
         event: &gpui::KeyUpEvent,
@@ -418,18 +505,29 @@ impl AppRoot {
         cx.notify();
     }
 
-    /// Applies one held-key group as a single absolute op. One absolute target
-    /// per key release: the core owns the playhead and the volume, so a held key
-    /// (or a rapidly alternating pair) coalesces into one `Seek`/`SetVolume`.
+    /// Applies one held-key group as one relative op. Relative seeks/volume
+    /// steps never read a stale local anchor: the core resolves them against
+    /// its own playhead/volume, and the outbound queue sums pending
+    /// `SeekRelative` deltas, so rapid alternating taps cannot drop steps while
+    /// a round-trip is in flight.
     pub(in crate::ui) fn apply_playback_hold(&self, hold: KeyHold) {
         match hold.kind {
-            HoldKind::Seek => {
-                let target = (self.player.position_now() + hold.delta).max(0.0);
-                self.player.seek(target);
-            }
+            HoldKind::Seek => self.player.seek_relative(hold.delta),
             HoldKind::Volume => {
-                let target = (self.player.volume() + hold.delta).clamp(0.0, 100.0);
-                self.player.set_volume(target);
+                let steps = (hold.delta / HOLD_STEP).round() as i64;
+                // The core clamps to 0..=100, so more than a full range of
+                // steps in either direction cannot change the result.
+                let steps = steps.clamp(-20, 20);
+                let repeats = steps.unsigned_abs();
+                if steps > 0 {
+                    for _ in 0..repeats {
+                        self.player.volume_up();
+                    }
+                } else {
+                    for _ in 0..repeats {
+                        self.player.volume_down();
+                    }
+                }
             }
         }
     }
@@ -442,7 +540,56 @@ impl AppRoot {
         self.hold_toast = None;
     }
 
+    /// Moves the search cursor by `rows` rows in one step (negative = up) and
+    /// snaps the viewport to the new cursor row. Used by PageUp/PageDown and
+    /// the Ctrl-D/Ctrl-U half-page motions.
+    pub(in crate::ui) fn search_move_page(&mut self, direction: i8, rows: usize) {
+        if let Some(search) = self.search.as_mut() {
+            for _ in 0..rows {
+                search.move_cursor(i32::from(direction));
+            }
+        }
+        self.follow_search(true);
+    }
+
+    /// Validates the login form and, when complete, sends the credentials.
+    ///
+    /// Shared by the keyboard Enter path and the panel's submit button (U-29
+    /// mouse parity) so the busy guard and the field validation cannot drift.
+    pub(in crate::ui) fn login_submit(&mut self, cx: &mut Context<Self>) {
+        let Some(login) = self.login.as_mut() else {
+            return;
+        };
+        // A request is already in flight; a second submit must not issue a
+        // duplicate login.
+        if login.busy {
+            return;
+        }
+        if login.server.text.trim().is_empty()
+            || login.username.text.trim().is_empty()
+            || login.password.text.is_empty()
+        {
+            login.error = Some("Server, username and password are all required.".to_string());
+            cx.notify();
+            return;
+        }
+        login.busy = true;
+        login.error = None;
+        let server = login.server.text.trim().to_string();
+        let username = login.username.text.trim().to_string();
+        let password = login.password.text.clone();
+        self.bridge.login(server, username, password);
+        cx.notify();
+    }
+
     pub(in crate::ui) fn login_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
+        // Enter submits from any field through the same path the submit button
+        // uses; handling it before the field borrow keeps `login_submit`
+        // callable here.
+        if event.keystroke.key == "enter" {
+            self.login_submit(cx);
+            return;
+        }
         let Some(login) = self.login.as_mut() else {
             return;
         };
@@ -456,6 +603,10 @@ impl AppRoot {
             1 => &mut login.username,
             _ => &mut login.password,
         };
+        // The password input is always painted masked; copying its selection
+        // would put the plaintext on the clipboard, so both clipboard writes
+        // are refused on that field.
+        let masked = login.field == 2;
         match key {
             "escape" if login.mode == LoginMode::AddAccount => {
                 self.login = None;
@@ -464,22 +615,6 @@ impl AppRoot {
             }
             "tab" => login.field = (login.field + 1) % 3,
             "backtab" => login.field = (login.field + 2) % 3,
-            "enter" => {
-                if login.server.text.trim().is_empty()
-                    || login.username.text.trim().is_empty()
-                    || login.password.text.is_empty()
-                {
-                    login.error =
-                        Some("Server, username and password are all required.".to_string());
-                } else {
-                    login.busy = true;
-                    login.error = None;
-                    let server = login.server.text.trim().to_string();
-                    let username = login.username.text.trim().to_string();
-                    let password = login.password.text.clone();
-                    self.bridge.login(server, username, password);
-                }
-            }
             "f2" => {
                 if login.offline_available {
                     let server = login.server.text.trim().to_string();
@@ -488,11 +623,17 @@ impl AppRoot {
                 }
             }
             "c" if control => {
+                if masked {
+                    return;
+                }
                 if let Some(text) = field.copy_selection() {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
                 }
             }
             "x" if control => {
+                if masked {
+                    return;
+                }
                 if let Some(text) = field.cut_selection() {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
                 }
@@ -522,12 +663,7 @@ impl AppRoot {
 
 /// Playback key families must not steal modified shortcuts: `Ctrl-,` opens
 /// settings and `Ctrl-.` is a future surface, while bare `,`/`.` seek.
-fn batchable_playback_key(
-    key: &str,
-    control: bool,
-    alt: bool,
-    platform: bool,
-) -> Option<char> {
+fn batchable_playback_key(key: &str, control: bool, alt: bool, platform: bool) -> Option<char> {
     if control || alt || platform {
         return None;
     }
@@ -544,15 +680,109 @@ fn batched_playback_key(key: &str) -> Option<char> {
     }
 }
 
-/// Shift+Tab may arrive as `backtab` or as `tab` with the shift modifier
-/// depending on the platform; both reverse the search scope cycle.
-fn search_scope_backward(key: &str, shift: bool) -> bool {
-    key == "backtab" || shift
+/// Half-page row count for the Ctrl-D/Ctrl-U motions (at least one row, so a
+/// list shorter than the visible window still moves).
+fn half_page_rows() -> usize {
+    (state::SEARCH_VISIBLE_ROWS / 2).max(1)
+}
+
+/// The search-scope step a key names: `h`/`left`/Shift-Tab move backward,
+/// `l`/`right`/Tab forward. Shift-Tab may arrive as `backtab` or as `tab` with
+/// the shift modifier depending on the platform; both reverse the cycle.
+/// Uppercase letters are the IME-commit spelling of the shifted letter.
+fn search_scope_step(key: &str, shift: bool) -> Option<i8> {
+    match key {
+        "backtab" | "h" | "left" | "H" => Some(-1),
+        "tab" if shift => Some(-1),
+        "tab" | "l" | "right" | "L" => Some(1),
+        _ => None,
+    }
+}
+
+thread_local! {
+    /// First-`g` latch of the description reader's two-stroke `g g` motion.
+    /// The reader's isolated key context cannot use the keymap's multi-key
+    /// bindings, so the sequence is resolved in [`description_stroke`].
+    static DESCRIPTION_PENDING_G: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// One resolved key stroke of the description reader's isolated key context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DescriptionStroke {
+    /// One text line down (`j`, Down).
+    ScrollDown,
+    /// One text line up (`k`, Up).
+    ScrollUp,
+    /// One viewport down (Ctrl-D, PageDown).
+    PageDown,
+    /// One viewport up (Ctrl-U, PageUp).
+    PageUp,
+    /// Reader start (second stroke of `g g`).
+    Top,
+    /// Reader end (`G`).
+    Bottom,
+    /// Dismiss the reader (Esc, q).
+    Close,
+    /// First stroke of `g g`: armed, no motion yet.
+    ArmedG,
+    /// A `main`-context chord: swallow it while the reader owns the keyboard.
+    Ignored,
+}
+
+/// Resolves one description-reader key event, returning the stroke and the new
+/// `g g` armed state. Every non-`g` key disarms the sequence.
+fn description_stroke(
+    key: &str,
+    control: bool,
+    shift: bool,
+    alt: bool,
+    platform: bool,
+    armed_g: bool,
+) -> (DescriptionStroke, bool) {
+    // Alt is dispatched to the Alt board before this resolver runs; the
+    // remaining modifier chords belonged to the `main` map.
+    if alt || platform {
+        return (DescriptionStroke::Ignored, false);
+    }
+    if control {
+        if shift {
+            return (DescriptionStroke::Ignored, false);
+        }
+        let stroke = match key {
+            "d" => DescriptionStroke::PageDown,
+            "u" => DescriptionStroke::PageUp,
+            "j" => DescriptionStroke::ScrollDown,
+            "k" => DescriptionStroke::ScrollUp,
+            _ => DescriptionStroke::Ignored,
+        };
+        return (stroke, false);
+    }
+    if shift {
+        // `G` (arriving as `"G"` or as `"g"` plus shift) ends the reader;
+        // the other shifted chords were main-mode bindings.
+        let stroke = match key {
+            "G" | "g" => DescriptionStroke::Bottom,
+            _ => DescriptionStroke::Ignored,
+        };
+        return (stroke, false);
+    }
+    match key {
+        "escape" | "q" => (DescriptionStroke::Close, false),
+        "j" | "down" => (DescriptionStroke::ScrollDown, false),
+        "k" | "up" => (DescriptionStroke::ScrollUp, false),
+        "pagedown" => (DescriptionStroke::PageDown, false),
+        "pageup" => (DescriptionStroke::PageUp, false),
+        // IME backends report the shifted character without the modifier.
+        "G" => (DescriptionStroke::Bottom, false),
+        "g" if armed_g => (DescriptionStroke::Top, false),
+        "g" => (DescriptionStroke::ArmedG, true),
+        _ => (DescriptionStroke::Ignored, false),
+    }
 }
 
 #[cfg(test)]
 mod search_scope_tests {
-    use super::{batchable_playback_key, search_scope_backward};
+    use super::{batchable_playback_key, search_scope_step};
 
     #[test]
     fn modified_playback_punctuation_is_not_swallowed() {
@@ -562,11 +792,88 @@ mod search_scope_tests {
         assert_eq!(batchable_playback_key(",", false, false, false), Some(','));
     }
 
+    /// U-16: `Shift-L` must move the search scope forward (it used to be
+    /// routed through the Shift-Tab reversal), and both the printed-key and
+    /// typed-character spellings are recognized.
     #[test]
-    fn tab_forward_and_shift_tab_reverse() {
-        assert!(!search_scope_backward("tab", false));
-        assert!(search_scope_backward("tab", true));
-        assert!(search_scope_backward("backtab", false));
-        assert!(search_scope_backward("backtab", true));
+    fn h_l_and_tab_move_the_scope_in_the_right_direction() {
+        assert_eq!(search_scope_step("l", false), Some(1));
+        assert_eq!(search_scope_step("l", true), Some(1));
+        assert_eq!(search_scope_step("L", false), Some(1));
+        assert_eq!(search_scope_step("right", true), Some(1));
+        assert_eq!(search_scope_step("tab", false), Some(1));
+        assert_eq!(search_scope_step("tab", true), Some(-1));
+        assert_eq!(search_scope_step("h", false), Some(-1));
+        assert_eq!(search_scope_step("H", false), Some(-1));
+        assert_eq!(search_scope_step("backtab", false), Some(-1));
+        assert_eq!(search_scope_step("j", true), None);
+    }
+}
+
+#[cfg(test)]
+mod isolated_modal_key_tests {
+    use super::{DescriptionStroke, description_stroke};
+
+    #[test]
+    fn description_reader_keeps_its_main_bindings() {
+        let plain = |key| description_stroke(key, false, false, false, false, false).0;
+        assert_eq!(plain("j"), DescriptionStroke::ScrollDown);
+        assert_eq!(plain("down"), DescriptionStroke::ScrollDown);
+        assert_eq!(plain("k"), DescriptionStroke::ScrollUp);
+        assert_eq!(plain("up"), DescriptionStroke::ScrollUp);
+        assert_eq!(plain("pagedown"), DescriptionStroke::PageDown);
+        assert_eq!(plain("pageup"), DescriptionStroke::PageUp);
+        assert_eq!(plain("escape"), DescriptionStroke::Close);
+        assert_eq!(plain("q"), DescriptionStroke::Close);
+        assert_eq!(
+            description_stroke("d", true, false, false, false, false).0,
+            DescriptionStroke::PageDown
+        );
+        assert_eq!(
+            description_stroke("u", true, false, false, false, false).0,
+            DescriptionStroke::PageUp
+        );
+        assert_eq!(plain("G"), DescriptionStroke::Bottom);
+        assert_eq!(
+            description_stroke("g", false, true, false, false, false).0,
+            DescriptionStroke::Bottom
+        );
+    }
+
+    #[test]
+    fn description_reader_swallows_main_mode_chords() {
+        let stroke =
+            |key, control, shift| description_stroke(key, control, shift, false, false, false).0;
+        // Keys the `main` map would have acted on underneath the reader.
+        assert_eq!(stroke("space", false, false), DescriptionStroke::Ignored);
+        assert_eq!(stroke("m", false, false), DescriptionStroke::Ignored);
+        assert_eq!(stroke("tab", false, false), DescriptionStroke::Ignored);
+        assert_eq!(stroke("q", false, true), DescriptionStroke::Ignored);
+        assert_eq!(stroke("enter", false, false), DescriptionStroke::Ignored);
+        assert_eq!(stroke("f", true, false), DescriptionStroke::Ignored);
+        assert_eq!(stroke("j", true, true), DescriptionStroke::Ignored);
+        assert_eq!(
+            description_stroke("j", false, false, false, true, false).0,
+            DescriptionStroke::Ignored
+        );
+    }
+
+    #[test]
+    fn description_reader_gg_needs_two_strokes_and_other_keys_disarm_it() {
+        let (first, armed) = description_stroke("g", false, false, false, false, false);
+        assert_eq!(first, DescriptionStroke::ArmedG);
+        assert!(armed);
+        let (second, armed) = description_stroke("g", false, false, false, false, true);
+        assert_eq!(second, DescriptionStroke::Top);
+        assert!(!armed);
+        // A different stroke after the first `g` drops the sequence.
+        let (other, armed) = description_stroke("j", false, false, false, false, true);
+        assert_eq!(other, DescriptionStroke::ScrollDown);
+        assert!(!armed);
+        // `G` after an armed `g` is the end jump, not a second `g`.
+        assert_eq!(
+            description_stroke("G", false, false, false, false, true),
+            (DescriptionStroke::Bottom, false)
+        );
     }
 }

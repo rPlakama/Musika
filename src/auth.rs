@@ -36,11 +36,19 @@ pub async fn offline(server_url: &str, username: &str) -> Result<Account> {
 /// Opens the stored account's data root and swaps the process-wide pools.
 pub(crate) async fn switch_storage(account: &crate::accounts::Account) -> Result<()> {
     crate::accounts::ensure_data_root(account)?;
-    if crate::db::data_root()? == account.data_root {
+    let previous_root = crate::db::data_root()?;
+    if previous_root == account.data_root {
         return Ok(());
     }
     crate::db::set_data_root(account.data_root.clone());
-    let dbs = crate::db::init().await?;
+    let dbs = match crate::db::init().await {
+        Ok(dbs) => dbs,
+        Err(err) => {
+            crate::db::set_data_root(previous_root);
+            return Err(err);
+        }
+    };
+    crate::offline::clear_cache();
     crate::app::set_dbs(dbs);
     crate::session::invalidate().await;
     Ok(())
@@ -59,11 +67,19 @@ pub async fn downloaded_available() -> bool {
 /// Opens the legacy/bootstrap root after the last account is removed.
 pub(crate) async fn open_empty_root() -> Result<()> {
     let root = crate::db::config_dir()?;
-    if crate::db::data_root()? == root {
+    let previous_root = crate::db::data_root()?;
+    if previous_root == root {
         return Ok(());
     }
     crate::db::set_data_root(root);
-    let dbs = crate::db::init().await?;
+    let dbs = match crate::db::init().await {
+        Ok(dbs) => dbs,
+        Err(err) => {
+            crate::db::set_data_root(previous_root);
+            return Err(err);
+        }
+    };
+    crate::offline::clear_cache();
     crate::app::set_dbs(dbs);
     crate::session::invalidate().await;
     Ok(())

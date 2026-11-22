@@ -1,33 +1,80 @@
 use super::common::*;
 use crate::covers::*;
 
-/// FIX-2: a claimed id blocks its duplicates until the owning task
-/// releases it (test keys use a unique prefix; the registries are
-/// process-global).
+/// FIX-2/N-10: a claimed id blocks its duplicates until the owning guard is
+/// dropped; a panic/cancellation drops it too (test keys use a unique prefix;
+/// the registries are process-global).
 #[test]
-fn a_claimed_id_blocks_until_released() {
+fn a_claimed_id_blocks_until_the_guard_is_dropped() {
     let fetch_id = format!("claim-test-{}", std::process::id());
     let thumb_name = format!("claim-test-thumb-{}.jpg", std::process::id());
-    assert!(claim_fetch(&fetch_id));
-    assert!(!claim_fetch(&fetch_id), "duplicate claim is skipped");
-    release_fetch(fetch_id.clone());
-    assert!(claim_fetch(&fetch_id), "released ids claim again");
-    release_fetch(fetch_id);
+    let guard = claim_fetch(&fetch_id).expect("first claim wins");
+    assert!(
+        claim_fetch(&fetch_id).is_none(),
+        "duplicate claim is skipped"
+    );
+    drop(guard);
+    let reopened = claim_fetch(&fetch_id).expect("a dropped claim re-opens the id");
+    drop(reopened);
 
-    assert!(claim_thumb(&thumb_name));
-    assert!(!claim_thumb(&thumb_name));
-    release_thumb(thumb_name.clone());
-    assert!(claim_thumb(&thumb_name));
-    release_thumb(thumb_name);
+    let thumb_guard = claim_thumb(&thumb_name).expect("thumb claim");
+    assert!(
+        claim_thumb(&thumb_name).is_none(),
+        "duplicate thumb claim skipped"
+    );
+    drop(thumb_guard);
+    let reopened = claim_thumb(&thumb_name).expect("a dropped thumb claim re-opens it");
+    drop(reopened);
 }
 
+/// A real encoded PNG fixture: `store_art` validates the image header now
+/// (N-01), so magic-byte-only fakes no longer pass.
+fn png_bytes(width: u32, height: u32) -> Vec<u8> {
+    let image = image::RgbaImage::from_pixel(width, height, image::Rgba([10, 20, 30, 255]));
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .expect("encode png fixture");
+    bytes.into_inner()
+}
+
+fn jpeg_bytes(width: u32, height: u32) -> Vec<u8> {
+    let image = image::RgbImage::from_pixel(width, height, image::Rgb([10, 20, 30]));
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(image)
+        .write_to(&mut bytes, image::ImageFormat::Jpeg)
+        .expect("encode jpeg fixture");
+    bytes.into_inner()
+}
+
+/// N-12: the bytes decide the format, not the `Content-Type`; N-01: a body
+/// that is not an image is rejected even when the header claims one.
 #[test]
-fn extension_from_content_type() {
-    assert_eq!(extension(Some("image/jpeg")), "jpg");
-    assert_eq!(extension(Some("image/png; charset=binary")), "png");
-    assert_eq!(extension(Some("image/webp")), "webp");
-    assert_eq!(extension(None), "img");
-    assert_eq!(extension(Some("application/octet-stream")), "img");
+fn store_art_sniffs_the_real_format_and_rejects_non_images() {
+    let error = br#"{"subsonic-response":{"status":"failed","error":{"code":10,"message":"bad"}}}"#
+        .to_vec();
+    assert!(
+        store_art(error, Some("image/jpeg")).is_none(),
+        "a JSON error envelope must never be cached as cover art"
+    );
+    assert!(
+        store_art(
+            b"<!doctype html><html><body>login</body></html>".to_vec(),
+            Some("image/png")
+        )
+        .is_none(),
+        "an HTML login page must never be cached as cover art"
+    );
+
+    let jpeg = jpeg_bytes(16, 16);
+    let (bytes, extension, content_type) =
+        store_art(jpeg.clone(), Some("image/png")).expect("sniffed art is stored");
+    assert_eq!(bytes, jpeg);
+    assert_eq!(
+        extension, "jpg",
+        "a content-type that disagrees with the bytes loses"
+    );
+    assert_eq!(content_type.as_deref(), Some("image/jpeg"));
 }
 
 #[test]
@@ -89,7 +136,7 @@ fn malformed_and_oversize_svg_are_rejected() {
 
 #[test]
 fn raster_decoded_art_passes_through() {
-    let png = b"\x89PNG\r\n\x1a\nfake".to_vec();
+    let png = png_bytes(8, 8);
     let (bytes, extension, content_type) =
         store_art(png.clone(), Some("image/png")).expect("raster art passes through");
     assert_eq!(bytes, png);
@@ -127,12 +174,13 @@ async fn apply_fetched_stores_new_art_and_handles_revalidation() {
     let mut report = CoverReport::default();
     let mut jobs = Vec::new();
 
+    let png = png_bytes(8, 8);
     let art = CoverArt {
         not_modified: false,
         etag: Some("\"v1\"".to_string()),
         last_modified: None,
         content_type: Some("image/png".to_string()),
-        bytes: b"\x89PNG\r\n\x1a\nfake".to_vec(),
+        bytes: png.clone(),
     };
     apply_fetched(&pool, &dir, &known, "cov1", Ok(art), &mut report, &mut jobs)
         .await
@@ -145,16 +193,21 @@ async fn apply_fetched_stores_new_art_and_handles_revalidation() {
             .fetch_one(&pool)
             .await
             .expect("cover row");
-    assert!(file.ends_with(".png"), "content type picks the extension");
+    assert!(
+        file.ends_with(".png"),
+        "the sniffed image format picks the extension"
+    );
     assert_eq!(hash.len(), 32);
-    assert_eq!(size, 12);
+    assert_eq!(size, png.len() as i64);
     assert!(dir.join(&file).is_file());
     assert_eq!(jobs[0].1, dir.join(&file));
 
+    // N-21: a 304 may carry refreshed validators; they must be stored, not
+    // dropped in favour of the request copy.
     let revalidated = CoverArt {
         not_modified: true,
-        etag: None,
-        last_modified: None,
+        etag: Some("\"v2\"".to_string()),
+        last_modified: Some("Wed, 21 Oct 2026 07:28:00 GMT".to_string()),
         content_type: None,
         bytes: Vec::new(),
     };
@@ -171,6 +224,17 @@ async fn apply_fetched_stores_new_art_and_handles_revalidation() {
     .expect("touch cover");
     assert_eq!(report.unchanged, 1);
     assert_eq!(jobs.len(), 1, "a 304 never queues a thumbnail");
+    let (etag, last_modified): (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT etag, last_modified FROM covers WHERE id = 'cov1'")
+            .fetch_one(&pool)
+            .await
+            .expect("refreshed validators");
+    assert_eq!(etag.as_deref(), Some("\"v2\""), "refreshed ETag stored");
+    assert_eq!(
+        last_modified.as_deref(),
+        Some("Wed, 21 Oct 2026 07:28:00 GMT"),
+        "refreshed Last-Modified stored"
+    );
 
     _ = std::fs::remove_dir_all(dir);
 }
@@ -340,4 +404,44 @@ async fn cap_cached_oversized_migrates_a_cached_giant() {
     assert_eq!(width.max(height), crate::covers::COVER_MAX_EDGE);
 
     _ = std::fs::remove_dir_all(dir);
+}
+
+/// N-20: the on-demand cover pass reads only the ids it was asked about. A
+/// full refresh still needs the whole table, because it purges and backfills
+/// every cached row.
+#[tokio::test]
+async fn known_covers_reads_only_the_requested_ids_on_demand() {
+    let pool = crate::test::memory_pool(sqlx::migrate!("./migrations_media")).await;
+    for id in ["cov1", "cov2", "cov3", "artist-image-1"] {
+        sqlx::query(
+            "INSERT INTO covers (id, file, hash, etag, last_modified, fetched_at)
+             VALUES (?1, ?2, NULL, NULL, NULL, '0')",
+        )
+        .bind(id)
+        .bind(format!("{id}.jpg"))
+        .execute(&pool)
+        .await
+        .expect("insert cover row");
+    }
+
+    let requested: std::collections::BTreeSet<String> = [
+        "cov3".to_string(),
+        "cov1".to_string(),
+        "missing".to_string(),
+    ]
+    .into_iter()
+    .collect();
+    let known = known_covers(&pool, &requested, false)
+        .await
+        .expect("targeted load");
+    let mut ids: Vec<&str> = known.keys().map(String::as_str).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["cov1", "cov3"], "only the requested rows are read");
+
+    // The full pass keeps its whole-table read: the purge/backfill loops need
+    // rows the caller did not reference.
+    let known = known_covers(&pool, &requested, true)
+        .await
+        .expect("full load");
+    assert_eq!(known.len(), 4, "a full pass sees every cached row");
 }

@@ -224,10 +224,28 @@ fn m3u_line(value: &str) -> String {
     value.replace(['\r', '\n'], " ").trim().to_string()
 }
 
-/// A list-friendly file name inside `dir`. The sanitized playlist name is the
-/// file identity: saving the same name again overwrites that mix instead of
+/// A stable 32-bit FNV-1a hash of `name`. Playlist file names outlive one
+/// process, so the hash must be deterministic forever: `DefaultHasher` only
+/// promises within-run stability and would silently rename every playlist
+/// whose name needed sanitizing on the next Rust upgrade.
+fn m3u_name_hash(name: &str) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    for byte in name.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
+/// A list-friendly file name. The sanitized playlist name is the file
+/// identity: saving the same name again overwrites that mix instead of
 /// creating a near-duplicate with a timestamp suffix.
-fn m3u_filename(_dir: &Path, name: &str) -> String {
+///
+/// A name that had to lose characters also carries a stable hash of the
+/// original, because the sanitizer is many-to-one (`A/B` and `A:B` both want
+/// `A-B.m3u`). Without it, creating the second playlist would silently
+/// replace the first one's file.
+pub(crate) fn m3u_filename(name: &str) -> String {
     let mut safe = String::new();
     for ch in name.chars() {
         if ch.is_alphanumeric() || matches!(ch, ' ' | '-' | '_' | '(' | ')' | '&' | '\'' | '·') {
@@ -238,7 +256,11 @@ fn m3u_filename(_dir: &Path, name: &str) -> String {
     }
     let safe = safe.trim().trim_end_matches('-').trim();
     let safe = if safe.is_empty() { "Playlist" } else { safe };
-    format!("{safe}.m3u")
+    if safe == name {
+        format!("{safe}.m3u")
+    } else {
+        format!("{safe}-{:08x}.m3u", m3u_name_hash(name))
+    }
 }
 
 /// Creates or replaces a local playlist from song ids: writes the named M3U
@@ -248,11 +270,14 @@ fn m3u_filename(_dir: &Path, name: &str) -> String {
 pub async fn create_local(dbs: &Dbs, name: &str, song_ids: &[String]) -> Result<PathBuf> {
     let (name, ids) = checked_playlist(name, song_ids)?;
     let dir = m3u_dir()?;
-    std::fs::create_dir_all(&dir)
+    tokio::fs::create_dir_all(&dir)
+        .await
         .with_context(|| format!("creating the playlist folder {}", dir.display()))?;
     let text = m3u_text(dbs, &ids).await?;
-    let path = dir.join(m3u_filename(&dir, name));
-    std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;
+    let path = dir.join(m3u_filename(name));
+    // N-15: temp file + rename, so a crash mid-write never leaves a truncated
+    // playlist behind (and a reader never sees a half-written body).
+    write_text_atomic(&path, &text).await?;
     scan_dir(dbs, &dir).await?;
     Ok(path)
 }
@@ -274,28 +299,6 @@ pub async fn create_remote(dbs: &Dbs, name: &str, song_ids: &[String]) -> Result
         .await
         .context("refreshing the server playlist list")?;
     Ok(())
-}
-
-/// One call for both sources: always writes the app-owned local M3U, then
-/// mirrors it to the server when online. Following the saved-radio rule, a
-/// failed server copy is logged rather than discarding the local playlist
-/// (the returned path is the local file that survived).
-pub async fn create(dbs: &Dbs, name: &str, song_ids: &[String], offline: bool) -> Result<PathBuf> {
-    let path = create_local(dbs, name, song_ids).await?;
-    if !offline && let Err(err) = create_remote(dbs, name, song_ids).await {
-        eprintln!("playlists: saved locally, server copy failed: {err:#}");
-    }
-    Ok(path)
-}
-
-/// The segment refresh: the m3u scan plus the Subsonic list. A server hit
-/// that fails is non-fatal — the cached rows and the m3u half still serve.
-pub async fn refresh(dbs: &Dbs, client: &SubsonicClient) -> Result<Vec<crate::model::Row>> {
-    scan_dir(dbs, &m3u_dir()?).await?;
-    if let Err(err) = refresh_subsonic(dbs, client).await {
-        eprintln!("playlists: could not refresh from the server: {err:#}");
-    }
-    list(dbs).await
 }
 
 /// Refreshes the Subsonic half from `getPlaylists`: upserts the rows and
@@ -519,61 +522,73 @@ async fn load_songs(pool: &SqlitePool) -> Result<Vec<SongRef>> {
         .collect())
 }
 
-/// Scans the default m3u folder into `playlist.db` and returns the segment
-/// rows so one call serves the UI.
-pub async fn scan(dbs: &Dbs) -> Result<Vec<crate::model::Row>> {
-    scan_dir(dbs, &m3u_dir()?).await
+/// One M3U file read by the blocking scanner, before it is stored.
+struct ScannedM3u {
+    id: String,
+    name: String,
+    path: PathBuf,
+    mtime: i64,
+    entries: Vec<M3uEntry>,
+}
+
+/// Reads every `.m3u`/`.m3u8` under `dir` and parses it. This is the only
+/// part of [`scan_dir`] that blocks on the filesystem: it runs on the blocking
+/// pool, so a slow disk or a network mount cannot stall an async worker.
+fn read_m3u_folder(dir: &Path) -> (Vec<ScannedM3u>, Vec<String>) {
+    let mut files: Vec<ScannedM3u> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return (files, seen);
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if ext != "m3u" && ext != "m3u8" {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let id = format!("m3u:{name}");
+        // Marked seen before the read: an unreadable file keeps its previous
+        // rows instead of being purged as vanished.
+        seen.push(id.clone());
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let mtime = entry
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        files.push(ScannedM3u {
+            id,
+            name,
+            path,
+            mtime,
+            entries: parse_m3u(&text),
+        });
+    }
+    (files, seen)
 }
 
 /// [`scan`] against an explicit folder (the test seam).
 pub async fn scan_dir(dbs: &Dbs, dir: &Path) -> Result<Vec<crate::model::Row>> {
-    _ = std::fs::create_dir_all(dir);
-
-    struct ScannedM3u {
-        id: String,
-        name: String,
-        path: PathBuf,
-        mtime: i64,
-        entries: Vec<M3uEntry>,
+    if let Err(err) = tokio::fs::create_dir_all(dir).await {
+        eprintln!(
+            "playlists: could not create the playlist folder {}: {err}",
+            dir.display()
+        );
     }
 
-    let mut files: Vec<ScannedM3u> = Vec::new();
-    let mut seen: Vec<String> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            if ext != "m3u" && ext != "m3u8" {
-                continue;
-            }
-            let name = entry.file_name().to_string_lossy().to_string();
-            let id = format!("m3u:{name}");
-            // Marked seen before the read: an unreadable file keeps its
-            // previous rows instead of being purged as vanished.
-            seen.push(id.clone());
-            let Ok(text) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let mtime = entry
-                .metadata()
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            files.push(ScannedM3u {
-                id,
-                name,
-                path,
-                mtime,
-                entries: parse_m3u(&text),
-            });
-        }
-    }
+    let (files, seen) = {
+        let dir = dir.to_path_buf();
+        in_blocking(move || Ok(read_m3u_folder(&dir))).await?
+    };
 
     // MEMORY: only read the library when a playlist actually has entries to
     // resolve. Opening the Playlists segment used to load every song and
@@ -632,18 +647,11 @@ async fn store_file(
     let dir = file.parent().unwrap_or_else(|| Path::new("."));
     let now = crate::consts::now_secs();
 
-    // The file is the source of truth, so duplicates left by an external edit
-    // or an old bug are removed physically here (the first occurrence stays),
-    // not just hidden from the stored rows.
+    // The parsed file is deduplicated for the stored rows only. N-15: the
+    // scan never rewrites the user's `.m3u` — it is read-only here, and the
+    // duplicate-free file shape is only written back by an explicit edit
+    // (add/remove/move), never as a side effect of opening the segment.
     let deduped = dedup_m3u_entries(entries.to_vec(), matcher, songs, dir);
-    if deduped.len() != entries.len()
-        && let Err(err) = write_m3u_entries(file, &deduped)
-    {
-        eprintln!(
-            "playlists: could not rewrite {} without duplicates: {err:#}",
-            file.display()
-        );
-    }
 
     let mut duration_total: i64 = 0;
     let mut resolved: Vec<(i64, Option<&SongRef>, &M3uEntry)> = Vec::new();
@@ -813,9 +821,7 @@ fn playlist_segment_row(
 }
 
 /// First non-empty entry cover per playlist, in position order.
-async fn first_playlist_covers(
-    dbs: &Dbs,
-) -> Result<std::collections::HashMap<String, String>> {
+async fn first_playlist_covers(dbs: &Dbs) -> Result<std::collections::HashMap<String, String>> {
     let entries: Vec<(String, Option<String>)> = sqlx::query_as(
         "SELECT playlist_id, cover_art FROM playlist_song
          WHERE cover_art IS NOT NULL AND cover_art != ''
@@ -884,16 +890,16 @@ pub async fn list_filtered(dbs: &Dbs, downloaded_only: bool) -> Result<Vec<crate
 /// M2: fetch one Subsonic playlist's contents on demand. The list refresh only
 /// stores identities; the page is the first place that needs the ordered
 /// entries. Positions are rewritten so server reorders are exact, and the
-/// keep-first cleanup removes duplicate entries from both the cache and (best
-/// effort) the server copy without re-entering this loader.
+/// keep-first cleanup deduplicates the cached rows. N-03: this loader is a
+/// read/cache path, never a server write — it must not remove or re-add the
+/// server copy just because a page was opened (that cleanup is the explicit
+/// [`dedupe_playlist`] action).
 async fn load_subsonic_songs(dbs: &Dbs, client: &SubsonicClient, playlist_id: &str) -> Result<()> {
     let page = client.get_playlist(playlist_id).await?;
-    let current_order: Vec<String> = page.entry.iter().map(|song| song.id.clone()).collect();
     let deduped = dedup_keep_first(page.entry, |song| {
         let id = song.id.trim();
         (!id.is_empty()).then(|| id.to_string())
     });
-    let duplicates = deduped.len() != current_order.len();
 
     let mut tx = dbs.playlist.begin().await?;
     sqlx::query("DELETE FROM playlist_song WHERE playlist_id = ?1")
@@ -938,27 +944,6 @@ async fn load_subsonic_songs(dbs: &Dbs, client: &SubsonicClient, playlist_id: &s
             .await?;
     }
     tx.commit().await?;
-
-    if duplicates {
-        let deduped_order: Vec<String> = deduped.into_iter().map(|song| song.id).collect();
-        match clean_server_duplicate_entries(client, playlist_id, &current_order, &deduped_order)
-            .await
-        {
-            Ok(()) => {
-                // The list carries the song count/duration the page header and
-                // the Playlists list use; only a successful cleanup can make
-                // them agree with the deduplicated server copy.
-                if let Err(err) = refresh_subsonic(dbs, client).await {
-                    eprintln!("playlists: could not refresh after cleaning duplicates: {err:#}");
-                } else {
-                    refresh_playlist_cover(dbs, client, playlist_id).await;
-                }
-            }
-            Err(err) => {
-                eprintln!("playlists: could not clean duplicates from {playlist_id}: {err:#}");
-            }
-        }
-    }
     Ok(())
 }
 
@@ -1003,17 +988,12 @@ async fn server_playlist_order(
 /// Playlist cover images are regenerated server-side when entries change,
 /// often under the same id. Force one download so the list/search thumbnails
 /// show the new image instead of the stale conditional-cache copy.
-async fn refresh_playlist_cover(
-    dbs: &Dbs,
-    client: &SubsonicClient,
-    playlist_id: &str,
-) {
-    let Ok(Some(Some(cover))) = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT cover_art FROM playlist WHERE id = ?1",
-    )
-    .bind(playlist_id)
-    .fetch_optional(&dbs.playlist)
-    .await
+async fn refresh_playlist_cover(dbs: &Dbs, client: &SubsonicClient, playlist_id: &str) {
+    let Ok(Some(Some(cover))) =
+        sqlx::query_scalar::<_, Option<String>>("SELECT cover_art FROM playlist WHERE id = ?1")
+            .bind(playlist_id)
+            .fetch_optional(&dbs.playlist)
+            .await
     else {
         return;
     };
@@ -1054,6 +1034,35 @@ async fn update_server_indexes(
     Ok(())
 }
 
+/// Raw indexes of every entry whose song id is in `ids`.
+fn raw_entry_indexes(raw: &[String], ids: &std::collections::HashSet<&str>) -> Vec<usize> {
+    raw.iter()
+        .enumerate()
+        .filter(|(_, song_id)| ids.contains(song_id.as_str()))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// Raw indexes of the later copies of every duplicated song id: removing
+/// exactly these (and nothing else) turns a raw server order into its
+/// keep-first shape. The API removes by position, so an in-place cleanup must
+/// address the duplicate copies instead of rewriting the whole playlist.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "only the duplicate-cleanup tests call the index helper directly"
+    )
+)]
+pub(crate) fn duplicate_entry_indexes(raw: &[String]) -> Vec<usize> {
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    raw.iter()
+        .enumerate()
+        .filter(|(_, song_id)| !seen.insert(song_id.as_str()))
+        .map(|(index, _)| index)
+        .collect()
+}
+
 /// Removes every raw occurrence of `ids` without touching the other rows.
 async fn remove_server_ids(
     client: &SubsonicClient,
@@ -1061,17 +1070,14 @@ async fn remove_server_ids(
     raw: &[String],
     ids: &std::collections::HashSet<&str>,
 ) -> Result<()> {
-    let indexes: Vec<usize> = raw
-        .iter()
-        .enumerate()
-        .filter(|(_, song_id)| ids.contains(song_id.as_str()))
-        .map(|(index, _)| index)
-        .collect();
+    let indexes = raw_entry_indexes(raw, ids);
     update_server_indexes(client, playlist_id, &indexes, &[]).await
 }
 
-/// Replaces the whole server order in one remove-all/add pass, cleaning any
-/// duplicate copies the old `songIdToRemove` path accumulated.
+/// Replaces the whole server order in one remove-all/add pass. Only reorders
+/// and inserts need it: `updatePlaylist` can append but cannot insert at a
+/// position, so the affected order has no smaller edit. Plain appends never
+/// take this path (N-03).
 async fn replace_server_playlist(
     dbs: &Dbs,
     playlist: &PlaylistRef,
@@ -1084,51 +1090,78 @@ async fn replace_server_playlist(
     update_server_indexes(client, &playlist.id, &indexes, &ordered_ids)
         .await
         .context("rewriting the server playlist order")?;
-    load_subsonic_songs(dbs, client, &playlist.id)
+    refresh_after_server_edit(dbs, client, &playlist.id).await
+}
+
+/// The reload every successful server edit shares: cached ordered entries,
+/// list counts and the regenerated playlist cover.
+async fn refresh_after_server_edit(
+    dbs: &Dbs,
+    client: &SubsonicClient,
+    playlist_id: &str,
+) -> Result<()> {
+    load_subsonic_songs(dbs, client, playlist_id)
         .await
         .context("refreshing the server playlist songs")?;
     refresh_subsonic(dbs, client)
         .await
         .context("refreshing the server playlist list")?;
-    refresh_playlist_cover(dbs, client, &playlist.id).await;
+    refresh_playlist_cover(dbs, client, playlist_id).await;
     Ok(())
 }
 
-/// Physically remove duplicate server entries: remove every entry in the
-/// current order (duplicates included, one removal per occurrence), then
-/// re-add the keep-first order. The caller owns the reload/refresh; this never
-/// calls [`load_subsonic_songs`], so a server that keeps reporting duplicates
-/// cannot loop the cleanup.
-async fn clean_server_duplicate_entries(
-    client: &SubsonicClient,
-    playlist_id: &str,
-    current_order: &[String],
-    deduped_order: &[String],
-) -> Result<()> {
-    let indexes: Vec<usize> = (0..current_order.len()).collect();
-    update_server_indexes(client, playlist_id, &indexes, deduped_order)
-        .await
-        .context("cleaning duplicated server playlist entries")?;
-    Ok(())
-}
-
-/// Just the display name, for the startup bootstrap target.
-pub async fn name(dbs: &Dbs, playlist_id: &str) -> Result<Option<String>> {
-    Ok(
-        sqlx::query_scalar("SELECT name FROM playlist WHERE id = ?1")
-            .bind(playlist_id)
-            .fetch_optional(&dbs.playlist)
-            .await?,
+/// Removes duplicate entries from a playlist as an explicit user action.
+///
+/// N-03: this is the only path that cleans duplicates; loading a playlist page
+/// never writes the server copy. A server playlist loses only the later
+/// copies' indexes (`updatePlaylist songIndexToRemove`) — no remove-all/add
+/// pass; a local M3U is rewritten keep-first. Returns the removed count.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the explicit duplicate-cleanup action is only exercised by the playlist tests"
     )
+)]
+pub async fn dedupe_playlist(dbs: &Dbs, playlist_query: &str) -> Result<usize> {
+    let playlist = resolve_playlist(dbs, playlist_query).await?;
+    if playlist.source == "m3u" {
+        let path = local_playlist_path(&playlist)?;
+        let text = tokio::fs::read_to_string(&path)
+            .await
+            .with_context(|| format!("reading the playlist file {}", path.display()))?;
+        let dir = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let parsed = parse_m3u(&text);
+        let parsed_len = parsed.len();
+        let entries = dedup_local_entries(dbs, &dir, parsed).await?;
+        let removed = parsed_len.saturating_sub(entries.len());
+        if removed == 0 {
+            return Ok(0);
+        }
+        write_m3u_entries(&path, &entries).await?;
+        scan_dir(dbs, &dir).await?;
+        return Ok(removed);
+    }
+    let (client, raw, _ordered) = server_playlist_order(dbs, &playlist).await?;
+    let indexes = duplicate_entry_indexes(&raw);
+    if indexes.is_empty() {
+        return Ok(0);
+    }
+    update_server_indexes(&client, &playlist.id, &indexes, &[])
+        .await
+        .context("removing duplicated server playlist entries")?;
+    refresh_after_server_edit(dbs, &client, &playlist.id).await?;
+    Ok(indexes.len())
 }
 
 /// One cached playlist header row for [`page`].
 #[derive(sqlx::FromRow)]
 struct PlaylistRow {
-    id: String,
     source: String,
     name: String,
-    comment: Option<String>,
     owner: Option<String>,
     song_count: i64,
     duration: i64,
@@ -1169,14 +1202,16 @@ async fn playlist_song_rows(dbs: &Dbs, playlist_id: &str) -> Result<Vec<SongRow>
 }
 
 /// Whether the cached rows list a song id twice: a page holding duplicates
-/// must refetch (and, when possible, clean) the server copy even when its
-/// count happens to look right.
+/// must refetch the ordered entries even when its count happens to look right.
+/// (The refetch only updates the cache; cleaning the server copy is the
+/// explicit [`dedupe_playlist`] action.)
 fn has_duplicate_song_rows(rows: &[SongRow]) -> bool {
     let mut seen = std::collections::HashSet::new();
-    rows.iter().any(|row| match row.song_id.as_deref().map(str::trim) {
-        Some(id) if !id.is_empty() => !seen.insert(id),
-        _ => false,
-    })
+    rows.iter()
+        .any(|row| match row.song_id.as_deref().map(str::trim) {
+            Some(id) if !id.is_empty() => !seen.insert(id),
+            _ => false,
+        })
 }
 
 /// The page's keep-first defense: even when the cache (or the server) still
@@ -1257,7 +1292,7 @@ pub(crate) fn playlist_row_cover<'a>(
 
 /// The playlist page payload: identity, song rows and every distinct song cover
 /// for the header collage. Rows keep playlist order and never show a song
-/// twice, even when the cache could not be cleaned.
+/// twice, even when the cached rows still hold duplicates.
 pub async fn page(
     dbs: &Dbs,
     playlist_id: &str,
@@ -1270,7 +1305,9 @@ pub async fn page(
     // elsewhere (the server UI, another client) leave `playlist_song` stale.
     // An empty page always fetches and a count mismatch fetches again so the
     // page cannot show fewer songs than its own header claims; a cached row
-    // list with duplicates fetches so the server copy can be cleaned too.
+    // list with duplicates also fetches so the cached rows are rewritten
+    // keep-first. N-03: this refetch only reads the server — opening a page
+    // never removes/re-adds the server entries (that is [`dedupe_playlist`]).
     // Offline pages never touch the server: the cached entries are the
     // catalog, and a failed request would only delay the local view.
     let stale = !offline
@@ -1456,7 +1493,14 @@ pub async fn page(
                 vec![cover_id],
             )
         } else {
-            (String::new(), String::new(), String::new(), collage, collage_remote, collage_art)
+            (
+                String::new(),
+                String::new(),
+                String::new(),
+                collage,
+                collage_remote,
+                collage_art,
+            )
         };
     let header = crate::model::PageHeader {
         title: playlist.name.clone(),
@@ -1487,14 +1531,31 @@ pub async fn page(
     Ok((header, list_rows))
 }
 
+/// The `LIKE` pattern for a "contains" query built from user text. N-15:
+/// `%` and `_` in the query are literal characters, not wildcards, and the
+/// backslash that escapes them is escaped too, so a playlist named `100%`
+/// only matches when the user typed the percent sign.
+pub(crate) fn like_contains(query: &str) -> String {
+    let mut pattern = String::with_capacity(query.len() + 2);
+    pattern.push('%');
+    for ch in query.trim().chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            pattern.push('\\');
+        }
+        pattern.push(ch);
+    }
+    pattern.push('%');
+    pattern
+}
+
 /// Playlist hits for the unified search. Playlists live in their own database,
 /// so they are matched here by name rather than through the song FTS index.
 pub async fn search_rows(dbs: &Dbs, query: &str, limit: i64) -> Result<Vec<PlaylistHit>> {
-    let like = format!("%{}%", query.trim());
+    let like = like_contains(query);
     let rows: Vec<PlaylistListRow> = sqlx::query_as(
         "SELECT id, source, name, song_count, duration, owner, cover_art
          FROM playlist
-         WHERE song_count > 0 AND lower(name) LIKE lower(?1)
+         WHERE song_count > 0 AND lower(name) LIKE lower(?1) ESCAPE '\\'
          ORDER BY lower(name) LIMIT ?2",
     )
     .bind(like)
@@ -1509,8 +1570,7 @@ pub async fn search_rows(dbs: &Dbs, query: &str, limit: i64) -> Result<Vec<Playl
     Ok(rows
         .iter()
         .map(|row| {
-            let segment =
-                playlist_segment_row(row, &covers, &remotes, first_covers.get(&row.id));
+            let segment = playlist_segment_row(row, &covers, &remotes, first_covers.get(&row.id));
             PlaylistHit {
                 id: row.id.clone(),
                 name: row.name.clone(),
@@ -1631,6 +1691,13 @@ pub async fn add_to_playlist(
 
 /// Append already-resolved song ids to a playlist (the row-clipboard paste
 /// path). Same local/server split as [`add_to_playlist`].
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the row-clipboard append path is only exercised by the playlist tests"
+    )
+)]
 pub async fn add_song_ids_to_playlist(
     dbs: &Dbs,
     playlist_query: &str,
@@ -1717,11 +1784,17 @@ async fn append_resolved(dbs: &Dbs, playlist: &PlaylistRef, song_ids: &[String])
         let path = local_playlist_path(playlist)?;
         upsert_local_m3u(dbs, &path, usize::MAX, &song_ids).await?;
     } else {
-        let (client, raw, mut ordered) = server_playlist_order(dbs, playlist).await?;
+        // N-03: an append is add-only. `updatePlaylist` can append, so the
+        // unchanged entries are never removed and re-added; only the copies of
+        // the incoming ids are removed (an add moves an existing song to the
+        // tail, like the local M3U edit), then the new ids are appended.
+        let (client, raw, _ordered) = server_playlist_order(dbs, playlist).await?;
         let wanted: std::collections::HashSet<&str> = song_ids.iter().map(String::as_str).collect();
-        ordered.retain(|id| !wanted.contains(id.as_str()));
-        ordered.extend(song_ids);
-        replace_server_playlist(dbs, playlist, &ordered, &client, raw.len()).await?;
+        let remove_indexes = raw_entry_indexes(&raw, &wanted);
+        update_server_indexes(&client, &playlist.id, &remove_indexes, &song_ids)
+            .await
+            .context("updating the server playlist")?;
+        refresh_after_server_edit(dbs, &client, &playlist.id).await?;
     }
     Ok(())
 }
@@ -1750,18 +1823,11 @@ pub async fn remove_from_playlist(
         remove_local_m3u(dbs, &path, &song_ids, &playlist.name).await?;
     } else {
         let (client, raw, _) = server_playlist_order(dbs, &playlist).await?;
-        let wanted: std::collections::HashSet<&str> =
-            song_ids.iter().map(String::as_str).collect();
+        let wanted: std::collections::HashSet<&str> = song_ids.iter().map(String::as_str).collect();
         remove_server_ids(&client, &playlist.id, &raw, &wanted)
             .await
             .context("updating the server playlist")?;
-        load_subsonic_songs(dbs, &client, &playlist.id)
-            .await
-            .context("refreshing the server playlist songs")?;
-        refresh_subsonic(dbs, &client)
-            .await
-            .context("refreshing the server playlist list")?;
-        refresh_playlist_cover(dbs, &client, &playlist.id).await;
+        refresh_after_server_edit(dbs, &client, &playlist.id).await?;
     }
     Ok(display_playlist_name(&playlist.name))
 }
@@ -1797,13 +1863,7 @@ pub async fn remove_playlist_positions(
         remove_server_ids(&client, &playlist.id, &raw, &wanted)
             .await
             .context("updating the server playlist")?;
-        load_subsonic_songs(dbs, &client, &playlist.id)
-            .await
-            .context("refreshing the server playlist songs")?;
-        refresh_subsonic(dbs, &client)
-            .await
-            .context("refreshing the server playlist list")?;
-        refresh_playlist_cover(dbs, &client, &playlist.id).await;
+        refresh_after_server_edit(dbs, &client, &playlist.id).await?;
     }
     Ok(display_playlist_name(&playlist.name))
 }
@@ -1818,7 +1878,8 @@ async fn upsert_local_m3u(
     position: usize,
     song_ids: &[String],
 ) -> Result<()> {
-    let text = std::fs::read_to_string(path)
+    let text = tokio::fs::read_to_string(path)
+        .await
         .with_context(|| format!("reading the playlist file {}", path.display()))?;
     let entries = parse_m3u(&text);
     let songs = if entries
@@ -1843,7 +1904,7 @@ async fn upsert_local_m3u(
     let inserted = m3u_entries_for_ids(dbs, &incoming).await?;
     kept.splice(at..at, inserted);
     let kept = dedup_m3u_entries(kept, &matcher, &songs, dir);
-    write_m3u_entries(path, &kept)?;
+    write_m3u_entries(path, &kept).await?;
     scan_dir(dbs, dir).await?;
     Ok(())
 }
@@ -1919,7 +1980,8 @@ pub async fn delete_playlist(dbs: &Dbs, playlist_query: &str) -> Result<(String,
     let name = display_playlist_name(&playlist.name);
     if playlist.source == "m3u" {
         let path = local_playlist_path(&playlist)?;
-        std::fs::remove_file(&path)
+        tokio::fs::remove_file(&path)
+            .await
             .with_context(|| format!("removing the playlist file {}", path.display()))?;
         let dir = path.parent().unwrap_or_else(|| Path::new("."));
         scan_dir(dbs, dir).await?;
@@ -1980,7 +2042,8 @@ pub async fn move_playlist_entry(
     let playlist = resolve_playlist(dbs, playlist_query).await?;
     if playlist.source == "m3u" {
         let path = local_playlist_path(&playlist)?;
-        let text = std::fs::read_to_string(&path)
+        let text = tokio::fs::read_to_string(&path)
+            .await
             .with_context(|| format!("reading the playlist file {}", path.display()))?;
         let dir = path.parent().unwrap_or_else(|| Path::new("."));
         // A stale file may still hold duplicates: clean them first so the
@@ -1992,7 +2055,7 @@ pub async fn move_playlist_entry(
         }
         let entry = entries.remove(from);
         entries.insert(to, entry);
-        write_m3u_entries(&path, &entries)?;
+        write_m3u_entries(&path, &entries).await?;
         scan_dir(dbs, dir).await?;
     } else {
         let (client, raw, mut ordered) = server_playlist_order(dbs, &playlist).await?;
@@ -2022,7 +2085,8 @@ pub async fn move_playlist_block(
     }
     if playlist.source == "m3u" {
         let path = local_playlist_path(&playlist)?;
-        let text = std::fs::read_to_string(&path)
+        let text = tokio::fs::read_to_string(&path)
+            .await
             .with_context(|| format!("reading the playlist file {}", path.display()))?;
         let dir = path.parent().unwrap_or_else(|| Path::new("."));
         let mut entries = dedup_local_entries(dbs, dir, parse_m3u(&text)).await?;
@@ -2039,7 +2103,7 @@ pub async fn move_playlist_block(
         let new_start = new_start as usize;
         let block: Vec<M3uEntry> = entries.drain(start..end).collect();
         entries.splice(new_start..new_start, block);
-        write_m3u_entries(&path, &entries)?;
+        write_m3u_entries(&path, &entries).await?;
         scan_dir(dbs, dir).await?;
     } else {
         let (client, raw, mut ordered) = server_playlist_order(dbs, &playlist).await?;
@@ -2067,50 +2131,84 @@ async fn m3u_entries_for_ids(dbs: &Dbs, song_ids: &[String]) -> Result<Vec<M3uEn
     Ok(parse_m3u(&body))
 }
 
-fn write_m3u_entries(path: &Path, entries: &[M3uEntry]) -> Result<()> {
+/// Runs one blocking filesystem step on the blocking pool: async playlist
+/// paths must not stall a runtime worker on disk (N-18).
+async fn in_blocking<T, F>(task: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    match tokio::task::spawn_blocking(task).await {
+        Ok(result) => result,
+        Err(err) => Err(anyhow!("the playlist filesystem task failed: {err}")),
+    }
+}
+
+/// Atomically replaces `path` with `bytes`: the shared cache helper writes a
+/// sibling temp file and renames it over the target (N-15).
+fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .with_context(|| format!("the playlist file name is not UTF-8: {}", path.display()))?;
+    crate::cache::write_atomic(dir, name, bytes)
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+/// [`write_bytes_atomic`] off the async runtime.
+async fn write_text_atomic(path: &Path, text: &str) -> Result<()> {
+    let path = path.to_path_buf();
+    let text = text.to_string();
+    in_blocking(move || write_bytes_atomic(&path, text.as_bytes())).await
+}
+
+/// Writes a playlist file atomically. A crash mid-write can only leave a temp
+/// file behind, never a truncated playlist.
+pub(crate) async fn write_m3u_entries(path: &Path, entries: &[M3uEntry]) -> Result<()> {
     let mut out = String::from("#EXTM3U\n");
     for entry in entries {
         push_m3u_entry(&mut out, entry);
     }
-    std::fs::write(path, out)
-        .with_context(|| format!("writing the playlist file {}", path.display()))?;
-    Ok(())
+    write_text_atomic(path, &out).await
 }
 
 /// Rewrite an app-owned M3U without entries resolving to `remove_ids`, then
 /// rescan the folder. Unresolved entries (plain path lines) are preserved.
-async fn remove_local_m3u(
+pub(crate) async fn remove_local_m3u(
     dbs: &Dbs,
     path: &Path,
     remove_ids: &[String],
     playlist_name: &str,
 ) -> Result<()> {
-    let text = std::fs::read_to_string(path)
+    let text = tokio::fs::read_to_string(path)
+        .await
         .with_context(|| format!("reading the playlist file {}", path.display()))?;
-    let entries = parse_m3u(&text);
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    // Resolve against the same entry identity the writes use: an app-owned
+    // `musika:song:<id>` line matches its id even when that song is not in the
+    // local library (a server-only track saved from a radio), which the
+    // path/name resolver cannot see.
     let songs = load_songs(&dbs.library).await?;
     let matcher = Matcher::new(&songs);
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let entries = dedup_m3u_entries(entries, &matcher, &songs, dir);
+    let entries = dedup_m3u_entries(parse_m3u(&text), &matcher, &songs, dir);
     let remove: std::collections::HashSet<&str> = remove_ids.iter().map(String::as_str).collect();
 
-    let mut out = String::from("#EXTM3U\n");
+    let mut kept: Vec<M3uEntry> = Vec::with_capacity(entries.len());
     let mut removed = 0usize;
-    for entry in &entries {
-        let song_id = matcher
-            .resolve(entry, dir)
-            .map(|index| songs[index].id.as_str());
+    for entry in entries {
+        let song_id = entry_song_id(&entry, &matcher, &songs, dir);
         if song_id.is_some_and(|id| remove.contains(id)) {
             removed += 1;
             continue;
         }
-        push_m3u_entry(&mut out, entry);
+        kept.push(entry);
     }
     if removed == 0 {
         return Err(anyhow!("None of the targets are in “{playlist_name}”"));
     }
-    std::fs::write(path, out)
-        .with_context(|| format!("writing the playlist file {}", path.display()))?;
+    write_m3u_entries(path, &kept).await?;
     scan_dir(dbs, dir).await?;
     Ok(())
 }
@@ -2124,27 +2222,27 @@ async fn remove_positions_local_m3u(
     positions: &std::collections::HashSet<usize>,
     playlist_name: &str,
 ) -> Result<()> {
-    let text = std::fs::read_to_string(path)
+    let text = tokio::fs::read_to_string(path)
+        .await
         .with_context(|| format!("reading the playlist file {}", path.display()))?;
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     // The positions come from the deduplicated page, so clean the file first
     // and index the same order the user saw.
     let entries = dedup_local_entries(dbs, dir, parse_m3u(&text)).await?;
 
-    let mut out = String::from("#EXTM3U\n");
+    let mut kept: Vec<M3uEntry> = Vec::with_capacity(entries.len());
     let mut removed = 0usize;
-    for (index, entry) in entries.iter().enumerate() {
+    for (index, entry) in entries.into_iter().enumerate() {
         if positions.contains(&index) {
             removed += 1;
             continue;
         }
-        push_m3u_entry(&mut out, entry);
+        kept.push(entry);
     }
     if removed == 0 {
         return Err(anyhow!("No matching rows in “{playlist_name}”"));
     }
-    std::fs::write(path, out)
-        .with_context(|| format!("writing the playlist file {}", path.display()))?;
+    write_m3u_entries(path, &kept).await?;
     scan_dir(dbs, dir).await?;
     Ok(())
 }
@@ -2168,9 +2266,7 @@ fn push_m3u_entry(out: &mut String, entry: &M3uEntry) {
 /// Cover ids owned by playlists rather than the library. Included in the
 /// post-sync cover pass so synthetic playlist/entry ids (`pl-...`,
 /// `dc-...:1`) are local before the page first opens.
-pub async fn referenced_cover_ids(
-    pool: &SqlitePool,
-) -> Result<std::collections::BTreeSet<String>> {
+pub async fn referenced_cover_ids(pool: &SqlitePool) -> Result<std::collections::BTreeSet<String>> {
     let ids: Vec<String> = sqlx::query_scalar(
         "SELECT cover_art FROM playlist WHERE cover_art IS NOT NULL AND cover_art != ''
          UNION

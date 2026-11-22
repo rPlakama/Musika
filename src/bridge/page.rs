@@ -10,7 +10,11 @@ impl Bridge {
         crate::app::runtime().spawn(async move {
             let event = match page_data(&descriptor, offline).await {
                 Ok((header, rows)) => {
-                    crate::debug_log!("GPUI: {} page {} rows", descriptor.kind.label(), rows.len());
+                    crate::debug_log!(
+                        "bridge: {} page {} rows",
+                        descriptor.kind.label(),
+                        rows.len()
+                    );
                     Event::Page {
                         generation,
                         descriptor,
@@ -34,35 +38,49 @@ impl Bridge {
                 .flatten();
             if let Some((notes, fetched_at)) = &cached {
                 _ = tx.send(Event::Notes {
-                    album_id: album_id.clone(),
+                    id: album_id.clone(),
+                    kind: NotesKind::Album,
                     notes: plain_notes(notes),
                 });
-                if crate::consts::now_secs() - fetched_at < crate::consts::INFO_TTL_SECS {
+                // A negative marker (empty notes + timestamp) is a real cache
+                // hit: the provider answered "no description", and the TTL
+                // must keep the next page open off the network (D-27).
+                if info_cache_is_fresh(*fetched_at, crate::consts::now_secs()) {
                     return;
                 }
             }
-            let fresh = match crate::session::client(&dbs).await {
+            if !crate::session::online() {
+                if cached.is_none() {
+                    _ = tx.send(Event::Notes {
+                        id: album_id,
+                        kind: NotesKind::Album,
+                        notes: String::new(),
+                    });
+                }
+                return;
+            }
+            // `None` = the request failed; `Some("")` = the provider answered
+            // with no description, which is cached as a negative marker below.
+            let fetched = match crate::session::client(&dbs).await {
                 Ok(client) => client
                     .get_album_info2(&album_id)
                     .await
                     .ok()
-                    .and_then(|info| info.notes)
-                    .unwrap_or_default(),
-                Err(_) => String::new(),
+                    .map(|info| info.notes.unwrap_or_default()),
+                Err(_) => None,
             };
-            if !fresh.is_empty()
+            if let Some(fresh) = &fetched
                 && let Err(err) =
-                    crate::library::upsert_album_info(&dbs.library, &album_id, &fresh).await
+                    crate::library::upsert_album_info(&dbs.library, &album_id, fresh).await
             {
-                crate::debug_log!("GPUI: album notes cache failed: {err:#}");
+                crate::debug_log!("bridge: album notes cache failed: {err:#}");
             }
-            let notes = if fresh.is_empty() {
-                cached.map(|(notes, _)| notes).unwrap_or_default()
-            } else {
-                fresh
-            };
+            let notes = fetched
+                .or_else(|| cached.map(|(notes, _)| notes))
+                .unwrap_or_default();
             _ = tx.send(Event::Notes {
-                album_id,
+                id: album_id,
+                kind: NotesKind::Album,
                 notes: plain_notes(&notes),
             });
         });
@@ -78,16 +96,27 @@ impl Bridge {
                 .flatten();
             if let Some(row) = &cached {
                 _ = tx.send(Event::Notes {
-                    album_id: artist_id.clone(),
+                    id: artist_id.clone(),
+                    kind: NotesKind::Artist,
                     notes: plain_notes(&row.biography),
                 });
                 if row
                     .fetched_at
                     .parse::<i64>()
-                    .is_ok_and(|at| crate::consts::now_secs() - at < crate::consts::INFO_TTL_SECS)
+                    .is_ok_and(|at| info_cache_is_fresh(at, crate::consts::now_secs()))
                 {
                     return;
                 }
+            }
+            if !crate::session::online() {
+                if cached.is_none() {
+                    _ = tx.send(Event::Notes {
+                        id: artist_id,
+                        kind: NotesKind::Artist,
+                        notes: String::new(),
+                    });
+                }
+                return;
             }
             // One request feeds both caches: the biography shown on the page
             // and the similar-artist graph the local radio engine prefers.
@@ -129,19 +158,21 @@ impl Bridge {
                 },
                 Err(_) => (String::new(), None),
             };
-            if let Some(similar) = similar
-                && let Err(err) = crate::library::upsert_artist_similar(
-                    &dbs.library,
-                    &artist_id,
-                    &similar,
-                )
-                .await
-            {
-                crate::debug_log!("GPUI: artist similar graph cache failed: {err:#}");
-            }
-            if !fresh.is_empty() {
-                _ =
-                    crate::library::upsert_artist_info(&dbs.library, &artist_id, &fresh, "").await;
+            // `Some` similar list = the provider answered (possibly with no
+            // artists): cache the biography even when the provider sent none,
+            // so the empty row acts as a negative cache marker (D-27). A
+            // failed request (`None`) must never mark the biography as fresh.
+            if let Some(similar) = similar {
+                if let Err(err) =
+                    crate::library::upsert_artist_similar(&dbs.library, &artist_id, &similar).await
+                {
+                    crate::debug_log!("bridge: artist similar graph cache failed: {err:#}");
+                }
+                if let Err(err) =
+                    crate::library::upsert_artist_info(&dbs.library, &artist_id, &fresh, "").await
+                {
+                    crate::debug_log!("bridge: artist notes cache failed: {err:#}");
+                }
             }
             let notes = if fresh.is_empty() {
                 cached.map(|row| row.biography).unwrap_or_default()
@@ -149,9 +180,105 @@ impl Bridge {
                 fresh
             };
             _ = tx.send(Event::Notes {
-                album_id: artist_id,
+                id: artist_id,
+                kind: NotesKind::Artist,
                 notes: plain_notes(&notes),
             });
         });
+    }
+}
+
+/// Whether a cached info row is still inside [`crate::consts::INFO_TTL_SECS`].
+///
+/// A negative-cache marker (the provider answered, with no notes) is as fresh
+/// as a row holding text: the TTL is about when the question was last asked,
+/// not about what the answer was (D-27).
+fn info_cache_is_fresh(fetched_at: i64, now: i64) -> bool {
+    now.saturating_sub(fetched_at) < crate::consts::INFO_TTL_SECS
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr as _;
+
+    use super::*;
+
+    /// A migrated in-memory `library.db` for the cache round trips.
+    async fn library_pool() -> sqlx::SqlitePool {
+        let options = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("memory database url");
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("memory pool");
+        sqlx::migrate!("./migrations_library")
+            .run(&pool)
+            .await
+            .expect("library migrations");
+        pool
+    }
+
+    #[test]
+    fn info_ttl_boundary_marks_a_fresh_negative_cache_as_fresh() {
+        let now = 1_700_000_000;
+        // Written just now (empty or not): the network must be skipped.
+        assert!(info_cache_is_fresh(now, now));
+        assert!(info_cache_is_fresh(
+            now - crate::consts::INFO_TTL_SECS + 1,
+            now
+        ));
+        // Exactly at and past the TTL: refetch.
+        assert!(!info_cache_is_fresh(
+            now - crate::consts::INFO_TTL_SECS,
+            now
+        ));
+        assert!(!info_cache_is_fresh(
+            now - 2 * crate::consts::INFO_TTL_SECS,
+            now
+        ));
+    }
+
+    #[tokio::test]
+    async fn empty_provider_notes_persist_as_a_fresh_negative_marker() {
+        let pool = library_pool().await;
+
+        // Album: an empty description fetched from the provider is stored
+        // with `fetched_at` so the next page open skips the network.
+        crate::library::upsert_album_info(&pool, "al1", "")
+            .await
+            .expect("store album marker");
+        let (notes, fetched_at) = crate::library::album_info(&pool, "al1")
+            .await
+            .expect("load album marker")
+            .expect("album marker row");
+        assert!(notes.is_empty());
+        assert!(info_cache_is_fresh(fetched_at, crate::consts::now_secs()));
+
+        // Artist: same contract through the separate `artist_info` table.
+        crate::library::upsert_artist_info(&pool, "ar1", "", "")
+            .await
+            .expect("store artist marker");
+        let row = crate::library::artist_info(&pool, "ar1")
+            .await
+            .expect("load artist marker")
+            .expect("artist marker row");
+        assert!(row.biography.is_empty());
+        let fetched_at = row.fetched_at.parse::<i64>().expect("artist timestamp");
+        assert!(info_cache_is_fresh(fetched_at, crate::consts::now_secs()));
+    }
+
+    /// The new discriminator is serde-defaulted: an event serialized before
+    /// D-27 (no `kind`) still resolves to the only kind that existed then.
+    #[test]
+    fn legacy_notes_payload_without_kind_reads_as_album_notes() {
+        let event: Event = serde_json::from_str(r#"{"Notes":{"id":"al1","notes":"old"}}"#)
+            .expect("legacy notes payload");
+        let Event::Notes { id, kind, notes } = event else {
+            panic!("expected a Notes event");
+        };
+        assert_eq!(id, "al1");
+        assert_eq!(kind, NotesKind::Album);
+        assert_eq!(notes, "old");
     }
 }

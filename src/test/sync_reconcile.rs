@@ -171,3 +171,137 @@ async fn shallow_apply_keeps_untouched_album_songs() {
         .unwrap();
     assert_eq!(title, "Two");
 }
+
+/// N-06: one song can be listed under two albums in a single sync. The id is
+/// the `_sync_new_songs` primary key, so the keep-set insert used to abort the
+/// whole transaction with a UNIQUE violation.
+#[tokio::test]
+async fn duplicate_song_listing_does_not_break_the_sync() {
+    let pool = pool().await;
+    let artists = vec![artist("ar1", "Artist", 2)];
+    let albums = vec![
+        album("al1", "ar1", "First", 1, 100),
+        album("al2", "ar1", "Second", 1, 100),
+    ];
+    let listed_twice = song("s1", "al1", "One", 1);
+    let songs = fetched(&[
+        ("al1", vec![listed_twice.clone()]),
+        ("al2", vec![listed_twice]),
+    ]);
+
+    let changes = apply(&pool, &artists, &albums, &songs, 1, true)
+        .await
+        .unwrap();
+    assert_eq!(changes.songs, vec!["s1".to_string()]);
+    assert_eq!(counts(&pool).await.unwrap(), (1, 2, 1));
+}
+
+/// N-16: a shallow pass that re-fetched no album and found nothing to write is
+/// a no-op. It must not bump `library_rev`, because that revision is what lets
+/// the post-sync FTS/catalog rebuilds and the mirror rewrite short-circuit.
+#[tokio::test]
+async fn shallow_noop_pass_keeps_the_library_revision() {
+    let pool = pool().await;
+    let artists = vec![artist("ar1", "Artist", 1)];
+    let albums = vec![album("al1", "ar1", "First", 1, 100)];
+    let songs = fetched(&[("al1", vec![song("s1", "al1", "One", 1)])]);
+    let first = apply(&pool, &artists, &albums, &songs, 1, true)
+        .await
+        .unwrap();
+    assert!(first.any());
+    let revision = crate::library::library_revision(&pool)
+        .await
+        .unwrap()
+        .expect("a real sync records the revision");
+
+    let changes = apply(&pool, &artists, &albums, &HashMap::new(), 2, false)
+        .await
+        .unwrap();
+    assert!(!changes.any());
+    assert_eq!(
+        crate::library::library_revision(&pool).await.unwrap(),
+        Some(revision),
+        "a no-op pass must not invalidate the derived caches"
+    );
+    // The sync bookkeeping still advances so "last synced" stays truthful.
+    assert_eq!(crate::library::last_modified(&pool).await.unwrap(), 2);
+}
+
+/// N-16: the no-op fast path must still import server-owned fields that the
+/// metadata hash omits (album rating/favourite, artist favourite). The row is
+/// rewritten even though the metadata diff reports no change.
+#[tokio::test]
+async fn shallow_pass_imports_server_stars_without_a_metadata_change() {
+    let pool = pool().await;
+    let artists = vec![artist("ar1", "Artist", 1)];
+    let albums = vec![album("al1", "ar1", "First", 1, 100)];
+    let songs = fetched(&[("al1", vec![song("s1", "al1", "One", 1)])]);
+    apply(&pool, &artists, &albums, &songs, 1, true)
+        .await
+        .unwrap();
+
+    let starred_at = "2026-02-02T00:00:00Z";
+    let mut starred_album = album("al1", "ar1", "First", 1, 100);
+    starred_album.starred = Some(starred_at.into());
+    starred_album.user_rating = Some(4);
+    let mut starred_artist = artist("ar1", "Artist", 1);
+    starred_artist.starred = Some(starred_at.into());
+    let changes = apply(
+        &pool,
+        &[starred_artist],
+        &[starred_album],
+        &HashMap::new(),
+        2,
+        false,
+    )
+    .await
+    .unwrap();
+
+    // No metadata changed, so the derived-cache invalidation stays quiet…
+    assert!(!changes.any());
+    // …but the server-owned fields still land in the local rows.
+    assert_eq!(
+        crate::library::album(&pool, "al1")
+            .await
+            .unwrap()
+            .unwrap()
+            .starred
+            .as_deref(),
+        Some(starred_at)
+    );
+    assert_eq!(crate::library::album_rating(&pool, "al1").await.unwrap(), 4);
+    assert_eq!(
+        crate::library::artist(&pool, "ar1")
+            .await
+            .unwrap()
+            .unwrap()
+            .starred
+            .as_deref(),
+        Some(starred_at)
+    );
+}
+
+/// N-16: a pre-revision database (upgraded install) must still get a revision
+/// from its first pass, even a no-op one — otherwise the derived caches could
+/// never start short-circuiting.
+#[tokio::test]
+async fn noop_pass_seeds_the_revision_on_a_pre_revision_database() {
+    let pool = pool().await;
+    assert_eq!(crate::library::library_revision(&pool).await.unwrap(), None);
+    let changes = apply(&pool, &[], &[], &HashMap::new(), 1, false)
+        .await
+        .unwrap();
+    assert!(!changes.any());
+    assert_eq!(
+        crate::library::library_revision(&pool).await.unwrap(),
+        Some(1)
+    );
+    // A second no-op pass must leave it alone.
+    apply(&pool, &[], &[], &HashMap::new(), 2, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        crate::library::library_revision(&pool).await.unwrap(),
+        Some(1)
+    );
+}

@@ -36,7 +36,9 @@ static CURRENT: OnceLock<RwLock<PlaybackSettings>> = OnceLock::new();
 
 pub fn install(settings: &PlaybackSettings) {
     let slot = CURRENT.get_or_init(|| RwLock::new(PlaybackSettings::default()));
-    *slot.write().unwrap_or_else(std::sync::PoisonError::into_inner) = settings.clone().sanitized();
+    *slot
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = settings.clone().sanitized();
 }
 
 pub fn current() -> PlaybackSettings {

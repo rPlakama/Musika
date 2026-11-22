@@ -48,3 +48,17 @@ jobs:
         env:
           XDG_CACHE_HOME: ${{ github.workspace }}/.nix-cache
         run: nix develop --command cargo test --lib
+
+      # The headless daemon must build and test without the GPUI feature
+      # (A-01), and the io_uring reader has its own safety-critical tests.
+      - name: Headless check and tests (no default features)
+        env:
+          XDG_CACHE_HOME: ${{ github.workspace }}/.nix-cache
+        run: |
+          nix develop --command cargo check --no-default-features --all-targets
+          nix develop --command cargo test --lib --no-default-features
+
+      - name: io_uring reader tests
+        env:
+          XDG_CACHE_HOME: ${{ github.workspace }}/.nix-cache
+        run: nix develop --command cargo test --lib --features io-uring io_uring_read

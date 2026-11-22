@@ -8,12 +8,9 @@ impl AppRoot {
             Event::Command(_) => {}
             Event::IpcRan(command) => self.toast_ipc(&command),
             Event::Settings(settings) => {
-                let colors_changed = (self.settings.color_contrast
-                    - settings.color_contrast)
-                    .abs()
+                let colors_changed = (self.settings.color_contrast - settings.color_contrast).abs()
                     > 0.001
-                    || (self.settings.color_saturation - settings.color_saturation).abs()
-                        > 0.001;
+                    || (self.settings.color_saturation - settings.color_saturation).abs() > 0.001;
                 self.settings = *settings;
                 if colors_changed {
                     let cover = self
@@ -45,17 +42,18 @@ impl AppRoot {
                         .as_ref()
                         .map(|name| format!("EQ: {name}"))
                         .unwrap_or_else(|| "EQ off".to_string());
-                    self.push_toast(message, ToastKind::Notice, None);
+                    self.push_toast(message, None);
                 }
             }
             Event::OutputDevices { devices } => {
                 let message = if devices.is_empty() {
                     "No PipeWire output sinks.".to_string()
                 } else {
-                    let labels: Vec<&str> = devices.iter().map(|device| device.label.as_str()).collect();
+                    let labels: Vec<&str> =
+                        devices.iter().map(|device| device.label.as_str()).collect();
                     format!("Outputs: {}", labels.join(" · "))
                 };
-                self.push_toast(message, ToastKind::Notice, None);
+                self.push_toast(message, None);
             }
             Event::Connection { online } => {
                 let changed = self.connection_offline == online;
@@ -86,16 +84,13 @@ impl AppRoot {
             Event::Header {
                 server_url,
                 username,
-                server_type,
                 last_sync,
-                counts,
+                ..
             } => {
                 self.header = Some(Header {
                     server_url,
                     username,
-                    server_type,
                     last_sync,
-                    counts,
                 });
                 self.error = None;
                 if !self.restored {
@@ -116,7 +111,7 @@ impl AppRoot {
                 }
                 self.generation = generation;
                 self.view.rows.install_count(generation, count);
-                self.view.loading = count == 0;
+                self.view.loading = false;
                 self.view.error = None;
                 let saved = crate::scroll_memory::saved_index(scope.key());
                 if saved >= 0 {
@@ -168,7 +163,11 @@ impl AppRoot {
                 if saved >= 0 {
                     self.view.list.cursor = saved as usize;
                 }
-                self.view.list.cursor = self.view.list.cursor.min(self.view.rows.len().saturating_sub(1));
+                self.view.list.cursor = self
+                    .view
+                    .list
+                    .cursor
+                    .min(self.view.rows.len().saturating_sub(1));
                 self.follow_library(false);
             }
             Event::CommandSuggestions {
@@ -184,8 +183,17 @@ impl AppRoot {
                 self.command_line
                     .install_search_suggestions(start, end, &rows);
             }
-            Event::Notes { album_id, notes } => {
-                self.notes = Some((album_id, notes));
+            Event::Notes { id, kind, notes } => {
+                // Notes are keyed by (kind, id): an artist biography carries an
+                // artist id, so it must never be matched against an album page
+                // whose id happens to string-compare equal (D-27).
+                if self
+                    .page
+                    .as_ref()
+                    .is_some_and(|page| notes_match_page(&page.descriptor, kind, &id))
+                {
+                    self.notes = Some((id, notes));
+                }
             }
             Event::RowsPatched {
                 kind,
@@ -216,12 +224,15 @@ impl AppRoot {
                         patch(row);
                     }
                 }
-                if matches!(kind, RowKind::Album | RowKind::Artist)
-                    && let Some(page) = self.page.as_mut().filter(|page| {
-                        page.descriptor.kind != PageKind::Playlist
-                            && page.descriptor.kind != PageKind::Radio
-                            && page.descriptor.id == id
-                    })
+                // The page header's favourite/rating belongs to the page's own
+                // container kind: compare `PageKind` with `RowKind` instead of
+                // only excluding the kinds without those chips, so an Album
+                // patch can never land on an Artist page whose id happens to
+                // equal the album id.
+                if let Some(page) = self
+                    .page
+                    .as_mut()
+                    .filter(|page| page_header_patch_matches(&page.descriptor, kind, &id))
                 {
                     if let Some(starred) = starred {
                         page.header.starred = starred;
@@ -279,7 +290,7 @@ impl AppRoot {
                     let descriptor = page.descriptor.clone();
                     self.bridge.load_page(descriptor);
                 }
-                self.push_toast("Library synced".to_string(), ToastKind::Notice, None);
+                self.push_toast("Library synced".to_string(), None);
             }
             Event::RadioSaved {
                 name,
@@ -289,17 +300,12 @@ impl AppRoot {
                 if let Some(error) = remote_error {
                     self.push_toast(
                         format!("Saved “{name}” locally; server save failed: {error}"),
-                        ToastKind::Error,
                         None,
                     );
                 } else if offline {
-                    self.push_toast(
-                        format!("Saved radio “{name}” locally"),
-                        ToastKind::Notice,
-                        None,
-                    );
+                    self.push_toast(format!("Saved radio “{name}” locally"), None);
                 } else {
-                    self.push_toast(format!("Saved radio “{name}”"), ToastKind::Notice, None);
+                    self.push_toast(format!("Saved radio “{name}”"), None);
                 }
                 if self.page.is_none() && self.view.scope == Scope::Playlists {
                     self.reload();
@@ -315,7 +321,24 @@ impl AppRoot {
                             covers.clear();
                         }
                         self.palette_cover = None;
+                        self.clock.tick();
                         self.palette_motion.reset(&self.clock);
+                        // The cover files the wipe removed are gone, so the
+                        // identity that drives the palette/crossfade must be
+                        // dropped too; the library/page reload below paints the
+                        // fresh covers.
+                        self.current_cover.clear();
+                        // Drop every decoded cover (warm slots included) on
+                        // the next frame start: the cache works through a
+                        // process-wide flag because this event handler has no
+                        // `Window`/`App` to update the entity with.
+                        crate::ui::image_cache::request_clear();
+                        // The wiped originals invalidate every display-sized
+                        // derivative cut from them; prune the on-disk cache off
+                        // the UI thread (it can hold thousands of files). The
+                        // handle is detached: the prune is fire-and-forget.
+                        let _prune = crate::app::runtime()
+                            .spawn_blocking(crate::ui::fast_image::clear_derivatives);
                     }
                     "lyrics" => {
                         self.lyrics = None;
@@ -342,7 +365,7 @@ impl AppRoot {
                     let descriptor = page.descriptor.clone();
                     self.bridge.load_page(descriptor);
                 }
-                self.push_toast(format!("Wiped {scope}"), ToastKind::Notice, None);
+                self.push_toast(format!("Wiped {scope}"), None);
             }
 
             Event::PageContainerState {
@@ -379,7 +402,7 @@ impl AppRoot {
                 self.apply_download_started(&kind, &id, on);
             }
             Event::DownloadSettled => {
-                self.push_toast("Download updated.".to_string(), ToastKind::Notice, None);
+                self.push_toast("Download updated.".to_string(), None);
                 self.marks.signature = None;
                 self.ensure_marks();
                 // The downloaded-catalog views gain or lose rows with the
@@ -451,13 +474,14 @@ impl AppRoot {
                 if generation < self.page_generation {
                     return;
                 }
-                self.page_generation = generation;
-                let page = self
+                let Some(page) = self
                     .page
-                    .get_or_insert_with(|| PageState::new(descriptor.clone()));
-                if page.descriptor != descriptor {
-                    *page = PageState::new(descriptor.clone());
-                }
+                    .as_mut()
+                    .filter(|page| page.descriptor == descriptor)
+                else {
+                    return;
+                };
+                self.page_generation = generation;
                 crate::debug_log!(
                     "GPUI: page cover={:?} title={}",
                     header.cover_url,
@@ -521,31 +545,44 @@ impl AppRoot {
                 username,
                 offline,
             } => {
-                self.reset_for_account();
+                // The daemon replays the stored auth event to every new UI
+                // client, and again after every reconnect. That replay is not
+                // an auth transition: the replayed `Header` for the same
+                // identity lands first, while a real sign-in (or AddAccount)
+                // always has the login form open. Treating the replay as a
+                // transition wiped the in-flight startup load and issued a
+                // duplicate `load_library` on every attach.
+                let replay = self.login.is_none()
+                    && self.header.as_ref().is_some_and(|header| {
+                        header.server_url == server_url && header.username == username
+                    });
                 self.connection_offline = offline;
                 self.login = None;
-                self.header = Some(Header {
-                    server_url,
-                    username,
-                    server_type: String::new(),
-                    last_sync: None,
-                    counts: (0, 0, 0),
-                });
-                self.error = Some(if offline {
-                    "Offline mode".to_string()
-                } else {
-                    "Logged in".to_string()
-                });
-                self.bridge.load_library(self.view.scope, self.view.order);
-                if !offline {
-                    self.bridge.refresh_header();
+                if !replay {
+                    self.reset_for_account();
+                    self.header = Some(Header {
+                        server_url,
+                        username,
+                        last_sync: None,
+                    });
+                    // Auth state is announced with a toast, not the empty-list
+                    // banner: `self.error` is reserved for surface load
+                    // failures.
+                    self.push_toast(
+                        if offline { "Offline mode" } else { "Logged in" }.to_string(),
+                        None,
+                    );
+                    self.bridge.load_library(self.view.scope, self.view.order);
+                    if !offline {
+                        self.bridge.refresh_header();
+                    }
                 }
             }
             Event::LoggedOut => {
                 self.reset_for_account();
                 self.login = Some(Self::login_state(LoginMode::SignIn, false));
                 self.header = None;
-                self.error = Some("Logged out".to_string());
+                self.push_toast("Logged out".to_string(), None);
             }
             Event::PlaylistSaved {
                 name,
@@ -561,7 +598,7 @@ impl AppRoot {
                 let failed = error.is_some();
                 if !failed && !removed && rows > 0 {
                     self.paste_backup = None;
-        self.pending_playlist_cursor = None;
+                    self.pending_playlist_cursor = None;
                 }
                 if failed
                     && self.clipboard_kind.is_none()
@@ -579,26 +616,21 @@ impl AppRoot {
                     "update"
                 };
                 if let Some(error) = error {
-                    self.push_toast(
-                        format!("Could not {verb} “{name}”: {error}"),
-                        ToastKind::Error,
-                        None,
-                    );
+                    self.push_toast(format!("Could not {verb} “{name}”: {error}"), None);
                 } else if offline {
-                    self.push_toast(format!("Saved “{name}” locally"), ToastKind::Notice, None);
+                    self.push_toast(format!("Saved “{name}” locally"), None);
                 } else if created {
-                    self.push_toast(format!("Created “{name}”"), ToastKind::Notice, None);
+                    self.push_toast(format!("Created “{name}”"), None);
                 } else if removed && rows > 0 {
                     self.push_toast(
                         format!(
                             "Deleted {rows} {} from “{name}”",
                             if rows == 1 { "row" } else { "rows" }
                         ),
-                        ToastKind::Notice,
                         None,
                     );
                 } else if removed {
-                    self.push_toast(format!("Removed from “{name}”"), ToastKind::Notice, None);
+                    self.push_toast(format!("Removed from “{name}”"), None);
                 } else if moved {
                     // Reordering is visible in the list; no toast to spam.
                 } else if rows > 0 {
@@ -607,11 +639,10 @@ impl AppRoot {
                             "Added {rows} {} to “{name}”",
                             if rows == 1 { "track" } else { "tracks" }
                         ),
-                        ToastKind::Notice,
                         None,
                     );
                 } else {
-                    self.push_toast(format!("Added to “{name}”"), ToastKind::Notice, None);
+                    self.push_toast(format!("Added to “{name}”"), None);
                 }
                 if failed {
                     return;
@@ -625,8 +656,7 @@ impl AppRoot {
                 // cursor on the edited row for the reload.
                 if let (Some(id), Some(row)) = (playlist_id, cursor)
                     && self.page.as_ref().is_some_and(|page| {
-                        page.descriptor.kind == PageKind::Playlist
-                            && page.descriptor.id == id
+                        page.descriptor.kind == PageKind::Playlist && page.descriptor.id == id
                     })
                 {
                     self.pending_playlist_cursor = Some((id, row, moved));
@@ -642,25 +672,12 @@ impl AppRoot {
             }
             Event::PlaylistDeleted { id, name, error } => {
                 if let Some(error) = error {
-                    self.push_toast(
-                        format!("Could not delete playlist “{name}”: {error}"),
-                        ToastKind::Error,
-                        None,
-                    );
+                    self.push_toast(format!("Could not delete playlist “{name}”: {error}"), None);
                 } else {
-                    self.push_toast(
-                        format!("Deleted playlist “{name}”"),
-                        ToastKind::Notice,
-                        None,
-                    );
-                    if self
-                        .page
-                        .as_ref()
-                        .is_some_and(|page| {
-                            page.descriptor.kind == PageKind::Playlist
-                                && page.descriptor.id == id
-                        })
-                    {
+                    self.push_toast(format!("Deleted playlist “{name}”"), None);
+                    if self.page.as_ref().is_some_and(|page| {
+                        page.descriptor.kind == PageKind::Playlist && page.descriptor.id == id
+                    }) {
                         self.page = None;
                         self.travel.clear();
                     }
@@ -673,14 +690,14 @@ impl AppRoot {
                 if next.is_some() {
                     self.reset_for_account();
                     self.login = None;
-                    self.error = Some(format!("Removed {label}"));
+                    self.push_toast(format!("Removed {label}"), None);
                     self.bridge.refresh_header();
                     self.bridge.load_library(self.view.scope, self.view.order);
                 } else {
                     self.reset_for_account();
                     self.login = Some(Self::login_state(LoginMode::SignIn, false));
                     self.header = None;
-                    self.error = Some(format!("Removed {label}"));
+                    self.push_toast(format!("Removed {label}"), None);
                 }
             }
             Event::AuthError(message) => {
@@ -716,6 +733,7 @@ impl AppRoot {
                     self.lyrics_line_color.clear();
                     self.lyrics_layout = None;
                     self.release_lyrics_hold();
+                    self.clock.tick();
                     self.lyrics_track_fade
                         .target(0.0, 0.0, anim::Curve::Standard, &self.clock);
                     self.lyrics_track_fade
@@ -745,7 +763,10 @@ impl AppRoot {
                     self.palette_motion.reset(&self.clock);
                 }
             }
-            Event::Queue { tracks: _, start: _ } => {
+            Event::Queue {
+                tracks: _,
+                start: _,
+            } => {
                 // Retired in IPC v2: `QueueDelta::Reset` + `QueueRows` replace
                 // the full queue payload.
                 self.playback_error = None;
@@ -767,6 +788,7 @@ impl AppRoot {
                     search.loading = false;
                     self.search_loading_since = None;
                     if !most_played && !search.editor.text.is_empty() && search.rows.is_empty() {
+                        self.clock.tick();
                         self.search_denied_at = Some(self.clock.now);
                         self.search_denied_query = search.editor.text.clone();
                     }
@@ -818,6 +840,7 @@ impl AppRoot {
                 }
                 // A failed download/removal never sends `DownloadSettled`, so
                 // roll the optimistic row marks back from the ledger.
+                self.marks.inflight = false;
                 self.marks.signature = None;
                 self.ensure_marks();
                 if let Some(search) = self.search.as_mut() {
@@ -827,20 +850,17 @@ impl AppRoot {
                 self.view.error = Some(message.clone());
                 self.error = Some(message.clone());
                 let lower = message.to_lowercase();
-                let (kind, retry) = if lower.contains("playback") {
-                    (
-                        ToastKind::Error,
-                        self.last_play.as_ref().map(|_| RetryAction::Playback),
-                    )
+                let retry = if lower.contains("playback") {
+                    self.last_play.as_ref().map(|_| RetryAction::Playback)
                 } else if lower.contains("library")
                     || lower.contains("search")
                     || lower.contains("sync")
                 {
-                    (ToastKind::Sync, Some(RetryAction::ReloadLibrary))
+                    Some(RetryAction::ReloadLibrary)
                 } else {
-                    (ToastKind::Error, None)
+                    None
                 };
-                self.push_toast(message, kind, retry);
+                self.push_toast(message, retry);
             }
         }
     }
@@ -860,58 +880,237 @@ impl AppRoot {
         }
     }
 
+    /// Restores every session-scoped field to the value `AppRoot::new` starts
+    /// with. This must stay exhaustive: a field left behind leaks the previous
+    /// account's UI state into the next one. Fields that outlive a session
+    /// (window size, palette motion, clocks, the bridge/player handles and all
+    /// per-frame diagnostics) are intentionally untouched.
     fn reset_for_account(&mut self) {
         // The queue and transport belong to the core; an account switch makes
         // it replay a fresh state/queue rather than mutating the view here.
+        self.state_seeded = false;
+        self.player.reset_for_reconnect();
         self.current_cover.clear();
         self.playback_error = None;
         self.connection_offline = false;
         self.eq_profile = None;
-        self.view = ViewState::default();
+        // Playback settings are application-wide (the core republishes them);
+        // they are not account state, so they outlive the reset.
+        self.track_info = None;
+        self.track_info_song.clear();
+        self.settings_open = false;
+        self.settings_cursor = 0;
+        self.error = None;
         self.generation = 0;
+        self.library_scroll = scroll_modal::ScrollModal::new(scroll_modal::LIBRARY);
+        self.page_scroll_modal = scroll_modal::ScrollModal::new(scroll_modal::ALBUM);
+        self.page_layout_mode = None;
+        self.queue_scroll_modal = scroll_modal::ScrollModal::new(scroll_modal::QUEUE);
+        self.search_scroll = scroll_modal::ScrollModal::new(scroll_modal::SEARCH);
+        self.view = ViewState::default();
         self.page = None;
-        self.page_generation = 0;
+        // `page_generation` is the highest accepted page-reply token from the
+        // bridge. Stay monotonic: resetting it would let a delayed reply for
+        // the previous account's page overwrite the new one.
+        self.page_state_marker = None;
         self.travel.clear();
         self.search = None;
         self.search_open = false;
         self.search_loading_since = None;
+        self.search_denied_at = None;
+        self.search_denied_query.clear();
+        self.search_anim = anim::Behavior::new(0.0);
+        self.palette_cover = None;
+        self.hovered_row = None;
+        self.hovered_page = None;
+        self.pending_page_reveal = None;
         self.queue_open = false;
         self.queue_list.cursor = 0;
         self.queue_list.selection.clear();
+        self.queue_anim = anim::Behavior::new(0.0);
+        self.repeat = crate::player::Repeat::Off;
         self.clipboard_kind = None;
         self.clipboard_ids.clear();
         self.paste_backup = None;
         self.pending_playlist_cursor = None;
         self.visual_mode = false;
+        self.last_player_index = 0;
         self.fullscreen = false;
         self.fullscreen_anim = anim::Behavior::new(0.0);
+        self.fullscreen_focus = FullscreenFocus::Cover;
         self.fullscreen_album = None;
         self.fullscreen_album_requested = None;
         self.lyrics = None;
         self.lyrics_requested = None;
         self.lyrics_overlay = false;
         self.lyrics_overlay_wanted = false;
+        self.lyrics_overlay_anim = anim::Behavior::new(0.0);
         self.lyrics_layout = None;
         self.lyrics_active_line = None;
+        self.lyrics_window_start = 0;
+        self.lyrics_line_opacity.clear();
+        self.lyrics_line_emphasis.clear();
+        self.lyrics_line_color.clear();
+        self.lyrics_shift = anim::Behavior::new(0.0);
+        self.lyrics_track_fade = anim::Behavior::new(1.0);
         self.release_lyrics_hold();
-        self.line_search.close();
-        self.command_line.close();
+        self.toasts.clear();
+        self.hold_toast = None;
+        self.mute_toast = None;
+        self.mute_toast_level = None;
+        self.transport_press = [None; 3];
+        self.playback_key_hold = None;
+        self.quit_armed_at = None;
+        self.last_play = None;
+        self.restored = false;
+        self.header = None;
+        self.notes = None;
+        self.description = None;
+        self.description_scroll = gpui::ScrollHandle::new();
+        self.close_line_search();
+        self.close_command_line();
+        self.command_suggestions_generation = 0;
+        self.line_search_snapshot.clear();
+        self.line_search_surfaces.clear();
         self.pending_ipc.clear();
         self.alt.dismiss();
         self.alt_menu = None;
         self.alt_target = None;
+        self.alt_anchor = None;
+        self.alt_spawn = anim::Behavior::new(0.0);
         self.alt_held = false;
         self.alt_was_typing = false;
         self.marks = MarksState::default();
         self.warm.clear();
-        self.restored = false;
-        self.header = None;
-        self.notes = None;
+        self.preloaded = false;
+        self.row_scales.borrow_mut().clear();
+        self.image_cache_entries = 0;
+        self.image_cache_bytes = 0;
+        self.image_cache_hits = 0;
+        self.image_cache_misses = 0;
         self.status_focus = None;
-        self.library_scroll = scroll_modal::ScrollModal::new(scroll_modal::LIBRARY);
-        self.page_scroll_modal = scroll_modal::ScrollModal::new(scroll_modal::ALBUM);
-        self.page_layout_mode = None;
-        self.queue_scroll_modal = scroll_modal::ScrollModal::new(scroll_modal::QUEUE);
-        self.search_scroll = scroll_modal::ScrollModal::new(scroll_modal::SEARCH);
+        self.syncing = false;
+        self.sync_progress = 0.0;
+        self.sync_fill = anim::Behavior::new(0.0);
+        self.sync_spin_started = 0.0;
+        self.sync_spin_offset = 0.0;
+        self.sync_settle = anim::Behavior::new(0.0);
+        self.topbar_scroll = gpui::ScrollHandle::new();
+        self.topbar_info_scroll = gpui::ScrollHandle::new();
+        self.topbar_marquee_started = std::time::Instant::now();
+        self.topbar_manual_scroll = None;
+        self.topbar_last_offset = 0.0;
+        self.topbar_identity_signature = 0;
+        self.resize_last_size = None;
+        self.resize_recenter = false;
+    }
+}
+
+/// Whether a `RowsPatched` mark belongs to the open page's own header. The
+/// header carries the container's favourite/rating, so only an Album patch may
+/// land on an Album page and an Artist patch on an Artist page: comparing the
+/// canonical [`PageKind`]/[`RowKind`] vocabularies prevents id collisions from
+/// patching a page of another kind.
+fn page_header_patch_matches(descriptor: &PageDescriptor, kind: RowKind, id: &str) -> bool {
+    matches!(kind, RowKind::Album | RowKind::Artist)
+        && descriptor.kind.item_kind() == kind.item_kind()
+        && descriptor.id == id
+}
+
+/// Whether a backend notes reply belongs to the open page.
+///
+/// Album descriptions and artist biographies are cached in different tables
+/// and carry unrelated provider ids, so the event says which kind its id names
+/// (D-27): only the page's own kind may consume it. Playlist and radio pages
+/// have no description profile at all.
+fn notes_match_page(descriptor: &PageDescriptor, kind: crate::bridge::NotesKind, id: &str) -> bool {
+    use crate::bridge::NotesKind;
+    let expected = match descriptor.kind {
+        PageKind::Album => NotesKind::Album,
+        PageKind::Artist => NotesKind::Artist,
+        PageKind::Playlist | PageKind::Radio => return false,
+    };
+    descriptor.id == id && kind == expected
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{notes_match_page, page_header_patch_matches};
+    use crate::bridge::NotesKind;
+    use crate::model::{PageDescriptor, PageKind, RowKind};
+
+    fn page(kind: PageKind, id: &str) -> PageDescriptor {
+        PageDescriptor {
+            kind,
+            id: id.to_string(),
+            radio_seed_kind: None,
+        }
+    }
+
+    #[test]
+    fn page_header_patch_matches_the_page_own_kind_only() {
+        assert!(page_header_patch_matches(
+            &page(PageKind::Album, "al1"),
+            RowKind::Album,
+            "al1"
+        ));
+        assert!(page_header_patch_matches(
+            &page(PageKind::Artist, "ar1"),
+            RowKind::Artist,
+            "ar1"
+        ));
+        assert!(
+            !page_header_patch_matches(&page(PageKind::Artist, "al1"), RowKind::Album, "al1"),
+            "an Album patch must not touch an Artist page"
+        );
+        assert!(
+            !page_header_patch_matches(&page(PageKind::Playlist, "p1"), RowKind::Playlist, "p1"),
+            "playlist pages have no favourite/rating header"
+        );
+        assert!(
+            !page_header_patch_matches(&page(PageKind::Album, "al1"), RowKind::Song, "al1"),
+            "song rows never patch a container header"
+        );
+        assert!(
+            !page_header_patch_matches(&page(PageKind::Album, "al1"), RowKind::Album, "al2"),
+            "the id must belong to the open page"
+        );
+    }
+
+    /// D-27: the notes payload carries its own kind, so an artist biography
+    /// keyed by an artist id can never be shown through an album page (and
+    /// vice versa) even when the id strings compare equal.
+    #[test]
+    fn notes_match_the_open_page_kind_and_id() {
+        assert!(notes_match_page(
+            &page(PageKind::Album, "al1"),
+            NotesKind::Album,
+            "al1"
+        ));
+        assert!(notes_match_page(
+            &page(PageKind::Artist, "ar1"),
+            NotesKind::Artist,
+            "ar1"
+        ));
+        assert!(
+            !notes_match_page(&page(PageKind::Artist, "al1"), NotesKind::Album, "al1"),
+            "an album description must not land on an artist page"
+        );
+        assert!(
+            !notes_match_page(&page(PageKind::Album, "al1"), NotesKind::Artist, "al1"),
+            "an artist biography must not land on an album page"
+        );
+        assert!(
+            !notes_match_page(&page(PageKind::Album, "al1"), NotesKind::Album, "al2"),
+            "the id must belong to the open page"
+        );
+        assert!(
+            !notes_match_page(&page(PageKind::Playlist, "p1"), NotesKind::Album, "p1"),
+            "playlist pages have no notes profile"
+        );
+        assert!(
+            !notes_match_page(&page(PageKind::Radio, "r1"), NotesKind::Album, "r1"),
+            "radio pages have no notes profile"
+        );
     }
 }

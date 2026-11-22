@@ -26,7 +26,15 @@ use std::sync::OnceLock;
 /// tray indicator, so those surfaces cannot drift apart.
 pub(crate) const ICON_PLAY: &str = "play-1001-svgrepo-com.svg";
 pub(crate) const ICON_PAUSE: &str = "pause-svgrepo-com.svg";
+#[cfg_attr(
+    not(feature = "gpuui"),
+    expect(dead_code, reason = "consumed by the GPUI front end")
+)]
 pub(crate) const ICON_PREVIOUS: &str = "skip-previous-solid-svgrepo-com.svg";
+#[cfg_attr(
+    not(feature = "gpuui"),
+    expect(dead_code, reason = "consumed by the GPUI front end")
+)]
 pub(crate) const ICON_NEXT: &str = "skip-next-circle-solid-svgrepo-com.svg";
 
 /// The runtime asset root: `MUSIKA_ASSET_DIR` (the packaged share dir) or the
@@ -58,9 +66,6 @@ mod tests {
         assert_eq!(root_from(Some("/opt/musika/share")), "/opt/musika/share");
         assert!(root_from(None).ends_with("/src"));
         assert!(root_from(Some("")).ends_with("/src"));
-        assert_eq!(
-            icon(ICON_PAUSE),
-            format!("{}/icons/{ICON_PAUSE}", root())
-        );
+        assert_eq!(icon(ICON_PAUSE), format!("{}/icons/{ICON_PAUSE}", root()));
     }
 }

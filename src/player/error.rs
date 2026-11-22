@@ -85,6 +85,13 @@ pub struct PlaybackError {
 }
 
 impl PlaybackError {
+    #[cfg_attr(
+        not(feature = "alsa-backend"),
+        expect(
+            dead_code,
+            reason = "only the direct-ALSA sink constructs structured playback errors"
+        )
+    )]
     pub fn new(kind: ErrorKind, stage: ErrorStage, message: impl Into<String>) -> Self {
         Self {
             kind,
@@ -145,6 +152,29 @@ fn http_status(message: &str) -> Option<u16> {
     digits.parse().ok()
 }
 
+fn is_auth_status(lower: &str) -> bool {
+    lower.contains("unauthorized")
+        || lower.contains("forbidden")
+        || [
+            "http 401",
+            "401 unauthorized",
+            "status 401",
+            "error 401",
+            "code 401",
+            "http/1.1 401",
+            "http/2 401",
+            "http 403",
+            "403 forbidden",
+            "status 403",
+            "error 403",
+            "code 403",
+            "http/1.1 403",
+            "http/2 403",
+        ]
+        .iter()
+        .any(|pattern| lower.contains(pattern))
+}
+
 /// The one classification table. Order matters: HTTP/status and auth are
 /// checked before the generic network phrases because messages often contain
 /// both ("Server returned 401 Unauthorized").
@@ -156,11 +186,7 @@ fn classify_kind(message: &str) -> ErrorKind {
             _ => ErrorKind::Http(status),
         };
     }
-    if lower.contains("unauthorized")
-        || lower.contains("forbidden")
-        || lower.contains("401")
-        || lower.contains("403")
-    {
+    if is_auth_status(&lower) {
         return ErrorKind::Auth;
     }
     if lower.contains("connection refused")
@@ -196,4 +222,25 @@ fn classify_kind(message: &str) -> ErrorKind {
         return ErrorKind::Device;
     }
     ErrorKind::Other
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_classification_ignores_numeric_substrings_in_filenames_and_offsets() {
+        let local_err = PlaybackError::classify(
+            ErrorStage::Read,
+            "track_4012.flac: read error at offset 40300",
+        );
+        assert_ne!(local_err.kind, ErrorKind::Auth);
+
+        let unauthorized =
+            PlaybackError::classify(ErrorStage::Open, "Server returned 401 Unauthorized");
+        assert_eq!(unauthorized.kind, ErrorKind::Auth);
+
+        let forbidden = PlaybackError::classify(ErrorStage::Open, "HTTP 403 Forbidden");
+        assert_eq!(forbidden.kind, ErrorKind::Auth);
+    }
 }

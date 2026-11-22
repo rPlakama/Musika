@@ -8,6 +8,43 @@ use super::super::*;
 /// follow target 46/98 px rows while the list actually painted 56 px rows.
 const SEARCH_ROW_H: f32 = 56.0;
 
+/// `AppRoot::hovered_row` is one plain `Option<usize>` shared by every list
+/// surface, so raw paint indices bleed between search/queue/library. Search
+/// indices are tagged into the top bits (a different region than the queue's
+/// tag); library rows keep plain indices and cannot equal a search hover.
+const SEARCH_HOVER_TAG: usize = 2 << (usize::BITS - 4);
+
+fn search_hover_id(index: usize) -> usize {
+    SEARCH_HOVER_TAG | index
+}
+
+/// Nominal height of the floating panel: field, scope chips, the fixed
+/// five-row list, the "Most Played" caption and the footer. On short windows
+/// the panel is anchored 14% from the top, so its nominal height can run off
+/// the bottom: clamp it to the space below the anchor.
+fn search_panel_height(win_h: f32) -> f32 {
+    let nominal = 54.0
+        + 12.0
+        + 34.0
+        + 10.0
+        + 24.0
+        + SEARCH_ROW_H * state::SEARCH_VISIBLE_ROWS as f32
+        + 36.0
+        + 32.0;
+    nominal.min((win_h * 0.86 - 16.0).max(240.0))
+}
+
+/// Copy for the empty result area. The initial most-played view has no query
+/// yet can still be empty, so "Nothing played yet" is its own state instead of
+/// being collapsed into a no-match search.
+fn search_empty_label(query_empty: bool) -> &'static str {
+    if query_empty {
+        "Nothing played yet"
+    } else {
+        "No Results"
+    }
+}
+
 impl AppRoot {
     pub(in crate::ui) fn search_loading_visible(&self, search: &SearchState) -> bool {
         search.loading
@@ -102,8 +139,8 @@ impl AppRoot {
             })
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if *hovered {
-                    this.hovered_row = Some(index);
-                } else if this.hovered_row == Some(index) {
+                    this.hovered_row = Some(search_hover_id(index));
+                } else if this.hovered_row == Some(search_hover_id(index)) {
                     this.hovered_row = None;
                 }
                 cx.notify();
@@ -181,14 +218,10 @@ impl AppRoot {
         let row_h = SEARCH_ROW_H;
         let field_h = 54.0;
         let panel_w = (self.win_w * 0.60).clamp(360.0, 680.0);
-        let panel_h = field_h
-            + 12.0
-            + 34.0
-            + 10.0
-            + 24.0
-            + row_h * state::SEARCH_VISIBLE_ROWS as f32
-            + 36.0
-            + 32.0;
+        // Short windows: clamp the panel below its top anchor; the result area
+        // is flex_1 + overflow_hidden, so the list clips and keeps scrolling
+        // instead of painting outside the window.
+        let panel_h = search_panel_height(self.win_h);
         let denied = self.search_denied_opacity();
         let loading = self.search_loading_visible(search);
         let query_empty = search.editor.text.is_empty();
@@ -196,7 +229,10 @@ impl AppRoot {
         // Keep settled rows visible while the next payload is in flight; the
         // skeleton is only for the first empty search, not every keystroke.
         let show_skeleton = loading && search.rows.is_empty();
-        let nothing = !show_skeleton && !query_empty && scoped.is_empty();
+        // The empty most-played view (no query, nothing played/downloaded yet)
+        // must render its message: requiring a non-empty query made `nothing`
+        // permanently false and painted a blank list instead.
+        let nothing = !show_skeleton && scoped.is_empty();
         let selection_count = search.selection.count(search.cursor());
         let footer = if selection_count > 0 {
             format!(
@@ -220,11 +256,7 @@ impl AppRoot {
                 .justify_center()
                 .text_size(px(14.0))
                 .text_color(rgb(palette::on_surface_variant()))
-                .child(if query_empty {
-                    "Nothing played yet"
-                } else {
-                    "No Results"
-                })
+                .child(search_empty_label(query_empty))
                 .into_any_element()
         } else {
             let scroll = self.search_scroll.handle.clone();
@@ -320,6 +352,7 @@ impl AppRoot {
                 this.search_open = false;
                 cx.notify();
             }))
+            .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.stop_propagation()))
             .child(
                 div()
                     .id("search-panel")
@@ -368,9 +401,18 @@ impl AppRoot {
                     })
                     .child(
                         div()
+                            .id("search-results-area")
                             .flex_1()
                             .min_h_0()
                             .overflow_hidden()
+                            // A manual wheel cancels the keyboard follow
+                            // animation, and the modal swallows the delta so
+                            // the page behind never scrolls (the empty
+                            // most-played state has no list of its own).
+                            .on_scroll_wheel(cx.listener(|this, _, _, cx| {
+                                this.search_scroll.on_wheel();
+                                cx.stop_propagation();
+                            }))
                             .child(result_area),
                     )
                     .child(
@@ -385,5 +427,46 @@ impl AppRoot {
                     ),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        SEARCH_HOVER_TAG, SEARCH_ROW_H, search_empty_label, search_hover_id, search_panel_height,
+    };
+    use crate::model::SEARCH_VISIBLE_ROWS;
+
+    #[test]
+    fn short_windows_clamp_the_search_panel() {
+        let nominal = 54.0
+            + 12.0
+            + 34.0
+            + 10.0
+            + 24.0
+            + SEARCH_ROW_H * SEARCH_VISIBLE_ROWS as f32
+            + 36.0
+            + 32.0;
+        assert_eq!(search_panel_height(1080.0), nominal);
+        // A 400 px-tall window: 344 px minus the 16 px bottom margin.
+        assert_eq!(search_panel_height(400.0), 400.0 * 0.86 - 16.0);
+        assert!(search_panel_height(400.0) < nominal);
+        // Degenerate windows keep a usable floor instead of going negative.
+        assert_eq!(search_panel_height(0.0), 240.0);
+    }
+
+    #[test]
+    fn empty_most_played_view_has_its_own_label() {
+        assert_eq!(search_empty_label(true), "Nothing played yet");
+        assert_eq!(search_empty_label(false), "No Results");
+    }
+
+    #[test]
+    fn search_hover_ids_cannot_collide_with_plain_paint_indices() {
+        for index in [0, 1, 17, 9999] {
+            assert_ne!(search_hover_id(index), index);
+        }
+        assert_eq!(search_hover_id(0), SEARCH_HOVER_TAG);
+        assert_ne!(search_hover_id(0), search_hover_id(1));
     }
 }

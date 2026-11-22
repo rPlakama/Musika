@@ -1,20 +1,26 @@
 //! System tray for the headless core daemon.
 //!
-//! Menu actions are turned into the same textual IPC commands external tools
-//! use; the daemon's IPC server executes them. Left-click is `show`.
+//! Menu actions are delivered to the daemon loop over an in-process channel as
+//! the same textual IPC commands external tools use; the daemon executes them
+//! (a tray callback never blocks on the loopback socket). Left-click is
+//! `show`.
 //!
 //! The icon doubles as a playback indicator: the pause glyph while audio is
 //! playing, the play glyph while the core is paused or stopped. Both are the
 //! transport's own assets rasterized from the runtime asset dir into the panel
 //! sizes StatusNotifier hosts ask for; pixmaps are the primary path because a
 //! nix-run app cannot rely on the panel's icon-theme search path.
+//!
+//! [`start`] takes the daemon's command sender; the tray only ever pushes the
+//! canonical command lines (`show`, `shuffle queue`, ...) into it.
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use ksni::menu::StandardItem;
 use ksni::TrayMethods;
+use ksni::menu::StandardItem;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 
 /// The glyph shown while the core is playing (the pause action is available).
 const TRAY_GLYPH_PLAYING: &str = crate::assets::ICON_PAUSE;
@@ -130,7 +136,12 @@ pub fn set_playing(playing: bool) {
     });
 }
 
-struct MusikaTray;
+struct MusikaTray {
+    /// Commands are parsed/executed by the daemon loop, never by the tray
+    /// thread: `ksni` callbacks run on the tray service thread and must not
+    /// block on the loopback IPC socket.
+    commands: mpsc::UnboundedSender<String>,
+}
 
 impl ksni::Tray for MusikaTray {
     fn id(&self) -> String {
@@ -147,15 +158,17 @@ impl ksni::Tray for MusikaTray {
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
-        let _ = crate::ipc::send_line("show");
+        _ = self.commands.send("show".to_string());
     }
 
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
-        let item = |label: &str, command: &'static str| {
+        let sender = self.commands.clone();
+        let item = move |label: &str, command: &'static str| {
+            let sender = sender.clone();
             StandardItem {
                 label: label.to_string(),
                 activate: Box::new(move |_| {
-                    let _ = crate::ipc::send_line(command);
+                    _ = sender.send(command.to_string());
                 }),
                 ..Default::default()
             }
@@ -176,13 +189,20 @@ fn handle_slot() -> &'static Mutex<Option<ksni::Handle<MusikaTray>>> {
 }
 
 /// Starts the SNI service once. A missing tray host is not fatal; the daemon
-/// still runs and a later `musika` launch can show the UI.
-pub fn start() {
-    crate::app::runtime().spawn(async {
-        let tray = MusikaTray.assume_sni_available(true);
+/// still runs and a later `musika` launch can show the UI. `commands` is the
+/// daemon's in-process command channel.
+pub fn start(commands: mpsc::UnboundedSender<String>) {
+    crate::app::runtime().spawn(async move {
+        let tray = MusikaTray { commands }.assume_sni_available(true);
         match tray.spawn().await {
             Ok(handle) => {
-                *handle_slot().lock().await = Some(handle);
+                let mut slot = handle_slot().lock().await;
+                *slot = Some(handle);
+                if let Some(handle) = slot.as_ref() {
+                    // Publish the state accumulated before registration: an
+                    // early `set_playing(true)` found no handle to update.
+                    _ = handle.update(|_tray| ()).await;
+                }
                 eprintln!("tray: StatusNotifierItem registered");
             }
             Err(error) => eprintln!("tray: could not start: {error}"),
@@ -255,9 +275,36 @@ mod tests {
         assert_eq!(center_alpha(&playing[largest]), 0, "pause bars have a gap");
         assert_eq!(center_alpha(&paused[largest]), 255, "the triangle is solid");
 
+        let (commands, _rx) = mpsc::unbounded_channel();
+        let tray = MusikaTray { commands };
         set_playing(true);
-        assert_eq!(MusikaTray.icon_pixmap()[largest].data, playing[largest].data);
+        assert_eq!(tray.icon_pixmap()[largest].data, playing[largest].data);
         set_playing(false);
-        assert_eq!(MusikaTray.icon_pixmap()[largest].data, paused[largest].data);
+        assert_eq!(tray.icon_pixmap()[largest].data, paused[largest].data);
+    }
+
+    #[test]
+    fn tray_callbacks_hand_commands_to_the_daemon_in_process() {
+        // D-12: callbacks must never block on the loopback IPC socket; they
+        // push the canonical command line into the daemon's channel instead.
+        let (commands, mut rx) = mpsc::unbounded_channel();
+        let mut tray = MusikaTray { commands };
+        tray.activate(0, 0);
+        assert_eq!(rx.try_recv(), Ok("show".to_string()));
+
+        let expected = [
+            ("Shuffle", "shuffle queue"),
+            ("Radio", "radio current"),
+            ("Random", "random"),
+            ("Quit", "quit"),
+        ];
+        for (item, (label, command)) in tray.menu().into_iter().zip(expected) {
+            let ksni::MenuItem::Standard(item) = item else {
+                panic!("the tray menu only holds standard items");
+            };
+            assert_eq!(item.label, label);
+            (item.activate)(&mut tray);
+            assert_eq!(rx.try_recv(), Ok(command.to_string()));
+        }
     }
 }

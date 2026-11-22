@@ -57,14 +57,15 @@
             path: type:
             let
               rel = pkgs.lib.removePrefix (toString ./. + "/") (toString path);
+              # Only files the build actually reads belong here: adding
+              # README/LICENSE would invalidate the source hash on every doc
+              # edit and force a full release rebuild.
               file = builtins.elem rel [
                 "Cargo.toml"
                 "Cargo.lock"
                 "build.rs"
                 "clippy.toml"
                 "musika.desktop"
-                "README.md"
-                "LICENSE"
               ];
               tree = [
                 "src"

@@ -3,6 +3,53 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.7.7 - _Audit hardening_
+
+- **Playback engine:** gapless boundaries are tracked in the ring read-frame
+  space with an epoch guard (a seek/format flush disarms the marker), preload
+  seeds from the decoded timeline position, and a live `SetNextUrl` keeps
+  gapless/crossfade in sync with queue edits, repeat and shuffle. The
+  8-second HTTP park/reopen loop is gone (512 KiB local / 2 MiB network AVIO
+  read-ahead), internal reopens no longer re-fire `FirstPcm` or reset
+  scrobbling, and fade-out/volume no longer pop or attenuate twice. Direct
+  ALSA output negotiates `FloatLE -> S32_LE -> S24_3LE -> S16_LE` and survives
+  Stop/format changes.
+- **Audio correctness:** RBJ shelf EQ coefficients fixed (f64 state), crossfade
+  interpolated per frame with a bit-perfect bypass, ReplayGain peak-capped and
+  soft-clamped, sleep timer pauses and mutes before restoring volume, and the
+  playhead freezes during retries while syncing against hardware frames.
+- **Security and data safety:** XDG paths append `/musika`, wipes only remove
+  Musika-owned files, CWD `.env` loading is debug-only and allowlisted, media
+  suffixes are sanitized, an empty/shrunk sync index is rejected, IPC floats
+  and sleep values are bounded, first-run key creation is serialized, account
+  registry/deletion ordering is fixed, and scrobbles are single-flight with a
+  capped retry budget.
+- **Daemon, IPC and MPRIS:** MPRIS volume is scaled correctly with finite
+  guards, shuffle toggles the persistent mode and `LoopStatus`/`Shuffle` are
+  published; write timeouts, backpressured bootstrap and slow-consumer
+  disconnect; SIGTERM/SIGINT graceful shutdown; cross-account state flush and
+  page restore; the protocol rejects truncated headers and trailing bytes.
+- **Network and media:** HTTP-200 JSON/XML error bodies are rejected in
+  audio/cover fetches, transfers gain timeouts/retries/size caps, 304
+  validators are refreshed, playlist appends no longer rewrite the server
+  list, M3U writes are atomic, and the download state machine recovers crash
+  leftovers without tier downgrades.
+- **Sync and offline:** INSERT OR IGNORE staging, similarity TTL separated
+  from biography invalidation, chunked `IN (...)` queries, no-op syncs skip
+  FTS/Nucleo/mirror rebuilds, and offline search/radio/rows filter and count
+  real downloaded content; LRC offset/sort/overflow handling fixed.
+- **UI:** reconnect counters reset, `CoverImage` state persists across frames,
+  the image cache no longer spins or leaks fetches, lyrics layout is memoized,
+  idle RAF is eliminated (0% CPU once settled), keybinds/completion/modal
+  isolation fixed, feature roles honored, the crate-wide dead-code mask is
+  gone, CI gained headless/io-uring gates, and the Nix source filter only
+  ships build inputs (GPU wrapper only on `musika-ui`).
+- **Verification:** 813 tests pass (19 ignored), 529 headless, io-uring reader
+  tests pass, `cargo clippy --all-targets -D warnings` is clean in both
+  feature sets, `cargo fmt --check` is clean, the packaged Nix build succeeds,
+  and the GUI was checked in niri (row colors, live MPRIS volume/shuffle/loop,
+  idle CPU).
+
 ## 0.7.6 - _Layouts and virtual spacing_
 
 - **One layout table:** the page, top bar and player bar now derive from the

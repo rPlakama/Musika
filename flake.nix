@@ -1,6 +1,22 @@
 {
   description = "Musika — keyboard-driven Subsonic/Navidrome player (Rust + GPUI)";
 
+  # Release builds (version tags) are published as a signed Cachix cache by
+  # `.github/workflows/release.yml`, so consumers of this flake substitute the
+  # prebuilt package instead of compiling Rust/PipeWire/FFmpeg locally.
+  #
+  # One-time setup after creating the cache (see README.md → Binary cache):
+  #   1. replace the placeholder key below with the public key printed in the
+  #      first successful Release job summary (`cachix.org` → cache settings),
+  #   2. set the repository variable `CACHIX_CACHE_NAME` only if you renamed
+  #      the cache — the substituter and key here must be kept in sync.
+  nixConfig = {
+    extra-substituters = [ "https://rplakama-musika.cachix.org" ];
+    extra-trusted-public-keys = [
+      "rplakama-musika.cachix.org-1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    ];
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   };

@@ -1,0 +1,147 @@
+name: Release
+
+# Release-only CI: this workflow builds the flake package, verifies the
+# packaged binaries, publishes the build to the public Nix binary cache, and
+# attaches the built package to a GitHub release.
+#
+# It is intentionally triggered by version tags (`v*`) and nothing else: the
+# release flow commits `release: vX.Y.Z` and then pushes the matching tag, so
+# ordinary `fix:`/`feat:` commits never spend a runner building a package.
+# Use "Run workflow" (workflow_dispatch) to build a specific ref by hand.
+
+on:
+  push:
+    tags:
+      - "v[0-9]*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # `CACHIX_CACHE_NAME` is an optional repository variable; change it (and the
+  # matching substituter/key in flake.nix) if you prefer another cache name.
+  CACHIX_CACHE_NAME: ${{ vars.CACHIX_CACHE_NAME || 'rplakama-musika' }}
+  # `CACHIX_AUTH_TOKEN` is a repository secret (cachix.org → account → tokens).
+  # Without it the build still runs, but nothing is published to the cache.
+  CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+jobs:
+  nix-build:
+    name: nix build + cache publish (x86_64-linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      # Installs the cache credentials and watches the Nix store: every path
+      # built by the steps below is pushed to the public cache at the end.
+      - name: Configure the public binary cache
+        if: env.CACHIX_AUTH_TOKEN != ''
+        uses: cachix/cachix-action@v15
+        with:
+          name: ${{ env.CACHIX_CACHE_NAME }}
+          authToken: ${{ env.CACHIX_AUTH_TOKEN }}
+          skipPush: false
+
+      - name: Warn when the binary cache is not configured
+        if: env.CACHIX_AUTH_TOKEN == ''
+        run: |
+          echo "::warning title=Binary cache not configured::CACHIX_AUTH_TOKEN is missing, so this release is built but not published to the Nix binary cache. See README.md (Binary cache) for the one-time setup."
+
+      - name: Build the flake package
+        run: |
+          nix build .# --print-build-logs --print-out-paths | tee /tmp/musika-store-path
+          echo "MUSIKA_STORE_PATH=$(cat /tmp/musika-store-path)" >> "$GITHUB_ENV"
+
+      - name: Verify the packaged binaries
+        run: |
+          "$MUSIKA_STORE_PATH/bin/musika" --version
+          test -x "$MUSIKA_STORE_PATH/bin/musika-ui"
+          test -x "$MUSIKA_STORE_PATH/bin/.musika-wrapped"
+          test -d "$MUSIKA_STORE_PATH/share/musika/icons"
+
+      # The version the flake derives from Cargo.toml must match the tag.
+      - name: Check version against the tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          built_version="$("$MUSIKA_STORE_PATH/bin/musika" --version | awk '{print $2}')"
+          if [ "$tag_version" != "$built_version" ]; then
+            echo "::error title=Version mismatch::tag is v$tag_version but the package reports $built_version"
+            exit 1
+          fi
+
+      - name: Package the built output
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # Rebuild a relocatable tree from the store output: the wrappers and
+          # RPATHs still point at Nix store paths, so this archive is meant for
+          # archival/Nix users, while non-Nix users use the binary cache.
+          cp -a "$MUSIKA_STORE_PATH" "dist/musika"
+          tar -C dist -czf "musika-${GITHUB_REF_NAME}-x86_64-linux.tar.gz" musika
+
+      - name: Upload the workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: musika-${{ github.ref_name }}-x86_64-linux
+          path: musika-*-x86_64-linux.tar.gz
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          asset="musika-${GITHUB_REF_NAME}-x86_64-linux.tar.gz"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$asset" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$asset" \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes \
+              --verify-tag
+          fi
+
+      # The flake advertises the cache to consumers through `nixConfig`. Print
+      # the cache public key here so it is visible in the job summary: paste it
+      # into flake.nix `extra-trusted-public-keys` once (see README.md).
+      - name: Show the cache public key
+        if: env.CACHIX_AUTH_TOKEN != ''
+        run: |
+          set -euo pipefail
+          key="$(grep -h "trusted-public-keys" /etc/nix/nix.conf "$HOME/.config/nix/nix.conf" 2>/dev/null \
+            | tr ' ' '\n' | grep "${CACHIX_CACHE_NAME}\.cachix\.org" | tail -1 || true)"
+          {
+            echo "## Binary cache"
+            echo
+            echo "- Cache: \`${CACHIX_CACHE_NAME}\`"
+            echo "- Substituter: \`https://${CACHIX_CACHE_NAME}.cachix.org\`"
+            if [ -n "$key" ]; then
+              echo "- Public key: \`${key}\`"
+              echo
+              echo "Paste that key into \`flake.nix\` → \`nixConfig.extra-trusted-public-keys\`."
+            else
+              echo
+              echo "Public key not found in nix.conf; copy it from the cache settings at https://app.cachix.org."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -52,38 +52,6 @@ then as a user/system package.
 inputs.musika.packages.${pkgs.system}.default
 ```
 
-## Binary cache
-
-Every release tag (see the release flow in the commit history: a
-`release: vX.Y.Z` commit followed by a `vX.Y.Z` tag) is built by
-[`.github/workflows/release.yml`](.github/workflows/release.yml) and pushed to
-a public Cachix binary cache. The flake advertises that cache through
-`nixConfig.extra-substituters`, so a normal `nix build` on your machine pulls
-the prebuilt package instead of compiling Rust, PipeWire, FFmpeg and GPUI.
-The cache is always built from the tagged commit, never from a dirty tree.
-
-If your Nix installation ignores flake configuration (or you run with
-`--no-accept-flake-config`), configure the cache once by hand:
-
-```
-cachix use rplakama-musika
-```
-
-Maintainer one-time setup (only needed when the cache does not exist yet):
-
-1. Create a public cache at <https://app.cachix.org> — `rplakama-musika` by
-   default; use another name only if you also update the substituter/key in
-   `flake.nix` and set the repository variable `CACHIX_CACHE_NAME`.
-2. Add the repository secret `CACHIX_AUTH_TOKEN` (cachix.org → Account →
-   Auth tokens) with permission to push to that cache.
-3. Run the Release workflow once (push a release tag or use "Run workflow").
-4. Copy the public key printed in the first successful run's job summary into
-   `nixConfig.extra-trusted-public-keys` in `flake.nix` (the placeholder key
-   there only exists so the file is valid before the cache is created).
-
-Without `CACHIX_AUTH_TOKEN` the workflow still builds and verifies the release
-(and attaches it to the GitHub release), it just does not publish to the cache.
-
 # Sections
 
 - Library scopes: Albums, Songs, Artists, Playlists. Shift-J/K cycles the scope; Shift-H/L cycles the ordering (Artist → Name → Year → Recent → **Downloaded** for albums and songs, Name → Albums → **Downloaded** for artists, Name → **Downloaded** for playlists). The Downloaded ordering filters the scope to local downloads. If the server stops answering, the top bar shows **Offline** and every surface serves that downloaded catalog until a ping succeeds. Radio opens from a row's Alt menu.

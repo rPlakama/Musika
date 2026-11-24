@@ -601,7 +601,10 @@ impl ServiceState {
             return;
         }
         let now = Instant::now();
-        if self.core.state() == crate::player::State::Playing {
+        if self.core.state() == crate::player::State::Playing
+            && !self.core.is_loading()
+            && !self.core.retrying()
+        {
             state.accumulated += now.saturating_duration_since(state.last_tick);
         }
         state.last_tick = now;
@@ -1217,12 +1220,14 @@ fn run(
                 | EngineEvent::Failed { .. }
                 | EngineEvent::SinkRecovered
                 | EngineEvent::LoadingCleared
+                | EngineEvent::Buffering(_)
                 | EngineEvent::PositionReset { .. }) => {
                     let healthy =
                         matches!(event, EngineEvent::FirstPcm | EngineEvent::Loaded { .. });
                     let first_pcm = matches!(event, EngineEvent::FirstPcm);
                     let boundary = matches!(event, EngineEvent::Boundary { .. });
                     let ended = matches!(event, EngineEvent::Ended);
+                    let entering_buffer = matches!(event, EngineEvent::Buffering(true));
                     if healthy || matches!(event, EngineEvent::SinkRecovered) {
                         service.sink_failures = 0;
                     }
@@ -1237,6 +1242,22 @@ fn run(
                         None
                     };
                     let now = crate::linux::monotonic_ns();
+                    if entering_buffer
+                        && let Some(clock) = sample_engine_metrics(&mut service)
+                        && let Some(prev) = service.clock_anchor
+                        && prev.epoch == clock.epoch
+                        && prev.sample_rate == clock.sample_rate
+                        && clock.sample_rate > 0
+                        && clock.played_frames >= prev.played_frames
+                    {
+                        // Snap to the exact last audible frame before freezing
+                        // the playhead so a mid-track stall never leaves drift.
+                        let delta_frames = clock.played_frames.saturating_sub(prev.played_frames);
+                        let hw_pos =
+                            prev.track_pos + delta_frames as f64 / f64::from(clock.sample_rate);
+                        service.core.reconcile_clock(hw_pos, now);
+                        service.clock_anchor = None;
+                    }
                     let outcome = service.core.on_engine(event, now);
                     if boundary || ended {
                         service.reset_track_session();
@@ -1492,6 +1513,9 @@ fn publish_now(
     }
     if service.retry.is_some() {
         state.flags |= crate::ipc_protocol::STATE_FLAG_RETRYING;
+        if state.state() == StateWire::Playing {
+            state.rate_milli = 0;
+        }
     }
     debug_assert_eq!(state.seq, *next_seq);
     *published = state;
@@ -1514,12 +1538,16 @@ fn publish(
     }
     if service.retry.is_some() {
         state.flags |= crate::ipc_protocol::STATE_FLAG_RETRYING;
+        if state.state() == StateWire::Playing {
+            state.rate_milli = 0;
+        }
     }
     let identity_changed = state.state != published.state
         || state.index != published.index
         || state.repeat != published.repeat
         || state.reserved != published.reserved
         || state.volume_milli != published.volume_milli
+        || state.rate_milli != published.rate_milli
         || state.flags != published.flags
         || state.duration_ms != published.duration_ms
         || state.queue_rev != published.queue_rev;
@@ -1540,6 +1568,9 @@ fn publish(
         }
         if service.retry.is_some() {
             state.flags |= crate::ipc_protocol::STATE_FLAG_RETRYING;
+            if state.state() == StateWire::Playing {
+                state.rate_milli = 0;
+            }
         }
     }
     if !(force || identity_changed || drift_due || published.seq == 0) {

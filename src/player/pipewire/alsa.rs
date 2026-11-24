@@ -265,9 +265,9 @@ fn run_sink(
             continue;
         };
 
-        if ring.paused() {
-            // Service pending reset/flush flags while paused so `Ring::write`
-            // never deadlocks on a seek or load.
+        if ring.paused() || ring.buffering() {
+            // Service pending reset/flush flags while paused/buffering so
+            // `Ring::write` never deadlocks on a seek or load.
             _ = ring.read_into(&mut buffer, 0);
             if !was_paused {
                 if let Err(error) = active_pcm.pause(true) {
@@ -297,6 +297,9 @@ fn run_sink(
         }
         let frames = ring.read_into(&mut buffer, PERIOD_FRAMES);
         if frames == 0 {
+            if shared.can_rebuffer() && ring.enter_buffering() {
+                shared.signal();
+            }
             thread::sleep(Duration::from_millis(2));
             continue;
         }

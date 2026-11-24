@@ -1092,30 +1092,52 @@ fn process(stream: &pw::stream::Stream, ctx: &mut RtContext) {
     // is writable for the duration of the process callback.
     let out = unsafe { std::slice::from_raw_parts_mut(ptr, frames * ring::CHANNELS) };
     let ring = &ctx.ring;
-    match ring.take_fade_request() {
-        1 => ctx.fade.start(1.0, ring.rate()),
-        2 => ctx.fade.start(0.0, ring.rate()),
-        _ => {}
-    }
-    let paused = ring.paused();
-    // A deactivated PipeWire stream can still get a final/settling process
-    // callback. Do not consume or advance the clock while paused; service a
-    // pending reset/flush with a zero-frame read so the producer can wake.
-    // While an envelope is active the callback keeps consuming the already
-    // buffered audio: this is what makes the fade-out audible before the
-    // stream is deactivated and the fade-in audible on resume.
-    if paused && !ctx.fade.active() {
+    let buffering = ring.buffering();
+    // While pre-/re-buffering, hold playback completely silent without
+    // consuming ring frames or pending fade-in requests (the worker arms
+    // fade-in right before clearing `buffering`).
+    if buffering {
         _ = ring.read_into(out, 0);
         out.fill(0.0);
+        ctx.fade.remaining = 0;
     } else {
-        let written = ring.read_into(out, frames);
-        out[written * ring::CHANNELS..].fill(0.0);
-        ring::apply_gain(out, ring.muted(), ring.volume_milli(), frames);
-        ctx.fade.apply(out, written);
-        // A paused ring with nothing buffered cannot advance a fade-out: let
-        // it finish so the next callback takes the silent paused branch.
-        if paused && written == 0 {
-            ctx.fade.remaining = 0;
+        match ring.take_fade_request() {
+            1 => ctx.fade.start(1.0, ring.rate()),
+            2 => ctx.fade.start(0.0, ring.rate()),
+            _ => {}
+        }
+        let paused = ring.paused();
+        // A deactivated PipeWire stream can still get a final/settling process
+        // callback. Do not consume or advance the clock while paused; service a
+        // pending reset/flush with a zero-frame read so the producer can wake.
+        // While an envelope is active the callback keeps consuming the already
+        // buffered audio: this is what makes the fade-out audible before the
+        // stream is deactivated and the fade-in audible on resume.
+        if paused && !ctx.fade.active() {
+            _ = ring.read_into(out, 0);
+            out.fill(0.0);
+        } else {
+            let written = ring.read_into(out, frames);
+            out[written * ring::CHANNELS..].fill(0.0);
+            ring::apply_gain(out, ring.muted(), ring.volume_milli(), frames);
+            ctx.fade.apply(out, written);
+            // A paused ring with nothing buffered cannot advance a fade-out:
+            // let it finish so the next callback takes the silent branch.
+            if paused && written == 0 {
+                ctx.fade.remaining = 0;
+            }
+            // Ring drained completely while the decoder is still live before
+            // EOF: hold playback in buffering state until the worker refills to
+            // the rebuffer watermark instead of stuttering silence while time
+            // advances.
+            if !paused
+                && written == 0
+                && frames > 0
+                && ctx.shared.can_rebuffer()
+                && ring.enter_buffering()
+            {
+                ctx.shared.signal();
+            }
         }
     }
     // Gapless boundary as an event: the armed boundary frame lives in the same

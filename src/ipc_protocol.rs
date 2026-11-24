@@ -611,13 +611,6 @@ impl PlaybackState {
         self.flags & STATE_FLAG_LOADING != 0
     }
 
-    #[cfg_attr(
-        not(feature = "gpuui"),
-        expect(
-            dead_code,
-            reason = "the retry indicator is only read by the GPUI front end"
-        )
-    )]
     pub fn retrying(&self) -> bool {
         self.flags & STATE_FLAG_RETRYING != 0
     }
@@ -650,7 +643,11 @@ impl PlaybackState {
     /// Extrapolated playhead at `now_ns` (also `CLOCK_MONOTONIC`).
     pub fn position_at(&self, now_ns: u64) -> f64 {
         let anchor = self.position();
-        if self.state() != StateWire::Playing || self.rate_milli == 0 {
+        if self.state() != StateWire::Playing
+            || self.rate_milli == 0
+            || self.loading()
+            || self.retrying()
+        {
             return anchor;
         }
         let elapsed_ns = now_ns.saturating_sub(self.anchor_ns);

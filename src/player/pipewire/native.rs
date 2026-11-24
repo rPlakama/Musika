@@ -251,6 +251,12 @@ impl Native {
     /// Returns `true` on the transition only, so the engine can emit
     /// `EngineEvent::LoadingCleared` exactly once.
     pub(crate) fn loading_clear(&self, playing: bool) -> bool {
+        // Never clear loading while the ring is intentionally held for remote
+        // pre-buffering or mid-track rebuffering; the worker clears buffering
+        // once the watermark (or EOF) is reached.
+        if self.sink.ring().buffering() {
+            return false;
+        }
         let loaded = {
             let status = self.shared.lock();
             if !status.loading {
@@ -274,8 +280,12 @@ impl Native {
         }
     }
 
+    pub(crate) fn buffering(&self) -> bool {
+        self.sink.ring().buffering()
+    }
+
     pub(crate) fn loading(&self) -> bool {
-        self.shared.lock().loading
+        self.shared.lock().loading || self.sink.ring().buffering()
     }
 
     pub(crate) fn played_frames(&self) -> u64 {

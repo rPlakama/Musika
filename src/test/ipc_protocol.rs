@@ -168,6 +168,14 @@ fn position_extrapolates_only_while_playing() {
     state.state = 1;
     state.duration_ms = 0;
     assert!(state.position_at(state.anchor_ns + 600_000_000_000) > 60.0);
+
+    // Loading/buffering and retrying freeze the playhead even while state is
+    // Playing and rate_milli is non-zero.
+    state.duration_ms = 60_000;
+    state.flags = STATE_FLAG_LOADING;
+    assert!((state.position_at(two_seconds_later) - 1.0).abs() < 1e-9);
+    state.flags = crate::ipc_protocol::STATE_FLAG_RETRYING;
+    assert!((state.position_at(two_seconds_later) - 1.0).abs() < 1e-9);
 }
 
 #[test]

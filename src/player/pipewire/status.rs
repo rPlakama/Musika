@@ -81,6 +81,9 @@ pub(crate) struct Shared {
     /// final buffered frames. The engine turns this into `Ended` only after the
     /// sink drains, so a short track is never cut off.
     pub(crate) decode_done: AtomicBool,
+    /// Lock-free mirror of `Status::decoder_live` so the RT audio callback can
+    /// detect mid-track underruns without taking a mutex.
+    pub(crate) decoder_live: AtomicBool,
     /// First PCM written for the current load (`EngineEvent::FirstPcm`).
     pub(crate) first_pcm: AtomicBool,
     /// Last PipeWire stream status.
@@ -143,6 +146,7 @@ impl Shared {
             generation: AtomicU64::new(0),
             current_stop: Mutex::new(None),
             decode_done: AtomicBool::new(false),
+            decoder_live: AtomicBool::new(false),
             first_pcm: AtomicBool::new(false),
             sink: Mutex::new(SinkStatus::default()),
             sink_seq: AtomicU64::new(0),
@@ -186,6 +190,13 @@ impl Shared {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take()
+    }
+
+    /// Whether the RT audio callback may hold playback in buffering state when
+    /// the ring drains completely (live decoder that has not reached EOF).
+    /// Lock-free so it is safe on the RT audio thread.
+    pub(crate) fn can_rebuffer(&self) -> bool {
+        self.decoder_live.load(Ordering::Acquire) && !self.decode_done.load(Ordering::Acquire)
     }
 
     /// Wakes the engine thread. Safe to call from the RT process callback: it

@@ -2136,3 +2136,42 @@ fn position_reset_reanchors_the_displayed_playhead() {
     assert!(core.position_at(4 * SECOND).abs() < 1e-6);
     assert!((core.position_at(6 * SECOND) - 2.0).abs() < 1e-6);
 }
+
+#[test]
+fn snapshot_freezes_playhead_while_loading_and_mid_track_buffering() {
+    let mut core = PlaybackCore::new();
+    core.load(remote_tracks(1), 0, false);
+
+    // Initial load is still buffering: snapshot must publish rate_milli == 0
+    // and STATE_FLAG_LOADING so UI extrapolation does not tick seconds upward.
+    let loading = core.snapshot(1, 0);
+    assert!(loading.loading());
+    assert_eq!(loading.rate_milli, 0);
+    assert!(loading.position_at(5 * SECOND).abs() < 1e-6);
+
+    // Once initial prebuffer completes, playback advances normally.
+    core.on_engine(EngineEvent::FirstPcm, 5 * SECOND);
+    let playing = core.snapshot(2, 5 * SECOND);
+    assert!(!playing.loading());
+    assert_eq!(playing.rate_milli, 1000);
+    assert!((playing.position_at(8 * SECOND) - 3.0).abs() < 1e-6);
+
+    // Mid-track stall: Buffering(true) freezes both core and snapshot at 3.0 s.
+    let stalled = core.on_engine(EngineEvent::Buffering(true), 8 * SECOND);
+    assert!(stalled.changed);
+    assert!(core.is_loading());
+    let buffering = core.snapshot(3, 8 * SECOND);
+    assert!(buffering.loading());
+    assert_eq!(buffering.rate_milli, 0);
+    assert!((buffering.position_at(14 * SECOND) - 3.0).abs() < 1e-6);
+
+    // Buffer refilled 6 s later: resumes smoothly from 3.0 s, NOT 9.0 s.
+    let resumed = core.on_engine(EngineEvent::Buffering(false), 14 * SECOND);
+    assert!(resumed.changed);
+    assert!(!core.is_loading());
+    let after = core.snapshot(4, 14 * SECOND);
+    assert!(!after.loading());
+    assert_eq!(after.rate_milli, 1000);
+    assert!((after.position_at(14 * SECOND) - 3.0).abs() < 1e-6);
+    assert!((after.position_at(16 * SECOND) - 5.0).abs() < 1e-6);
+}

@@ -103,6 +103,8 @@ pub(crate) enum EngineEvent {
     },
     /// The loading heuristic fired; emit once per load.
     LoadingCleared,
+    /// The ring entered (`true`) or exited (`false`) pre-/re-buffering hold.
+    Buffering(bool),
     /// The decoder had to restart at `position` (non-seekable stream), so the
     /// core must re-anchor the playhead instead of trusting the seek target.
     PositionReset {
@@ -272,6 +274,7 @@ fn engine_thread(
     let shared_fd = native.wake_fd();
     let mut paused = true;
     let mut sink_failed = false;
+    let mut was_buffering = false;
     loop {
         let timeout = if !paused || native.loading() {
             ACTIVE_WAIT
@@ -299,7 +302,13 @@ fn engine_thread(
             break;
         }
 
-        if !pump(&native, events.as_ref(), &paused, &mut sink_failed) {
+        if !pump(
+            &native,
+            events.as_ref(),
+            &paused,
+            &mut sink_failed,
+            &mut was_buffering,
+        ) {
             break;
         }
 
@@ -375,6 +384,7 @@ fn pump(
     events: &(dyn Fn(EngineEvent) -> bool + Send + Sync),
     paused: &bool,
     sink_failed: &mut bool,
+    was_buffering: &mut bool,
 ) -> bool {
     let emit = |event: EngineEvent| -> bool { events(event) };
 
@@ -440,6 +450,13 @@ fn pump(
             | SinkState::Connecting
             | SinkState::Paused
             | SinkState::Streaming => {}
+        }
+    }
+    let is_buffering = !*paused && native.buffering();
+    if is_buffering != *was_buffering {
+        *was_buffering = is_buffering;
+        if !emit(EngineEvent::Buffering(is_buffering)) {
+            return false;
         }
     }
     // The loading heuristic moved out of `Native::poll`: the legacy player keeps

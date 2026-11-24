@@ -280,13 +280,6 @@ impl PlaybackCore {
         self.offline
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the loading flag is read directly by the service; this accessor documents the paused-resume tests"
-        )
-    )]
     pub(crate) fn is_loading(&self) -> bool {
         self.loading
     }
@@ -386,7 +379,13 @@ impl PlaybackCore {
             volume_milli: (self.volume.clamp(0.0, 100.0) * 10.0).round() as u16,
             state: self.state_byte(),
             repeat: self.repeat.code() as u8,
-            rate_milli: 1000,
+            rate_milli: if self.state == State::Playing
+                && (self.loading || self.retrying || self.rebase)
+            {
+                0
+            } else {
+                1000
+            },
             reserved: u16::from(self.normalization.code())
                 | if self.crossfade.enabled {
                     crate::ipc_protocol::RESERVED_CROSSFADE
@@ -633,6 +632,18 @@ impl PlaybackCore {
             // follow-default fallback; the transport keeps its state.
             EngineEvent::OutputFallback { .. } => {}
             EngineEvent::LoadingCleared => self.clear_loading(now_ns, &mut outcome),
+            EngineEvent::Buffering(buffering) => {
+                if buffering {
+                    if self.state == State::Playing && !self.loading {
+                        self.anchor_position = self.position_at(now_ns);
+                        self.anchor_ns = now_ns;
+                        self.loading = true;
+                        outcome.changed = true;
+                    }
+                } else if self.state == State::Playing && self.loading && !self.retrying {
+                    self.clear_loading(now_ns, &mut outcome);
+                }
+            }
         }
         outcome
     }

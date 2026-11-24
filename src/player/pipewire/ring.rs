@@ -66,6 +66,10 @@ pub(crate) struct Ring {
     reset: AtomicBool,
     flush: AtomicBool,
     paused: AtomicBool,
+    /// True while the worker is pre-buffering or rebuffering after a mid-track
+    /// underrun. Kept separate from user `paused` so user pause/resume and
+    /// engine rebuffering never overwrite each other.
+    buffering: AtomicBool,
     muted: AtomicBool,
     /// Volume in 1/1000 units (0..=1000).
     volume: AtomicU32,
@@ -118,6 +122,7 @@ impl Ring {
             reset: AtomicBool::new(false),
             flush: AtomicBool::new(false),
             paused: AtomicBool::new(false),
+            buffering: AtomicBool::new(false),
             muted: AtomicBool::new(false),
             volume: AtomicU32::new(1000),
             fade_request: AtomicU32::new(0),
@@ -157,15 +162,22 @@ impl Ring {
 
     /// Frames of the allocated ring that the producer may use at the current
     /// pipeline rate (the rest keeps the same temporal headroom at lower rates).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the usable-frame budget is only asserted by the ring tests"
-        )
-    )]
     pub(crate) fn usable_frames(&self) -> u64 {
         self.limit.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_buffering(&self, buffering: bool) {
+        self.buffering.store(buffering, Ordering::Release);
+    }
+
+    /// Transitions into buffering state atomically; returns `true` only on the
+    /// `false -> true` edge so RT callbacks wake the engine once.
+    pub(crate) fn enter_buffering(&self) -> bool {
+        !self.buffering.swap(true, Ordering::AcqRel)
+    }
+
+    pub(crate) fn buffering(&self) -> bool {
+        self.buffering.load(Ordering::Acquire)
     }
 
     /// Switches the pipeline rate and returns the previous rate (Hz).
@@ -416,7 +428,7 @@ impl Ring {
         let frames = available.min(requested);
         // A reset/flush intentionally drops queued audio; only a genuine
         // shortfall is a dropout.
-        if !reset && !flush && !self.paused() && requested > frames {
+        if !reset && !flush && !self.paused() && !self.buffering() && requested > frames {
             self.underruns
                 .fetch_add((requested - frames) as u64, Ordering::Relaxed);
         }
@@ -653,5 +665,25 @@ mod tests {
         // Next frame is the first sample of track B.
         assert_eq!(ring.read_into(&mut out, 1), 1);
         assert_eq!(out[0], 0.75);
+    }
+
+    #[test]
+    fn buffering_flag_is_edge_triggered_and_suppresses_underrun_count() {
+        let ring = Ring::new().expect("ring");
+        assert!(!ring.buffering());
+        assert!(ring.enter_buffering(), "first transition returns true");
+        assert!(ring.buffering());
+        assert!(!ring.enter_buffering(), "repeated call is a no-op");
+
+        let mut out = vec![0.0f32; 64 * CHANNELS];
+        assert_eq!(ring.read_into(&mut out, 64), 0);
+        assert_eq!(
+            ring.underruns(),
+            0,
+            "holding while buffering must not inflate the dropout counter"
+        );
+
+        ring.set_buffering(false);
+        assert!(!ring.buffering());
     }
 }

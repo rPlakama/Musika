@@ -59,6 +59,25 @@ fn chunk_frames(rate: u32) -> usize {
     ((rate / CHUNK_DIVISOR) as usize).clamp(MIN_CHUNK_FRAMES, MAX_CHUNK_FRAMES)
 }
 
+/// Minimum PCM queued before releasing playback on a remote Load, Seek or
+/// reopen. Absorbs initial HTTP/TLS/FLAC burst latency without immediately
+/// starving after the first 20 ms chunk.
+const PREBUFFER_REMOTE_SECS: f64 = 1.0;
+/// Minimum PCM queued before resuming after a mid-track ring underrun. Longer
+/// than the initial prebuffer so a slow connection does not stutter repeatedly.
+const REBUFFER_SECS: f64 = 2.0;
+
+fn buffer_target_frames(seconds: f64, rate: u32, usable_limit: u64) -> u64 {
+    let wanted = (seconds * f64::from(rate.max(1))).round().max(1.0) as u64;
+    let cap = (usable_limit / 2).max(1);
+    wanted.clamp(1, cap)
+}
+
+fn set_decoder_live(shared: &Shared, live: bool) {
+    shared.decoder_live.store(live, Ordering::Release);
+    shared.lock().decoder_live = live;
+}
+
 pub(crate) enum Command {
     Load {
         url: String,
@@ -171,6 +190,7 @@ impl Worker {
             .paused_position
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = 0.0;
+        self.shared.decoder_live.store(false, Ordering::Release);
         {
             let mut status = self.shared.lock();
             status.loading = true;
@@ -389,6 +409,10 @@ struct Current {
     preload_stop: Option<Arc<AtomicBool>>,
     preload_started: Option<Instant>,
     first_pcm: bool,
+    /// True when the active `ring.buffering` hold was armed for an initial
+    /// remote load/seek/reopen (uses [`PREBUFFER_REMOTE_SECS`]); `false` uses
+    /// [`REBUFFER_SECS`] for mid-track underrun recovery.
+    initial_buffer: bool,
     stop: Option<Arc<AtomicBool>>,
     /// EQ chain for the current decoder; rebuilt when the profile or rate
     /// changes.
@@ -496,13 +520,15 @@ fn worker_thread(
                     }
                     sink.reset();
                     sink.close_writes();
+                    sink.ring().set_buffering(false);
                     sink.set_paused(true);
                     current.decoder = None;
                     current.stop = None;
                     current.paused = false;
                     current.paused_at = None;
+                    current.initial_buffer = false;
                     current.stopped = true;
-                    shared.lock().decoder_live = false;
+                    set_decoder_live(&shared, false);
                     continue;
                 }
                 Command::SetNextUrl(next_url) => {
@@ -535,7 +561,10 @@ fn worker_thread(
                         current.stop = None;
                         current.paused = false;
                         current.paused_at = None;
+                        current.initial_buffer = false;
                         sink.reset();
+                        sink.ring().set_buffering(false);
+                        shared.decoder_live.store(false, Ordering::Release);
                         let mut status = shared.lock();
                         status.loading = false;
                         status.decoder_live = false;
@@ -566,8 +595,12 @@ fn worker_thread(
                             current.decoder = None;
                             sink.reset();
                             rebase_clock(&shared, sink.as_ref(), resume_at);
+                            let prebuffer = crate::player::is_remote_url(&url);
+                            current.initial_buffer = prebuffer;
+                            sink.ring().set_buffering(prebuffer);
                             // Show the spinner while the new stream opens.
                             shared.lock().loading = true;
+                            shared.signal();
                             start_decoder(
                                 &mut current,
                                 url,
@@ -585,8 +618,12 @@ fn worker_thread(
                                 sink.set_paused(false);
                             }
                         } else {
-                            // Live decoder: keep it, do not re-seek.
-                            shared.lock().loading = false;
+                            // Live decoder: keep it, do not re-seek. If the
+                            // user paused mid-rebuffer, keep holding until the
+                            // ring refills instead of playing empty silence.
+                            if !sink.ring().buffering() {
+                                shared.lock().loading = false;
+                            }
                             sink.set_paused(false);
                         }
                         continue;
@@ -602,7 +639,11 @@ fn worker_thread(
                         current.next_url.clone(),
                         current.generation,
                     );
+                    let prebuffer = crate::player::is_remote_url(&url);
+                    current.initial_buffer = prebuffer;
+                    sink.ring().set_buffering(prebuffer);
                     shared.lock().loading = true;
+                    shared.signal();
                     start_decoder(
                         &mut current,
                         url,
@@ -670,6 +711,12 @@ fn worker_thread(
                         std::thread::sleep(Duration::from_millis(25));
                     }
                     sink.flush();
+                    let prebuffer = !current.paused && crate::player::is_remote_url(&current.url);
+                    current.initial_buffer = prebuffer;
+                    sink.ring().set_buffering(prebuffer);
+                    if prebuffer {
+                        shared.signal();
+                    }
                     *shared
                         .clock_origin
                         .lock()
@@ -679,7 +726,8 @@ fn worker_thread(
                         .store(sink.played_frames(), Ordering::Release);
                     // A seek cuts the queued old audio; fade the new position's
                     // PCM in instead of starting it with a hard discontinuity.
-                    if !current.paused {
+                    // Remote streams defer the fade-in until prebuffering finishes.
+                    if !current.paused && !prebuffer {
                         sink.request_fade_in();
                     }
                     cancel_preload(&mut current);
@@ -700,7 +748,9 @@ fn worker_thread(
                             Err(error) => {
                                 fail_at(&shared, crate::player::ErrorStage::Seek, error);
                                 current.decoder = None;
-                                shared.lock().decoder_live = false;
+                                current.initial_buffer = false;
+                                sink.ring().set_buffering(false);
+                                set_decoder_live(&shared, false);
                             }
                         }
                     } else if !current.stopped {
@@ -758,7 +808,16 @@ fn worker_thread(
                     // can sit paused for hours, and its HTTP connection must be
                     // treated like any other long pause on Play.
                     current.paused_at = paused.then(Instant::now);
+                    // Hold remote streams in buffering state until the ring has
+                    // accumulated `PREBUFFER_REMOTE_SECS` of decoded PCM so
+                    // audio never starts dry and immediately starves.
+                    let prebuffer = !paused && crate::player::is_remote_url(&url);
+                    current.initial_buffer = prebuffer;
+                    sink.ring().set_buffering(prebuffer);
                     sink.set_paused(paused);
+                    if prebuffer {
+                        shared.signal();
+                    }
                     shared
                         .clock_start
                         .store(sink.played_frames(), Ordering::Release);
@@ -843,7 +902,7 @@ fn worker_thread(
                         Ok(()) => current.rate = rate,
                         Err(error) => {
                             fail_at(&shared, crate::player::ErrorStage::Sink, error);
-                            shared.lock().decoder_live = false;
+                            set_decoder_live(&shared, false);
                             continue;
                         }
                     }
@@ -865,7 +924,9 @@ fn worker_thread(
                         .is_some_and(|stop| stop.load(Ordering::Acquire));
                 current.decoder = None;
                 current.stop = None;
-                shared.lock().decoder_live = false;
+                current.initial_buffer = false;
+                sink.ring().set_buffering(false);
+                set_decoder_live(&shared, false);
                 if !superseded {
                     fail_at(&shared, crate::player::ErrorStage::Read, error);
                 }
@@ -873,6 +934,10 @@ fn worker_thread(
             }
         };
         if frames == 0 {
+            // A short track or near-EOF seek may finish decoding before the
+            // ring reaches the prebuffer/rebuffer watermark: release whatever
+            // was decoded so the tail plays out instead of stalling forever.
+            _ = release_buffer_if_ready(&mut current, &shared, sink.as_ref(), true);
             // A very fast local decode can reach EOF before the preload
             // worker's result has been polled. Give that in-flight open a
             // short grace period so short tracks still hand off gaplessly.
@@ -893,7 +958,7 @@ fn worker_thread(
                     current.pending_handoff = Some(next);
                     current.decoder = None;
                     current.stop = None;
-                    shared.lock().decoder_live = false;
+                    set_decoder_live(&shared, false);
                     continue;
                 }
                 let next_stop = current.preload_stop.take();
@@ -902,7 +967,7 @@ fn worker_thread(
             }
             crate::startup::trace("fetch.done");
             shared.decode_done.store(true, Ordering::Release);
-            shared.lock().decoder_live = false;
+            set_decoder_live(&shared, false);
             shared.signal();
             current.decoder = None;
             continue;
@@ -929,20 +994,22 @@ fn worker_thread(
         }
 
         current.written_frames += frames as u64;
-        if current.first_pcm {
-            current.first_pcm = false;
-            shared.first_pcm.store(true, Ordering::Release);
-            shared.signal();
-            crate::startup::trace("first.pcm.written");
-        }
         let epoch = current.epoch;
         sink.write(&pcm[..frames * 2], epoch);
         if sink_ring_closed(sink.as_ref()) {
             // Load/stop replaced the epoch while the writer was blocked.
             current.decoder = None;
-            shared.lock().decoder_live = false;
+            current.initial_buffer = false;
+            set_decoder_live(&shared, false);
             cancel_preload(&mut current);
             continue;
+        }
+        if release_buffer_if_ready(&mut current, &shared, sink.as_ref(), false) && current.first_pcm
+        {
+            current.first_pcm = false;
+            shared.first_pcm.store(true, Ordering::Release);
+            shared.signal();
+            crate::startup::trace("first.pcm.written");
         }
 
         seed_preload(&mut current, &shared, &preload_tx);
@@ -1046,12 +1113,14 @@ fn start_decoder(
                 SeekPlan::Start(position) => position,
                 SeekPlan::Seek(position) => {
                     if let Err(error) = decoder.seek(position) {
+                        current.initial_buffer = false;
+                        sink.ring().set_buffering(false);
                         if generation == shared.generation.load(Ordering::Acquire)
                             && !stop.load(Ordering::Acquire)
                         {
                             fail_at(shared, crate::player::ErrorStage::Seek, error);
                         }
-                        shared.lock().decoder_live = false;
+                        set_decoder_live(shared, false);
                         return;
                     }
                     position
@@ -1070,7 +1139,9 @@ fn start_decoder(
                 match sink.set_format(rate) {
                     Ok(()) => current.rate = rate,
                     Err(error) => {
-                        shared.lock().decoder_live = false;
+                        current.initial_buffer = false;
+                        sink.ring().set_buffering(false);
+                        set_decoder_live(shared, false);
                         if generation == shared.generation.load(Ordering::Acquire)
                             && !stop.load(Ordering::Acquire)
                         {
@@ -1081,6 +1152,7 @@ fn start_decoder(
                 }
             }
             current.decoder = Some(decoder);
+            shared.decoder_live.store(true, Ordering::Release);
             {
                 let mut status = shared.lock();
                 if !is_reopen {
@@ -1106,7 +1178,9 @@ fn start_decoder(
             shared.signal();
         }
         Err(error) => {
-            shared.lock().decoder_live = false;
+            current.initial_buffer = false;
+            sink.ring().set_buffering(false);
+            set_decoder_live(shared, false);
             if generation == shared.generation.load(Ordering::Acquire)
                 && !stop.load(Ordering::Acquire)
             {
@@ -1273,7 +1347,9 @@ fn run_crossfade_chunk(
                 current.decoder = None;
                 current.stop = None;
                 current.crossfade = None;
-                shared.lock().decoder_live = false;
+                current.initial_buffer = false;
+                sink.ring().set_buffering(false);
+                set_decoder_live(shared, false);
                 if !superseded {
                     fail_at(shared, crate::player::ErrorStage::Read, error);
                 }
@@ -1402,20 +1478,62 @@ fn run_crossfade_chunk(
     }
 
     current.written_frames += cur_frames as u64;
-    if current.first_pcm {
-        current.first_pcm = false;
-        shared.first_pcm.store(true, Ordering::Release);
-        shared.signal();
-        crate::startup::trace("first.pcm.written");
-    }
     let epoch = current.epoch;
     sink.write(&pcm[..cur_frames * ring::CHANNELS], epoch);
     if sink_ring_closed(sink) {
         current.decoder = None;
         current.crossfade = None;
-        shared.lock().decoder_live = false;
+        current.initial_buffer = false;
+        set_decoder_live(shared, false);
         cancel_preload(current);
+        return;
     }
+    if release_buffer_if_ready(current, shared, sink, false) && current.first_pcm {
+        current.first_pcm = false;
+        shared.first_pcm.store(true, Ordering::Release);
+        shared.signal();
+        crate::startup::trace("first.pcm.written");
+    }
+}
+
+/// Releases the ring's buffering hold once enough decoded PCM is queued (or
+/// when EOF arrives before the watermark). Returns `true` when playback is
+/// actively flowing (not held in buffering).
+fn release_buffer_if_ready(
+    current: &mut Current,
+    shared: &Shared,
+    sink: &dyn PcmSink,
+    at_eof: bool,
+) -> bool {
+    if !sink.ring().buffering() {
+        return true;
+    }
+    let buffered = sink.ring().buffered_frames();
+    let target = if current.initial_buffer {
+        buffer_target_frames(
+            PREBUFFER_REMOTE_SECS,
+            current.rate,
+            sink.ring().usable_frames(),
+        )
+    } else {
+        buffer_target_frames(REBUFFER_SECS, current.rate, sink.ring().usable_frames())
+    };
+    if !at_eof && buffered < target {
+        return false;
+    }
+    if buffered > 0 {
+        sink.request_fade_in();
+    }
+    current.initial_buffer = false;
+    sink.ring().set_buffering(false);
+    shared.lock().loading = false;
+    if current.first_pcm {
+        current.first_pcm = false;
+        shared.first_pcm.store(true, Ordering::Release);
+        crate::startup::trace("first.pcm.written");
+    }
+    shared.signal();
+    true
 }
 
 /// Installs a preloaded decoder as the current one and arms the gapless
@@ -1454,6 +1572,7 @@ fn handoff_to_decoder(
         .store(stream_size, Ordering::Release);
     shared.boundary_active.store(true, Ordering::Release);
     shared.decode_done.store(false, Ordering::Release);
+    shared.decoder_live.store(true, Ordering::Release);
     {
         let mut status = shared.lock();
         status.duration = duration;
@@ -2026,5 +2145,139 @@ mod tests {
         assert_eq!(seek_plan(42.0, false), SeekPlan::RestartFromZero);
         // Negative targets clamp to the start.
         assert_eq!(seek_plan(-3.0, true), SeekPlan::Start(0.0));
+    }
+
+    #[test]
+    fn buffer_watermark_holds_until_target_or_eof() {
+        struct StubSink {
+            ring: Arc<ring::Ring>,
+            fade_ins: std::sync::atomic::AtomicUsize,
+        }
+        impl PcmSink for StubSink {
+            fn ring(&self) -> &Arc<ring::Ring> {
+                &self.ring
+            }
+            fn epoch(&self) -> u64 {
+                self.ring.epoch()
+            }
+            fn rate(&self) -> u32 {
+                self.ring.rate()
+            }
+            fn set_format(&self, _rate: u32) -> Result<(), String> {
+                Ok(())
+            }
+            fn set_target(&self, _target: Option<String>) -> Result<(), String> {
+                Ok(())
+            }
+            fn set_exclusive(&self, _exclusive: bool) -> Result<(), String> {
+                Ok(())
+            }
+            fn write(&self, pcm: &[f32], epoch: u64) {
+                self.ring.write(pcm, epoch);
+            }
+            fn set_paused(&self, paused: bool) {
+                self.ring.set_paused(paused);
+            }
+            fn request_fade_in(&self) {
+                self.fade_ins.fetch_add(1, Ordering::Relaxed);
+                self.ring.request_fade(true);
+            }
+            fn request_fade_out(&self) {
+                self.ring.request_fade(false);
+            }
+            fn set_muted(&self, muted: bool) {
+                self.ring.set_muted(muted);
+            }
+            fn set_volume(&self, volume: f64) {
+                self.ring.set_volume(volume);
+            }
+            fn flush(&self) {
+                self.ring.flush();
+            }
+            fn reset(&self) {
+                self.ring.reset();
+            }
+            fn close_writes(&self) {
+                self.ring.close_writes();
+            }
+            fn played_frames(&self) -> u64 {
+                self.ring.played_frames()
+            }
+            fn read_frames(&self) -> u64 {
+                self.ring.read_frames()
+            }
+            fn buffered_frames(&self) -> u64 {
+                self.ring.buffered_frames()
+            }
+            fn underruns(&self) -> u64 {
+                self.ring.underruns()
+            }
+            fn failed(&self) -> bool {
+                self.ring.failed()
+            }
+        }
+
+        let ring = Arc::new(ring::Ring::new().expect("ring"));
+        let sink = StubSink {
+            ring: Arc::clone(&ring),
+            fade_ins: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let shared = Shared::new();
+        let rate = ring.rate();
+        let epoch = ring.epoch();
+
+        // 1) Initial remote prebuffer holds until PREBUFFER_REMOTE_SECS (1.0 s).
+        let mut current = Current {
+            rate,
+            first_pcm: true,
+            initial_buffer: true,
+            ..Current::default()
+        };
+        ring.set_buffering(true);
+        shared.lock().loading = true;
+        let half_sec = vec![0.1f32; (rate as usize / 2) * ring::CHANNELS];
+        ring.write(&half_sec, epoch);
+        assert!(!release_buffer_if_ready(
+            &mut current,
+            &shared,
+            &sink,
+            false
+        ));
+        assert!(ring.buffering());
+        assert!(!shared.first_pcm.load(Ordering::Acquire));
+
+        ring.write(&half_sec, epoch);
+        assert!(release_buffer_if_ready(&mut current, &shared, &sink, false));
+        assert!(!ring.buffering());
+        assert!(!current.initial_buffer);
+        assert!(shared.first_pcm.load(Ordering::Acquire));
+        assert!(!shared.lock().loading);
+        assert_eq!(sink.fade_ins.load(Ordering::Relaxed), 1);
+
+        // 2) Mid-track underrun rebuffer holds until REBUFFER_SECS (2.0 s).
+        ring.flush();
+        let mut drain = vec![0.0f32; 16 * ring::CHANNELS];
+        _ = ring.read_into(&mut drain, 0);
+        let epoch = ring.epoch();
+        ring.set_buffering(true);
+        let one_sec = vec![0.1f32; (rate as usize) * ring::CHANNELS];
+        ring.write(&one_sec, epoch);
+        assert!(
+            !release_buffer_if_ready(&mut current, &shared, &sink, false),
+            "mid-track rebuffer must wait past 1.0 s for REBUFFER_SECS (2.0 s)"
+        );
+        ring.write(&one_sec, epoch);
+        assert!(release_buffer_if_ready(&mut current, &shared, &sink, false));
+        assert!(!ring.buffering());
+
+        // 3) EOF releases a short tail even below the watermark.
+        ring.flush();
+        _ = ring.read_into(&mut drain, 0);
+        let epoch = ring.epoch();
+        ring.set_buffering(true);
+        let tiny = vec![0.1f32; 256 * ring::CHANNELS];
+        ring.write(&tiny, epoch);
+        assert!(release_buffer_if_ready(&mut current, &shared, &sink, true));
+        assert!(!ring.buffering());
     }
 }

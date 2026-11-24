@@ -192,7 +192,7 @@ fn wait_for_socket(path: &std::path::Path, timeout: std::time::Duration) -> bool
         if std::os::unix::net::UnixStream::connect(path).is_ok() {
             return true;
         }
-        std::thread::sleep(std::time::Duration::from_millis(40));
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
     false
 }

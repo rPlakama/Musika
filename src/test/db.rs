@@ -229,6 +229,81 @@ async fn import_file_detaches_legacy_database_on_query_error() {
     _ = std::fs::remove_dir_all(&dir);
 }
 
+#[tokio::test]
+async fn import_file_imports_legacy_8_column_covers_with_cap_checked_default() {
+    use std::str::FromStr;
+
+    let dir = std::env::temp_dir().join(format!(
+        "musika-db-legacy-covers-{}-{}",
+        std::process::id(),
+        crate::consts::now_nanos()
+    ));
+    _ = std::fs::remove_dir_all(&dir);
+    ensure_dir(&dir).unwrap();
+
+    let main_path = dir.join("media.db");
+    let main_options =
+        sqlx::sqlite::SqliteConnectOptions::from_str(&format!("sqlite://{}", main_path.display()))
+            .unwrap()
+            .create_if_missing(true);
+    let main_pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(main_options)
+        .await
+        .unwrap();
+    sqlx::migrate!("./migrations_media")
+        .run(&main_pool)
+        .await
+        .unwrap();
+
+    let legacy_path = dir.join("covers.db");
+    {
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str(&format!(
+            "sqlite://{}",
+            legacy_path.display()
+        ))
+        .unwrap()
+        .create_if_missing(true);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations_covers")
+            .run(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO covers (id, file, hash, content_type, size, etag, last_modified, fetched_at)
+             VALUES ('c1', 'raw-c1.jpg', 'h1', 'image/jpeg', 3000000, '\"e1\"', NULL, '100')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
+
+    let mut conn = main_pool.acquire().await.unwrap();
+    import_file(&mut conn, &legacy_path, &["covers"])
+        .await
+        .expect("legacy 8-column covers import should succeed");
+
+    let (file, cap_checked): (String, i64) =
+        sqlx::query_as("SELECT file, cap_checked FROM covers WHERE id = 'c1'")
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+    assert_eq!(file, "raw-c1.jpg");
+    assert_eq!(
+        cap_checked, 0,
+        "legacy imported covers default to unchecked so startup/sync can verify them once"
+    );
+
+    drop(conn);
+    main_pool.close().await;
+    _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn playback_dir_defaults_to_xdg_cache_home_musika_playback() {
     if std::env::var_os("MUSIKA_TEST_PLAYBACK_DIR_CHILD").is_some() {

@@ -105,7 +105,8 @@ PAUSE=${MUSIKA_LOAD_PAUSE:-1}
 [[ "$REVISITS" =~ ^[0-9]+$ ]] || die "MUSIKA_LOAD_REVISITS must be a number"
 [[ "$PAUSE" =~ ^[01]$ ]] || die "MUSIKA_LOAD_PAUSE must be 0 or 1"
 
-CFG="$OUTDIR/config"
+XDG_CFG="$OUTDIR/config"
+CFG="$XDG_CFG/musika"
 CACHE="$OUTDIR/cache"
 CSV="$OUTDIR/cover-load.csv"
 SUMMARY="$OUTDIR/summary.txt"
@@ -211,7 +212,7 @@ echo "check-cover-load: binaries $BIN_DIR"
 echo "check-cover-load: config snapshot $SRC_ABS -> $CFG"
 
 # Fresh per-run config copy (CoW when the filesystem supports it).
-rm -rf "$CFG" "$CACHE"
+rm -rf "$XDG_CFG" "$CACHE"
 mkdir -p "$CFG" "$CACHE"
 cp -a --reflink=auto "$SRC_ABS/." "$CFG/"
 
@@ -251,7 +252,7 @@ TOTAL=${#SONG_ROWS[@]}
 echo "check-cover-load: starting core daemon"
 daemon_spawn_ms=$(now_ms)
 env -u MUSIKA_IPC_SOCKET -u MUSIKA_DAEMON_SOCKET \
-    XDG_CONFIG_HOME="$CFG" XDG_CACHE_HOME="$CACHE" \
+    XDG_CONFIG_HOME="$XDG_CFG" XDG_CACHE_HOME="$CACHE" \
     "$BIN_DIR/musika" --daemon >"$DAEMON_LOG" 2>&1 &
 DAEMON_PID=$!
 
@@ -275,7 +276,7 @@ kill -0 "$IPC_PID" 2>/dev/null || die "persistent IPC sender failed to connect t
 echo "check-cover-load: starting UI"
 ui_spawn_ms=$(now_ms)
 env -u MUSIKA_IPC_SOCKET -u MUSIKA_DAEMON_SOCKET \
-    XDG_CONFIG_HOME="$CFG" XDG_CACHE_HOME="$CACHE" \
+    XDG_CONFIG_HOME="$XDG_CFG" XDG_CACHE_HOME="$CACHE" \
     MUSIKA_FRAME_STATS=1 MUSIKA_LOAD_TRACE=1 \
     "$BIN_DIR/musika-ui" >"$UI_LOG" 2>&1 &
 UI_PID=$!

@@ -63,7 +63,8 @@ REVISITS=${MUSIKA_MEM_REVISITS:-10}
 NO_COVERS=${MUSIKA_MEM_NO_COVERS:-0}
 [[ "$NO_COVERS" =~ ^[01]$ ]] || die "MUSIKA_MEM_NO_COVERS must be 0 or 1"
 
-CFG="$OUTDIR/config"
+XDG_CFG="$OUTDIR/config"
+CFG="$XDG_CFG/musika"
 CACHE="$OUTDIR/cache"
 CSV="$OUTDIR/memory.csv"
 DAEMON_LOG="$OUTDIR/daemon.log"
@@ -126,7 +127,7 @@ echo "check-ui-memory: binaries $BIN_DIR"
 echo "check-ui-memory: config snapshot $SRC_ABS -> $CFG"
 
 # Fresh per-run config copy (CoW when the filesystem supports it).
-rm -rf "$CFG" "$CACHE"
+rm -rf "$XDG_CFG" "$CACHE"
 mkdir -p "$CFG" "$CACHE"
 cp -a --reflink=auto "$SRC_ABS/." "$CFG/"
 
@@ -177,7 +178,7 @@ TOTAL=${#SONG_ROWS[@]}
 # Daemon first: it creates ipc.sock + daemon.sock inside the sandbox config.
 echo "check-ui-memory: starting core daemon"
 env -u MUSIKA_IPC_SOCKET -u MUSIKA_DAEMON_SOCKET \
-    XDG_CONFIG_HOME="$CFG" XDG_CACHE_HOME="$CACHE" \
+    XDG_CONFIG_HOME="$XDG_CFG" XDG_CACHE_HOME="$CACHE" \
     "$BIN_DIR/musika" --daemon >"$DAEMON_LOG" 2>&1 &
 DAEMON_PID=$!
 
@@ -191,7 +192,7 @@ done
 # Disposable GPUI client; the core spawns the same `musika-ui` binary.
 echo "check-ui-memory: starting UI"
 env -u MUSIKA_IPC_SOCKET -u MUSIKA_DAEMON_SOCKET \
-    XDG_CONFIG_HOME="$CFG" XDG_CACHE_HOME="$CACHE" MUSIKA_FRAME_STATS=1 \
+    XDG_CONFIG_HOME="$XDG_CFG" XDG_CACHE_HOME="$CACHE" MUSIKA_FRAME_STATS=1 \
     MUSIKA_UI_NO_COVERS="$NO_COVERS" \
     "$BIN_DIR/musika-ui" >"$UI_LOG" 2>&1 &
 UI_PID=$!

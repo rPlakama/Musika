@@ -586,8 +586,8 @@ async fn upsert(
     last_modified: Option<&str>,
 ) -> Result<()> {
     sqlx::query(
-        "INSERT INTO covers (id, file, hash, content_type, size, etag, last_modified, fetched_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "INSERT INTO covers (id, file, hash, content_type, size, etag, last_modified, fetched_at, cap_checked)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(id) DO UPDATE SET
              file = excluded.file,
              hash = excluded.hash,
@@ -595,7 +595,8 @@ async fn upsert(
              size = excluded.size,
              etag = excluded.etag,
              last_modified = excluded.last_modified,
-             fetched_at = excluded.fetched_at",
+             fetched_at = excluded.fetched_at,
+             cap_checked = excluded.cap_checked",
     )
     .bind(id)
     .bind(file)
@@ -605,6 +606,7 @@ async fn upsert(
     .bind(etag)
     .bind(last_modified)
     .bind(crate::consts::now_secs().to_string())
+    .bind(i64::from(COVER_MAX_EDGE))
     .execute(pool)
     .await?;
     Ok(())
@@ -897,12 +899,240 @@ struct CapRow {
     size: i64,
 }
 
+/// Outcome of probing a cached cover's header dimensions against
+/// [`COVER_MAX_EDGE`] without reading the full file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbeOutcome {
+    /// Header dimensions are within `COVER_MAX_EDGE`, or the format is not a
+    /// supported raster format that [`cap_oversized_art`] can re-encode.
+    WithinLimit,
+    /// Longest edge exceeds `COVER_MAX_EDGE`; full decode + re-encode needed.
+    Oversized,
+    /// The file could not be opened or read; leave unchecked for a later pass.
+    IoError,
+}
+
+/// Reads at most the image header bytes of `path` to determine its pixel
+/// dimensions.
+///
+/// Unlike `std::fs::read` + `image::ImageReader::into_dimensions` (whose JPEG
+/// backend buffers the whole stream into memory), this parses PNG, GIF, WebP
+/// and JPEG headers directly over a small buffered reader and uses
+/// `Seek::seek_relative` to skip large JPEG APP/EXIF/ICC segments without
+/// reading them. Falls back to `image::ImageReader` only when a recognized
+/// raster format has an unusual header layout.
+fn probe_file_dimensions(path: &Path) -> std::io::Result<Option<(u32, u32)>> {
+    use std::io::BufReader;
+
+    let file = std::fs::File::open(path)?;
+    let mut reader = BufReader::with_capacity(8 * 1024, file);
+    let mut head = [0u8; 30];
+    let n = read_prefix(&mut reader, &mut head)?;
+    if n < 2 {
+        return Ok(None);
+    }
+    let slice = &head[..n];
+
+    if let Some(dims) = parse_png_dimensions(slice)
+        .or_else(|| parse_gif_dimensions(slice))
+        .or_else(|| parse_webp_dimensions(slice))
+    {
+        return Ok(Some(dims));
+    }
+
+    if slice[0] == 0xFF
+        && slice[1] == 0xD8
+        && let Some(dims) = parse_jpeg_dimensions(&mut reader, n)?
+    {
+        return Ok(Some(dims));
+    }
+
+    // Only pay for the generic `image` fallback when the magic bytes actually
+    // belong to a raster format this build decodes (e.g. a rare DNL JPEG or
+    // non-standard WebP chunk order). Non-raster blobs return `None` right away.
+    let is_supported_raster = image::guess_format(slice)
+        .ok()
+        .and_then(raster_kind)
+        .is_some();
+    if !is_supported_raster {
+        return Ok(None);
+    }
+    Ok(image::ImageReader::open(path)
+        .ok()
+        .and_then(|reader| reader.with_guessed_format().ok())
+        .and_then(|reader| reader.into_dimensions().ok()))
+}
+
+fn read_prefix<R: std::io::Read>(reader: &mut R, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        match reader.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(filled)
+}
+
+fn parse_png_dimensions(head: &[u8]) -> Option<(u32, u32)> {
+    const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    if head.len() < 24 || head[..8] != PNG_MAGIC || &head[12..16] != b"IHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes([head[16], head[17], head[18], head[19]]);
+    let height = u32::from_be_bytes([head[20], head[21], head[22], head[23]]);
+    (width > 0 && height > 0).then_some((width, height))
+}
+
+fn parse_gif_dimensions(head: &[u8]) -> Option<(u32, u32)> {
+    if head.len() < 10 || (&head[..6] != b"GIF87a" && &head[..6] != b"GIF89a") {
+        return None;
+    }
+    let width = u32::from(u16::from_le_bytes([head[6], head[7]]));
+    let height = u32::from(u16::from_le_bytes([head[8], head[9]]));
+    (width > 0 && height > 0).then_some((width, height))
+}
+
+fn parse_webp_dimensions(head: &[u8]) -> Option<(u32, u32)> {
+    if head.len() < 30 || &head[..4] != b"RIFF" || &head[8..12] != b"WEBP" {
+        return None;
+    }
+    let (width, height) = match &head[12..16] {
+        b"VP8 " => {
+            if head[23..26] != [0x9D, 0x01, 0x2A] {
+                return None;
+            }
+            let width = u32::from(u16::from_le_bytes([head[26], head[27]]) & 0x3FFF);
+            let height = u32::from(u16::from_le_bytes([head[28], head[29]]) & 0x3FFF);
+            (width, height)
+        }
+        b"VP8L" => {
+            if head[20] != 0x2F {
+                return None;
+            }
+            let bits = u32::from_le_bytes([head[21], head[22], head[23], head[24]]);
+            let width = (bits & 0x3FFF) + 1;
+            let height = ((bits >> 14) & 0x3FFF) + 1;
+            (width, height)
+        }
+        b"VP8X" => {
+            let width =
+                (u32::from(head[24]) | (u32::from(head[25]) << 8) | (u32::from(head[26]) << 16))
+                    + 1;
+            let height =
+                (u32::from(head[27]) | (u32::from(head[28]) << 8) | (u32::from(head[29]) << 16))
+                    + 1;
+            (width, height)
+        }
+        _ => return None,
+    };
+    (width > 0 && height > 0).then_some((width, height))
+}
+
+/// Walks JPEG markers starting right after SOI (`0xFF 0xD8`), seeking past
+/// non-SOF segments so large EXIF/ICC/XMP payloads are never read into memory.
+fn parse_jpeg_dimensions(
+    reader: &mut std::io::BufReader<std::fs::File>,
+    already_read: usize,
+) -> std::io::Result<Option<(u32, u32)>> {
+    use std::io::Read;
+
+    // Rewind to byte 2 (immediately after `0xFF 0xD8`) without dropping the
+    // 8 KiB buffer that `read_prefix` already populated.
+    reader.seek_relative(2 - already_read as i64)?;
+
+    const MAX_SEGMENTS: usize = 512;
+    let mut byte = [0u8; 1];
+    for _ in 0..MAX_SEGMENTS {
+        if reader.read_exact(&mut byte).is_err() {
+            return Ok(None);
+        }
+        if byte[0] != 0xFF {
+            return Ok(None);
+        }
+        // Skip any `0xFF` fill bytes before the marker code.
+        let marker = loop {
+            if reader.read_exact(&mut byte).is_err() {
+                return Ok(None);
+            }
+            if byte[0] != 0xFF {
+                break byte[0];
+            }
+        };
+        match marker {
+            // Standalone markers with no length field.
+            0x00 | 0x01 | 0xD0..=0xD8 => continue,
+            // EOI or Start of Scan: no SOF found before compressed image data.
+            0xD9 | 0xDA => return Ok(None),
+            _ => {}
+        }
+        let mut len_bytes = [0u8; 2];
+        if reader.read_exact(&mut len_bytes).is_err() {
+            return Ok(None);
+        }
+        let seg_len = u16::from_be_bytes(len_bytes);
+        if seg_len < 2 {
+            return Ok(None);
+        }
+        let is_sof = matches!(
+            marker,
+            0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF
+        );
+        if is_sof {
+            if seg_len < 7 {
+                return Ok(None);
+            }
+            let mut sof = [0u8; 5];
+            if reader.read_exact(&mut sof).is_err() {
+                return Ok(None);
+            }
+            let height = u32::from(u16::from_be_bytes([sof[1], sof[2]]));
+            let width = u32::from(u16::from_be_bytes([sof[3], sof[4]]));
+            // `height == 0` signals a deferred DNL marker; let the fallback
+            // decoder handle it.
+            return Ok((width > 0 && height > 0).then_some((width, height)));
+        }
+        if reader.seek_relative(i64::from(seg_len - 2)).is_err() {
+            return Ok(None);
+        }
+    }
+    Ok(None)
+}
+
+fn probe_cap_candidate(path: &Path, max_edge: u32) -> ProbeOutcome {
+    match probe_file_dimensions(path) {
+        Ok(Some((width, height))) if width.max(height) > max_edge => ProbeOutcome::Oversized,
+        Ok(_) => ProbeOutcome::WithinLimit,
+        Err(_) => ProbeOutcome::IoError,
+    }
+}
+
+async fn mark_cap_checked(pool: &SqlitePool, ids: &[String], edge: u32) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    for chunk in ids.chunks(crate::cache::IN_BATCH) {
+        let mut builder = sqlx::QueryBuilder::new("UPDATE covers SET cap_checked = ");
+        builder.push_bind(i64::from(edge));
+        builder.push(" WHERE id IN (");
+        crate::cache::push_in_list(&mut builder, chunk);
+        builder.build().execute(tx.as_mut()).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Downscales already-cached originals above [`COVER_MAX_EDGE`].
 ///
 /// Runs in the core (daemon startup and full cover passes), never on the UI
-/// path, and needs no network: the file is read, capped and re-stored under
-/// the canonical content-addressed name, a thumbnail job is queued, and the
-/// provider validators are kept so the next sync can still answer `304`.
+/// path, and needs no network: unchecked candidates above
+/// [`CAP_MIGRATION_MIN_BYTES`] have only their image headers probed first,
+/// verified in-edge rows are marked `cap_checked = COVER_MAX_EDGE` so future
+/// launches skip them in O(1), and only genuinely oversized files are read in
+/// full, capped and re-stored under the canonical content-addressed name.
 /// `remove_old` is only safe when no UI can hold the previous URL (startup,
 /// before the UI socket exists); a running sync leaves the old blob for the
 /// next orphan sweep instead of breaking a page decoded from the old payload.
@@ -920,19 +1150,22 @@ pub async fn cap_cached_oversized(
     const CANDIDATE_BATCH: usize = 32;
     let mut capped = 0usize;
     let mut thumb_jobs: Vec<(String, PathBuf)> = Vec::new();
-    // Keyset cursor over `(size DESC, id ASC)`. The old `LIMIT limit` query
-    // starved: the same top-N largest blobs (many of them already within the
-    // edge, or formats the migration skips) were re-probed every pass while
-    // genuinely oversized rows below them were never reached (N-12).
+    let max_edge = COVER_MAX_EDGE;
+    let max_edge_i64 = i64::from(max_edge);
+    // Keyset cursor over `(size DESC, id ASC)` restricted to rows not yet
+    // verified at `<= max_edge`. Preserves the N-12 anti-starvation walk while
+    // keeping steady-state startup to a single zero-row index lookup.
     let mut cursor: Option<(i64, String)> = None;
     'migration: loop {
         let rows: Vec<CapRow> = match &cursor {
             None => {
                 sqlx::query_as(
                     "SELECT id, file, etag, last_modified, size FROM covers
-                     WHERE size > ?1 ORDER BY size DESC, id ASC LIMIT ?2",
+                     WHERE size > ?1 AND (cap_checked = 0 OR cap_checked > ?2)
+                     ORDER BY size DESC, id ASC LIMIT ?3",
                 )
                 .bind(CAP_MIGRATION_MIN_BYTES)
+                .bind(max_edge_i64)
                 .bind(CANDIDATE_BATCH as i64)
                 .fetch_all(pool)
                 .await?
@@ -940,10 +1173,12 @@ pub async fn cap_cached_oversized(
             Some((size, id)) => {
                 sqlx::query_as(
                     "SELECT id, file, etag, last_modified, size FROM covers
-                     WHERE size > ?1 AND (size < ?2 OR (size = ?2 AND id > ?3))
-                     ORDER BY size DESC, id ASC LIMIT ?4",
+                     WHERE size > ?1 AND (cap_checked = 0 OR cap_checked > ?2)
+                       AND (size < ?3 OR (size = ?3 AND id > ?4))
+                     ORDER BY size DESC, id ASC LIMIT ?5",
                 )
                 .bind(CAP_MIGRATION_MIN_BYTES)
+                .bind(max_edge_i64)
                 .bind(*size)
                 .bind(id)
                 .bind(CANDIDATE_BATCH as i64)
@@ -954,13 +1189,41 @@ pub async fn cap_cached_oversized(
         if rows.is_empty() {
             break;
         }
-        for row in rows {
-            cursor = Some((row.size, row.id.clone()));
-            if capped >= limit {
-                break 'migration;
+        // Probe all headers in this batch on one blocking task (N-18), reading
+        // only a few bytes per file instead of loading multi-MiB blobs.
+        let probe_paths: Vec<PathBuf> = rows.iter().map(|row| dir.join(&row.file)).collect();
+        let outcomes = match tokio::task::spawn_blocking(move || {
+            probe_paths
+                .iter()
+                .map(|path| probe_cap_candidate(path, max_edge))
+                .collect::<Vec<_>>()
+        })
+        .await
+        {
+            Ok(outcomes) => outcomes,
+            Err(err) => {
+                eprintln!("covers: oversized-art header probe task failed: {err}");
+                break;
             }
-            // The whole probe (stat, read, header parse, decode) is blocking
-            // disk/CPU work; keep it off the async runtime (N-18).
+        };
+
+        let mut checked_ids: Vec<String> = Vec::new();
+        let mut hit_limit = false;
+        for (row, outcome) in rows.into_iter().zip(outcomes) {
+            cursor = Some((row.size, row.id.clone()));
+            match outcome {
+                ProbeOutcome::WithinLimit => {
+                    checked_ids.push(row.id);
+                    continue;
+                }
+                ProbeOutcome::IoError => continue,
+                ProbeOutcome::Oversized => {}
+            }
+            if capped >= limit {
+                hit_limit = true;
+                break;
+            }
+            // Only genuinely oversized blobs are read in full and re-encoded.
             let path = dir.join(&row.file);
             let capped_art = match tokio::task::spawn_blocking(move || cap_cached_file(&path)).await
             {
@@ -971,6 +1234,10 @@ pub async fn cap_cached_oversized(
                 }
             };
             let Some((bytes, extension)) = capped_art else {
+                // Header exceeded the edge, but full decode/re-encode declined
+                // (e.g. corrupt payload); mark checked so we do not re-read it
+                // on every startup.
+                checked_ids.push(row.id);
                 continue;
             };
             let hash = crate::digest::md5_hex(&bytes)?;
@@ -993,6 +1260,10 @@ pub async fn cap_cached_oversized(
                 _ = std::fs::remove_file(dir.join(thumb_name(&row.file)));
             }
             capped += 1;
+        }
+        mark_cap_checked(pool, &checked_ids, max_edge).await?;
+        if hit_limit || capped >= limit {
+            break 'migration;
         }
     }
     if !thumb_jobs.is_empty() {
@@ -1566,6 +1837,118 @@ mod cap_tests {
             .unwrap();
         assert_ne!(file, "raw-oversized.jpg", "the blob is content-addressed");
         assert!(dir.join(&file).is_file(), "capped blob written");
+
+        // Both the in-edge row and the newly capped row must be persisted as
+        // verified at `COVER_MAX_EDGE` so subsequent startups skip them.
+        for id in ["in-edge", "oversized"] {
+            let checked: i64 = sqlx::query_scalar("SELECT cap_checked FROM covers WHERE id = ?1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                checked,
+                i64::from(COVER_MAX_EDGE),
+                "row {id} must be marked cap_checked"
+            );
+        }
+
+        // Proves a subsequent startup skips already-checked rows without
+        // touching the filesystem: replacing `raw-in-edge.jpg` on disk with an
+        // oversized image must not trigger a re-read/re-encode.
+        std::fs::write(dir.join("raw-in-edge.jpg"), solid_jpeg(5000, 2500)).unwrap();
+        let second = cap_cached_oversized(&pool, &dir, 16, true)
+            .await
+            .expect("second migration pass");
+        assert_eq!(second, 0, "already-checked rows must not be re-probed");
+
+        // If `COVER_MAX_EDGE` is lowered in the future (simulated by a row
+        // checked at a higher threshold), it must be re-checked automatically.
+        sqlx::query("UPDATE covers SET cap_checked = ?1 WHERE id = 'in-edge'")
+            .bind(i64::from(COVER_MAX_EDGE) + 1024)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let rechecked = cap_cached_oversized(&pool, &dir, 16, true)
+            .await
+            .expect("recheck migration pass");
+        assert_eq!(
+            rechecked, 1,
+            "rows checked at a higher threshold must be re-evaluated"
+        );
+        let updated_checked: i64 =
+            sqlx::query_scalar("SELECT cap_checked FROM covers WHERE id = 'in-edge'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(updated_checked, i64::from(COVER_MAX_EDGE));
+
+        _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn probe_file_dimensions_handles_png_jpeg_with_exif_webp_gif_and_non_raster() {
+        let dir = std::env::temp_dir().join(format!(
+            "musika-covers-probe-{}-{}",
+            std::process::id(),
+            crate::consts::now_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let png_path = dir.join("sample.png");
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            321,
+            654,
+            image::Rgb([1, 2, 3]),
+        ))
+        .save_with_format(&png_path, image::ImageFormat::Png)
+        .unwrap();
+        assert_eq!(probe_file_dimensions(&png_path).unwrap(), Some((321, 654)));
+
+        // Inject a 60 KiB APP1 segment right after SOI to exercise seeking
+        // past large EXIF/ICC metadata without reading it all.
+        let mut raw_jpg = jpeg_bytes(777, 444, [4, 5, 6]);
+        let mut padded_jpg = Vec::with_capacity(raw_jpg.len() + 60_004);
+        padded_jpg.extend_from_slice(&raw_jpg[..2]);
+        padded_jpg.extend_from_slice(&[0xFF, 0xE1]);
+        let seg_len: u16 = 60_002;
+        padded_jpg.extend_from_slice(&seg_len.to_be_bytes());
+        padded_jpg.resize(padded_jpg.len() + 60_000, 0x42);
+        padded_jpg.extend_from_slice(&raw_jpg[2..]);
+        raw_jpg.clear();
+        let jpg_path = dir.join("padded.jpg");
+        std::fs::write(&jpg_path, &padded_jpg).unwrap();
+        assert_eq!(probe_file_dimensions(&jpg_path).unwrap(), Some((777, 444)));
+
+        let webp_path = dir.join("sample.webp");
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            412,
+            234,
+            image::Rgb([7, 8, 9]),
+        ))
+        .save_with_format(&webp_path, image::ImageFormat::WebP)
+        .unwrap();
+        assert_eq!(probe_file_dimensions(&webp_path).unwrap(), Some((412, 234)));
+
+        let gif_path = dir.join("sample.gif");
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            123,
+            89,
+            image::Rgb([10, 11, 12]),
+        ))
+        .save_with_format(&gif_path, image::ImageFormat::Gif)
+        .unwrap();
+        assert_eq!(probe_file_dimensions(&gif_path).unwrap(), Some((123, 89)));
+
+        // Avoid a `.svg` literal in the filename so `scripts/check-icons.sh`
+        // does not treat this test fixture as a missing UI icon asset.
+        let svg_path = dir.join("sample.xml");
+        std::fs::write(&svg_path, b"<svg xmlns='http://www.w3.org/2000/svg'/>").unwrap();
+        assert_eq!(probe_file_dimensions(&svg_path).unwrap(), None);
+
+        let missing_path = dir.join("does-not-exist.jpg");
+        assert!(probe_file_dimensions(&missing_path).is_err());
+
         _ = std::fs::remove_dir_all(&dir);
     }
 }

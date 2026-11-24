@@ -142,15 +142,17 @@ echo "sample,ready_ms,rss_kib,anon_kib,file_kib,vm_size_kib,mappings,threads,sql
 
 for sample in $(seq 1 "$SAMPLES"); do
     SAMPLE_DIR="$OUTDIR/sample-$sample"
-    CFG="$SAMPLE_DIR/config"
+    XDG_CFG="$SAMPLE_DIR/config"
+    CFG="$XDG_CFG/musika"
     CACHE="$SAMPLE_DIR/cache"
     HOME_DIR="$SAMPLE_DIR/home"
     rm -rf "$SAMPLE_DIR"
     mkdir -p "$CFG" "$CACHE" "$HOME_DIR"
-    # `XDG_CONFIG_HOME` is the app config dir itself (not a parent): the binary
-    # resolves `library.db`, `accounts.json` and `key` directly under it, the
-    # same layout the launcher uses for `~/.config/musika`.
-    cp "$SRC/library.db" "$SRC/media.db" "$SRC/accounts.json" "$SRC/key" "$CFG/" 2>/dev/null || true
+    # `XDG_CONFIG_HOME` is the XDG base dir: Musika resolves `library.db`,
+    # `accounts.json` and `key` under `$XDG_CONFIG_HOME/musika`.
+    cp "$SRC/library.db" "$SRC/library.db-wal" "$SRC/library.db-shm" \
+        "$SRC/media.db" "$SRC/media.db-wal" "$SRC/media.db-shm" \
+        "$SRC/accounts.json" "$SRC/key" "$CFG/" 2>/dev/null || true
     [[ -f "$SRC/scroll.json" ]] && cp "$SRC/scroll.json" "$CFG/" || true
     # The restored queue resolves its cover URLs from the copied cover cache;
     # omitting it would make the daemon fetch every cover on startup, which is
@@ -164,7 +166,7 @@ for sample in $(seq 1 "$SAMPLES"); do
 
     spawn_ms=$(now_ms)
     env -u MUSIKA_IPC_SOCKET -u MUSIKA_DAEMON_SOCKET \
-        XDG_CONFIG_HOME="$CFG" XDG_CACHE_HOME="$CACHE" HOME="$HOME_DIR" \
+        XDG_CONFIG_HOME="$XDG_CFG" XDG_CACHE_HOME="$CACHE" HOME="$HOME_DIR" \
         MUSIKA_ASSET_DIR="$ROOT/src" \
         MUSIKA_IPC_SOCKET="$IPC" MUSIKA_DAEMON_SOCKET="$DAEMON_SOCK" \
         DBUS_SESSION_BUS_ADDRESS="$BUS_ADDR" \

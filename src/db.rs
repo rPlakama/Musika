@@ -316,6 +316,12 @@ pub(crate) async fn import_file(
                      SELECT rowid, title, artist, album, duration, song_id, play_count
                      FROM legacy.song_search"
                         .to_string()
+                } else if *table == "covers" {
+                    "INSERT OR IGNORE INTO main.covers
+                         (id, file, hash, content_type, size, etag, last_modified, fetched_at)
+                     SELECT id, file, hash, content_type, size, etag, last_modified, fetched_at
+                     FROM legacy.covers"
+                        .to_string()
                 } else {
                     format!("INSERT OR IGNORE INTO main.{table} SELECT * FROM legacy.{table}")
                 };

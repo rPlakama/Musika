@@ -3,6 +3,35 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.7.8 - _Fast startup & clean resume_
+
+- **Startup performance:** fixed the `5e6f435` daemon launch regression where
+  `cap_cached_oversized` re-read every `> 2 MiB` cached cover in full on every
+  startup. `covers` now tracks `cap_checked` in `media.db` (with legacy
+  8-column `covers.db` import preserved), and unchecked blobs use a streaming
+  header-only dimension probe (PNG, GIF, WebP and JPEG with seek-skipping over
+  EXIF/ICC segments) before ever reading full image data. `daemon.cap` drops
+  from ~366 ms (`v0.7.7`) / ~63 ms (`v0.7.6`) to ~5 ms on the one-time upgrade
+  pass and `< 1 ms` steady-state (`daemon.ready` wall time ~403 ms → ~24 ms).
+  Launcher socket polling tightened from 40 ms to 10 ms.
+- **Playback resume:** resuming after a long pause now resets/reopens cleanly
+  before unpausing the sink (no stale ring tail or backward clock jump),
+  non-seekable transcoded streams restart cleanly at `0` instead of entering a
+  reopen/seek retry storm, hardware clock anchoring tracks a ring epoch, and
+  PipeWire rebuilds vanished/errored streams on resume.
+- **UI:** an unfocused window now stays live while playing/loading/retrying
+  (while idle unfocused windows still sleep at 0 fps; `MUSIKA_PAUSE_UNFOCUSED=1`
+  restores strict pause-on-unfocus).
+- **Packaging and internal tooling:** the Nix flake source filter excludes
+  docs/README from the package source hash, and the sandbox benchmark scripts
+  (`check-daemon-lean.sh`, `check-cover-load.sh`, `check-ui-memory.sh`) match
+  the post-`5e6f435` `$XDG_CONFIG_HOME/musika` layout.
+- **Verification:** 841 lib tests (default) and 537 headless tests pass,
+  `cargo clippy --all-targets -- -D warnings` is clean in both feature sets,
+  `cargo fmt --check` is clean, `MUSIKA_STARTUP_TRACE=1` and
+  `scripts/check-daemon-lean.sh` verified on an isolated config snapshot, and
+  the packaged Nix build succeeds.
+
 ## 0.7.7 - _Audit hardening_
 
 - **Playback engine:** gapless boundaries are tracked in the ring read-frame

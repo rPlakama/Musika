@@ -669,9 +669,10 @@ impl AppRoot {
             self.topbar_scroll.set_offset(gpui::point(px(0.0), px(0.0)));
             return None;
         }
-        // An unfocused window has no visible motion; activation notifies the
-        // root, which re-enters this path and resumes from wall-clock phase.
-        if !window.is_window_active() {
+        // An idle unfocused window has no visible motion; a playing transport
+        // keeps animating. Activation also notifies the root, which re-enters
+        // this path and resumes from the wall-clock phase.
+        if !perf::frames_wanted(window.is_window_active()) {
             return None;
         }
         let signature = self.topbar_identity_signature();

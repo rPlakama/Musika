@@ -54,6 +54,13 @@ pub(crate) struct Shared {
     pub(crate) status: Mutex<Status>,
     /// Absolute sink frame at which the current track started.
     pub(crate) clock_start: AtomicU64,
+    /// Bumped whenever a reset/flush changes the ring's frame timeline (seek,
+    /// load, sink rebuild). The playback service drops hardware-clock deltas
+    /// that cross an epoch instead of correcting the playhead backwards.
+    clock_epoch: AtomicU64,
+    /// A decoder restarted from 0 because the stream is not seekable; the core
+    /// must re-anchor the displayed position instead of showing the target.
+    position_reset: Mutex<Option<f64>>,
     /// Displayed position at `clock_start` (nonzero after a seek).
     pub(crate) clock_origin: Mutex<f64>,
     /// Absolute ring frame where the next gapless track begins.
@@ -124,6 +131,8 @@ impl Shared {
         Self {
             status: Mutex::new(loaded),
             clock_start: AtomicU64::new(0),
+            clock_epoch: AtomicU64::new(0),
+            position_reset: Mutex::new(None),
             clock_origin: Mutex::new(0.0),
             boundary_frame: AtomicU64::new(0),
             boundary_epoch: AtomicU64::new(0),
@@ -283,6 +292,32 @@ impl Shared {
     /// `flush()` keeps the epoch, so callers must disarm explicitly.
     pub(crate) fn disarm_boundary(&self) {
         self.boundary_active.store(false, Ordering::Release);
+    }
+
+    /// Starts a new hardware-clock epoch: old `played_frames` deltas no longer
+    /// describe the current audio timeline (seek/load/flush/rebuild).
+    pub(crate) fn bump_clock_epoch(&self) {
+        self.clock_epoch.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn clock_epoch(&self) -> u64 {
+        self.clock_epoch.load(Ordering::Acquire)
+    }
+
+    /// Records that the decoder restarted at `position` because the stream
+    /// cannot seek; the engine converts this into `EngineEvent::PositionReset`.
+    pub(crate) fn request_position_reset(&self, position: f64) {
+        *self
+            .position_reset
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(position.max(0.0));
+    }
+
+    pub(crate) fn take_position_reset(&self) -> Option<f64> {
+        self.position_reset
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
     }
 
     pub(crate) fn set_sink_state(&self, state: SinkState, error: Option<String>) {

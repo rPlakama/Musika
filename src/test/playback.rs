@@ -2066,3 +2066,73 @@ fn dsd_is_classified_as_unsupported_instead_of_retried() {
     assert_eq!(error.kind, crate::player::error::ErrorKind::Unsupported);
     assert!(!error.retryable());
 }
+
+#[test]
+fn paused_retry_reloads_without_starting_playback() {
+    let mut core = PlaybackCore::new();
+    core.load(remote_tracks(2), 0, false);
+    core.on_engine(EngineEvent::LoadingCleared, SECOND);
+
+    let pause = core.apply_at(CoreCommand::Pause, 2 * SECOND);
+    assert!(pause.changed);
+    assert_eq!(core.state(), State::Paused);
+
+    // The service retries a failed paused row with `LoadPaused`; that must stay
+    // paused and reload at the same position, never start audio by itself.
+    let outcome = core.apply_at(CoreCommand::LoadPaused(12.5), 3 * SECOND);
+    assert_eq!(core.state(), State::Paused);
+    assert!(
+        outcome
+            .audio
+            .iter()
+            .any(|command| matches!(command, AudioCommand::Load { paused: true, .. })),
+        "paused retry must ask the engine for a paused load, got {:?}",
+        outcome.audio
+    );
+    assert!((core.position_at(4 * SECOND) - 12.5).abs() < 1e-6);
+    assert!(outcome.audio.iter().any(|command| matches!(
+        command,
+        AudioCommand::Seek(position) if (*position - 12.5).abs() < 1e-6
+    )));
+}
+
+#[test]
+fn paused_preopen_failure_is_deferred_instead_of_retried_as_play() {
+    let mut core = PlaybackCore::new();
+    // A restored queue pre-opens its row paused.
+    core.load(remote_tracks(1), 0, true);
+    let outcome = core.on_engine(
+        EngineEvent::Failed {
+            error: PlaybackError::classify(ErrorStage::Open, "Connection reset by peer"),
+        },
+        0,
+    );
+    assert!(
+        outcome.deferred_failure,
+        "a failure while paused is a pre-open, not a play attempt"
+    );
+    assert_eq!(core.state(), State::Paused);
+    assert!(
+        !core.retrying(),
+        "no play retry may be scheduled while paused"
+    );
+}
+
+#[test]
+fn position_reset_reanchors_the_displayed_playhead() {
+    let mut core = playing_core(1);
+    core.on_engine(EngineEvent::LoadingCleared, SECOND);
+
+    let seek = core.apply_at(CoreCommand::Seek(60.0), 2 * SECOND);
+    assert!(seek.changed);
+    assert!(core.is_loading());
+    assert!((core.position_at(3 * SECOND) - 60.0).abs() < 1e-6);
+
+    // The decoder could not seek (non-seekable stream) and restarted at 0.
+    let reset = core.on_engine(EngineEvent::PositionReset { position: 0.0 }, 4 * SECOND);
+    assert!(reset.changed);
+    assert!(!core.is_loading());
+    assert_eq!(core.state(), State::Playing);
+    assert!(core.position_at(4 * SECOND).abs() < 1e-6);
+    assert!((core.position_at(6 * SECOND) - 2.0).abs() < 1e-6);
+}

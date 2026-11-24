@@ -29,6 +29,12 @@ use crate::player::Normalization;
 /// in memory: a long-idle HTTP response is not reliable.
 const PAUSE_REOPEN_AFTER: Duration = Duration::from_secs(30);
 
+/// True when a decoder has been idle long enough that its HTTP connection can
+/// no longer be trusted; resume must reopen instead of reading it.
+fn pause_is_stale(paused_at: Option<Instant>, now: Instant) -> bool {
+    paused_at.is_some_and(|at| now.saturating_duration_since(at) > PAUSE_REOPEN_AFTER)
+}
+
 /// Optional equal-length crossfade between the outgoing and incoming track,
 /// when enabled from the UI. The fade starts when the decoded position is this
 /// close to the end; the next decoder is preloaded at the current pipeline rate
@@ -234,7 +240,10 @@ impl Worker {
             }
             _ = tx.send(Command::Pause);
         } else {
-            self.sink.set_paused(false);
+            // The worker unpauses the sink once the audio is ready: a live
+            // decoder can resume immediately, but a long-idle resume must reset
+            // the ring and reopen the stream first (otherwise the stale buffered
+            // tail plays and is then replayed from the pause point).
             let position = *self
                 .paused_position
                 .lock()
@@ -536,15 +545,17 @@ fn worker_thread(
                 }
                 Command::Resume { position } => {
                     let resume_at = position.max(0.0);
-                    let long_idle = current
-                        .paused_at
-                        .is_some_and(|at| at.elapsed() > PAUSE_REOPEN_AFTER);
+                    let long_idle = pause_is_stale(current.paused_at, Instant::now());
                     current.paused = false;
                     current.paused_at = None;
                     if current.decoder.is_some() {
                         if long_idle {
                             // The stream sat idle longer than an HTTP response
                             // can be trusted: reopen and seek to the playhead.
+                            // The sink stays paused until the ring is reset and
+                            // the decoder is ready; otherwise the pre-pause
+                            // buffered tail is played and then replayed from the
+                            // pause point (audible jump + backward clock jump).
                             let (url, next_url, generation) = (
                                 current.url.clone(),
                                 current.next_url.clone(),
@@ -554,6 +565,9 @@ fn worker_thread(
                             interrupt_stop(&mut current);
                             current.decoder = None;
                             sink.reset();
+                            rebase_clock(&shared, sink.as_ref(), resume_at);
+                            // Show the spinner while the new stream opens.
+                            shared.lock().loading = true;
                             start_decoder(
                                 &mut current,
                                 url,
@@ -565,22 +579,30 @@ fn worker_thread(
                                 &shared,
                                 sink.as_ref(),
                             );
+                            // If the reopen failed the failure path/retry will
+                            // unpause; playing a stale tail here would be worse.
+                            if current.decoder.is_some() {
+                                sink.set_paused(false);
+                            }
                         } else {
                             // Live decoder: keep it, do not re-seek.
                             shared.lock().loading = false;
+                            sink.set_paused(false);
                         }
                         continue;
                     }
                     if current.stopped {
                         continue;
                     }
-                    // Interrupted at pause (non-seekable): reopen at the
-                    // paused position.
+                    // Interrupted at pause (non-seekable): reopen at the paused
+                    // position; a stream that cannot seek restarts from 0 and
+                    // reports the position reset through the engine.
                     let (url, next_url, generation) = (
                         current.url.clone(),
                         current.next_url.clone(),
                         current.generation,
                     );
+                    shared.lock().loading = true;
                     start_decoder(
                         &mut current,
                         url,
@@ -592,6 +614,9 @@ fn worker_thread(
                         &shared,
                         sink.as_ref(),
                     );
+                    if current.decoder.is_some() {
+                        sink.set_paused(false);
+                    }
                     continue;
                 }
                 Command::Seek(mut seconds) => {
@@ -613,6 +638,31 @@ fn worker_thread(
                         }
                     }
                     let seconds = seconds.max(0.0);
+                    // A live non-seekable stream (transcoded radio/HTTP) cannot
+                    // jump. Dropping the decoder here made every UI seek a
+                    // retryable Seek failure (reopen+seek x3, then stop); ignore
+                    // the seek and snap the displayed position back to the audio
+                    // that is actually playing instead.
+                    if let Some(decoder) = current.decoder.as_ref()
+                        && !decoder.is_seekable()
+                    {
+                        let actual = shared
+                            .clock_origin
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .max(0.0)
+                            + (sink
+                                .played_frames()
+                                .saturating_sub(shared.clock_start.load(Ordering::Acquire)))
+                                as f64
+                                / f64::from(current.rate.max(1));
+                        shared.request_position_reset(actual);
+                        shared.lock().loading = false;
+                        if current.paused {
+                            current.paused_at = Some(Instant::now());
+                        }
+                        continue;
+                    }
                     if !current.paused {
                         // Let the old audio fade out before the seek discards
                         // the queue; the new position fades in below.
@@ -641,6 +691,11 @@ fn worker_thread(
                                 shared.decode_done.store(false, Ordering::Release);
                                 let paused = current.paused;
                                 shared.lock().loading = !paused;
+                                if paused {
+                                    // The decoder is repositioned; the HTTP
+                                    // connection still ages from now.
+                                    current.paused_at = Some(Instant::now());
+                                }
                             }
                             Err(error) => {
                                 fail_at(&shared, crate::player::ErrorStage::Seek, error);
@@ -669,6 +724,7 @@ fn worker_thread(
                         );
                         if current.paused {
                             shared.lock().loading = false;
+                            current.paused_at = Some(Instant::now());
                         }
                     }
                     continue;
@@ -698,7 +754,10 @@ fn worker_thread(
                     // whole (possibly slow) network open instead of burning
                     // graph wakeups until `start_decoder` returns.
                     current.paused = paused;
-                    current.paused_at = None;
+                    // Remember when the row was opened paused: a restored row
+                    // can sit paused for hours, and its HTTP connection must be
+                    // treated like any other long pause on Play.
+                    current.paused_at = paused.then(Instant::now);
                     sink.set_paused(paused);
                     shared
                         .clock_start
@@ -901,6 +960,32 @@ fn worker_thread(
     cancel_preload(&mut current);
 }
 
+/// What to do with a decoder that was opened at a requested position.
+///
+/// Non-seekable streams (live/transcoded HTTP) cannot jump; restarting from 0
+/// and reporting the position reset is the only way a pause/seek can return to
+/// playback instead of entering the (always-retryable) Seek failure loop.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SeekPlan {
+    /// Start at this (possibly zero) position without calling `seek`.
+    Start(f64),
+    /// Call `Decoder::seek` with this position.
+    Seek(f64),
+    /// The stream cannot seek: restart at 0 and emit a position reset.
+    RestartFromZero,
+}
+
+fn seek_plan(position: f64, seekable: bool) -> SeekPlan {
+    let position = position.max(0.0);
+    if position <= 0.0 {
+        SeekPlan::Start(position)
+    } else if seekable {
+        SeekPlan::Seek(position)
+    } else {
+        SeekPlan::RestartFromZero
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "the decoder start is driven by the worker's current state plus the load parameters; grouping them into a struct would be a throwaway used by five call sites"
@@ -930,7 +1015,7 @@ fn start_decoder(
     current.epoch = sink.epoch();
     current.generation = generation;
     current.written_frames = 0;
-    current.timeline_start = position;
+    current.timeline_start = 0.0;
     current.pending_handoff = None;
     if !preserve_preload {
         current.next_url = next_url;
@@ -951,17 +1036,32 @@ fn start_decoder(
     current.stop = Some(stop.clone());
     match Decoder::open(&url, Arc::clone(&stop)) {
         Ok(mut decoder) => {
-            if position > 0.0
-                && let Err(error) = decoder.seek(position)
-            {
-                if generation == shared.generation.load(Ordering::Acquire)
-                    && !stop.load(Ordering::Acquire)
-                {
-                    fail_at(shared, crate::player::ErrorStage::Seek, error);
+            // A live/transcoded HTTP stream may not support seeking at all. A
+            // failed seek used to kill the decoder and enter the retry loop
+            // (`ErrorStage::Seek` is always retryable), so a pause+play on such
+            // a stream never came back. Detect it up front: restart from 0 and
+            // tell the core to re-anchor the displayed position.
+            let seekable = decoder.is_seekable();
+            let start_position = match seek_plan(position, seekable) {
+                SeekPlan::Start(position) => position,
+                SeekPlan::Seek(position) => {
+                    if let Err(error) = decoder.seek(position) {
+                        if generation == shared.generation.load(Ordering::Acquire)
+                            && !stop.load(Ordering::Acquire)
+                        {
+                            fail_at(shared, crate::player::ErrorStage::Seek, error);
+                        }
+                        shared.lock().decoder_live = false;
+                        return;
+                    }
+                    position
                 }
-                shared.lock().decoder_live = false;
-                return;
-            }
+                SeekPlan::RestartFromZero => {
+                    shared.request_position_reset(0.0);
+                    0.0
+                }
+            };
+            current.timeline_start = start_position;
             crate::startup::trace("fetch.first_chunk");
             // Adopt the track's native rate before any PCM is written for it:
             // the sink rebuilds its PipeWire stream to F32LE/stereo/<rate>.
@@ -980,7 +1080,6 @@ fn start_decoder(
                     }
                 }
             }
-            let seekable = decoder.is_seekable();
             current.decoder = Some(decoder);
             {
                 let mut status = shared.lock();
@@ -1001,14 +1100,8 @@ fn start_decoder(
                 status.seekable = seekable;
                 status.decoder_live = true;
             }
-            if !is_reopen {
-                *shared
-                    .clock_origin
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = position;
-                shared
-                    .clock_start
-                    .store(sink.played_frames(), Ordering::Release);
+            if !is_reopen || start_position != position {
+                rebase_clock(shared, sink, start_position);
             }
             shared.signal();
         }
@@ -1488,6 +1581,18 @@ fn interrupt_current(shared: &Shared) {
     }
 }
 
+/// Re-anchors the hardware clock so `played_frames` deltas after a ring reset
+/// describe the new audio timeline (not the discarded one).
+fn rebase_clock(shared: &Shared, sink: &dyn PcmSink, position: f64) {
+    *shared
+        .clock_origin
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = position.max(0.0);
+    shared
+        .clock_start
+        .store(sink.played_frames(), Ordering::Release);
+}
+
 fn interrupt_stop(current: &mut Current) {
     if let Some(stop) = current.stop.take() {
         stop.store(true, Ordering::Release);
@@ -1895,5 +2000,31 @@ mod tests {
             ..Current::default()
         };
         assert!(needs_timed_wait(&current));
+    }
+
+    #[test]
+    fn pause_staleness_uses_the_reopen_threshold() {
+        let now = Instant::now();
+        assert!(!pause_is_stale(None, now));
+        assert!(!pause_is_stale(Some(now - Duration::from_secs(5)), now));
+        assert!(!pause_is_stale(Some(now - PAUSE_REOPEN_AFTER), now));
+        assert!(pause_is_stale(
+            Some(now - PAUSE_REOPEN_AFTER - Duration::from_secs(1)),
+            now
+        ));
+    }
+
+    #[test]
+    fn seek_plan_restarts_non_seekable_streams_instead_of_failing() {
+        // A cold/fresh decoder starts at 0 without a seek call.
+        assert_eq!(seek_plan(0.0, true), SeekPlan::Start(0.0));
+        assert_eq!(seek_plan(0.0, false), SeekPlan::Start(0.0));
+        // Seekable streams seek as requested.
+        assert_eq!(seek_plan(42.0, true), SeekPlan::Seek(42.0));
+        // Live/transcoded streams cannot jump: restart instead of failing the
+        // always-retryable Seek stage (the old pause/resume stuck path).
+        assert_eq!(seek_plan(42.0, false), SeekPlan::RestartFromZero);
+        // Negative targets clamp to the start.
+        assert_eq!(seek_plan(-3.0, true), SeekPlan::Start(0.0));
     }
 }

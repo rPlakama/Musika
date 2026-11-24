@@ -173,9 +173,11 @@ impl PcmSink for AlsaSink {
         // A flush discards the frames the armed gapless boundary was measured
         // in; keep the marker from firing in the new timeline (P-01).
         self.shared.disarm_boundary();
+        self.shared.bump_clock_epoch();
         self.ring.flush();
     }
     fn reset(&self) {
+        self.shared.bump_clock_epoch();
         self.ring.reset();
     }
     fn close_writes(&self) {
@@ -237,6 +239,7 @@ fn run_sink(
                         sample_format = next_format;
                         ring.set_rate(rate);
                         shared.disarm_boundary();
+                        shared.bump_clock_epoch();
                         ring.flush();
                         ring.set_failed(false);
                         shared.set_sink_state(SinkState::Streaming, None);

@@ -103,6 +103,11 @@ pub(crate) enum EngineEvent {
     },
     /// The loading heuristic fired; emit once per load.
     LoadingCleared,
+    /// The decoder had to restart at `position` (non-seekable stream), so the
+    /// core must re-anchor the playhead instead of trusting the seek target.
+    PositionReset {
+        position: f64,
+    },
 }
 
 /// Cheap transport clock read by the service (MPRIS/diagnostics).
@@ -113,6 +118,9 @@ pub(crate) struct EngineClock {
     pub underruns: u64,
     pub sample_rate: u32,
     pub loading: bool,
+    /// Hardware-clock epoch: changes on seek/load/flush/rebuild, so consumers
+    /// discard `played_frames` deltas that span a timeline reset.
+    pub epoch: u64,
 }
 
 #[derive(Debug, Default)]
@@ -122,6 +130,7 @@ struct ClockState {
     underruns: AtomicU64,
     sample_rate: AtomicU32,
     loading: AtomicBool,
+    epoch: AtomicU64,
 }
 
 /// Handle to the engine thread. Dropping it shuts the engine down.
@@ -200,6 +209,7 @@ impl Engine {
             underruns: self.clock.underruns.load(Ordering::Relaxed),
             sample_rate: self.clock.sample_rate.load(Ordering::Relaxed),
             loading: self.clock.loading.load(Ordering::Relaxed),
+            epoch: self.clock.epoch.load(Ordering::Relaxed),
         }
     }
 
@@ -302,6 +312,7 @@ fn engine_thread(
         clock.underruns.store(native.underruns(), Ordering::Relaxed);
         clock.sample_rate.store(native.rate(), Ordering::Relaxed);
         clock.loading.store(native.loading(), Ordering::Relaxed);
+        clock.epoch.store(native.clock_epoch(), Ordering::Relaxed);
     }
 }
 
@@ -382,6 +393,11 @@ fn pump(
             stream_size,
             seekable,
         })
+    {
+        return false;
+    }
+    if let Some(position) = native.take_position_reset()
+        && !emit(EngineEvent::PositionReset { position })
     {
         return false;
     }

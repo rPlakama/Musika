@@ -355,6 +355,9 @@ struct RetryState {
     /// When the next reopen should run; `None` while an attempt is in flight.
     next_at: Option<Instant>,
     position: f64,
+    /// The transport was paused when the failure happened: the retry must
+    /// reload the row without starting playback.
+    paused: bool,
 }
 
 /// A network failure that exhausted its retries: the daemon's next successful
@@ -387,6 +390,9 @@ struct ClockAnchor {
     played_frames: u64,
     sample_rate: u32,
     track_pos: f64,
+    /// Hardware-clock epoch the anchor was seeded in. A seek/load/flush starts
+    /// a new epoch; deltas across an epoch would be meaningless.
+    epoch: u64,
 }
 
 struct ServiceState {
@@ -825,11 +831,17 @@ fn run(
                 .map(|retry| retry.position)
                 .unwrap_or(0.0);
             if service.ensure_engine() {
+                let paused = service.retry.as_ref().is_some_and(|retry| retry.paused);
                 if let Some(retry) = service.retry.as_mut() {
                     retry.next_at = None;
                 }
                 service.metrics.retries += 1;
-                let outcome = service.core.apply(CoreCommand::ResumeAt(position));
+                let command = if paused {
+                    CoreCommand::LoadPaused(position)
+                } else {
+                    CoreCommand::ResumeAt(position)
+                };
+                let outcome = service.core.apply(command);
                 apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
             } else if let Some(retry) = service.retry.as_mut() {
                 retry.next_at = Some(Instant::now() + ENGINE_RETRY);
@@ -1204,7 +1216,8 @@ fn run(
                 | EngineEvent::Ended
                 | EngineEvent::Failed { .. }
                 | EngineEvent::SinkRecovered
-                | EngineEvent::LoadingCleared) => {
+                | EngineEvent::LoadingCleared
+                | EngineEvent::PositionReset { .. }) => {
                     let healthy =
                         matches!(event, EngineEvent::FirstPcm | EngineEvent::Loaded { .. });
                     let first_pcm = matches!(event, EngineEvent::FirstPcm);
@@ -1273,6 +1286,7 @@ fn run(
                                     attempts: attempt,
                                     next_at: Some(Instant::now() + delay),
                                     position,
+                                    paused: service.core.state() == crate::player::State::Paused,
                                 });
                                 service.last_error = Some(error.message);
                             }
@@ -1436,13 +1450,16 @@ fn reconcile_hardware_clock(
     }
     let needs_seed = reset_anchor
         || anchor.is_none_or(|prev| {
-            prev.sample_rate != clock.sample_rate || clock.played_frames < prev.played_frames
+            prev.epoch != clock.epoch
+                || prev.sample_rate != clock.sample_rate
+                || clock.played_frames < prev.played_frames
         });
     if needs_seed {
         *anchor = Some(ClockAnchor {
             played_frames: clock.played_frames,
             sample_rate: clock.sample_rate,
             track_pos: core.position_at(now_ns),
+            epoch: clock.epoch,
         });
         return;
     }
@@ -1757,6 +1774,7 @@ mod tests {
             underruns: 0,
             sample_rate: 48_000,
             loading: false,
+            epoch: 0,
         };
         reconcile_hardware_clock(&mut core, &mut anchor, Some(initial_clock), 0, true, false);
         assert!(anchor.is_some());
@@ -1783,5 +1801,79 @@ mod tests {
     fn is_setting_command_includes_shuffle_and_capture_installs_settings() {
         assert!(is_setting_command(&CoreCommand::ShuffleQueue));
         assert!(is_setting_command(&CoreCommand::SetShuffle(true)));
+    }
+
+    #[test]
+    fn clock_epoch_change_reseeds_the_anchor_instead_of_rewinding() {
+        let mut core = PlaybackCore::new();
+        let track = crate::player::Track {
+            item: crate::model::ItemMeta {
+                id: "1".to_string(),
+                title: "Song 1".to_string(),
+                ..crate::model::ItemMeta::default()
+            },
+            artist: String::new(),
+            album: String::new(),
+            favorite: false,
+            duration: 200.0,
+            url: "file:///1.flac".to_string(),
+            cover_art: String::new(),
+        };
+        core.load(vec![track], 0, false);
+        core.on_engine(EngineEvent::FirstPcm, 0);
+        core.snapshot(1, 0);
+
+        let mut anchor = None;
+        let initial_clock = crate::player::engine::EngineClock {
+            played_frames: 1_000,
+            buffered_frames: 48_000,
+            underruns: 0,
+            sample_rate: 48_000,
+            loading: false,
+            epoch: 0,
+        };
+        reconcile_hardware_clock(&mut core, &mut anchor, Some(initial_clock), 0, true, false);
+
+        // 5 s of audio played in epoch 0.
+        let five_sec_ns = 5_000_000_000;
+        let epoch0_clock = crate::player::engine::EngineClock {
+            played_frames: 1_000 + 5 * 48_000,
+            ..initial_clock
+        };
+        reconcile_hardware_clock(
+            &mut core,
+            &mut anchor,
+            Some(epoch0_clock),
+            five_sec_ns,
+            false,
+            true,
+        );
+        assert!((core.position_at(five_sec_ns) - 5.0).abs() < 1e-3);
+
+        // Seek to 60 s: the sink starts a new hardware-clock epoch.
+        core.apply_at(CoreCommand::Seek(60.0), 6_000_000_000);
+        core.on_engine(EngineEvent::LoadingCleared, 6_000_000_000);
+        assert!((core.position_at(7_000_000_000) - 61.0).abs() < 1e-6);
+
+        // Hardware frames jump (ring frame space restarted). Without the epoch
+        // guard the stale delta and old anchor would "correct" the playhead to
+        // ~8 s; the epoch forces a reseed at the current 62 s instead.
+        let epoch1_clock = crate::player::engine::EngineClock {
+            played_frames: 400_000,
+            epoch: 1,
+            ..initial_clock
+        };
+        reconcile_hardware_clock(
+            &mut core,
+            &mut anchor,
+            Some(epoch1_clock),
+            8_000_000_000,
+            false,
+            true,
+        );
+        assert!((core.position_at(8_000_000_000) - 62.0).abs() < 1e-6);
+        let seeded = anchor.expect("anchor reseeded on epoch change");
+        assert_eq!(seeded.epoch, 1);
+        assert_eq!(seeded.played_frames, 400_000);
     }
 }

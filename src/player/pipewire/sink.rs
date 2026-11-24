@@ -345,10 +345,14 @@ impl Sink {
         // measured in; disarming prevents a spurious `Boundary` when the read
         // counter reaches the old marker in the new timeline (P-01).
         self.shared.disarm_boundary();
+        // The ring frame timeline restarts: hardware-clock deltas from before
+        // the flush must not be applied to the new playhead.
+        self.shared.bump_clock_epoch();
         self.ring.flush();
     }
 
     pub(crate) fn reset(&self) {
+        self.shared.bump_clock_epoch();
         self.ring.reset();
     }
 
@@ -602,6 +606,7 @@ fn switch_format<'c>(
     // produced at the new rate. The producer blocks on the flush until the
     // rebuilt stream's first process callback services it.
     shared.disarm_boundary();
+    shared.bump_clock_epoch();
     ring.flush();
     *active = None;
     match build_stream(core, ring, shared, rate, target, exclusive) {
@@ -617,6 +622,7 @@ fn switch_format<'c>(
         Err(error) => {
             ring.set_rate(previous_rate);
             shared.disarm_boundary();
+            shared.bump_clock_epoch();
             ring.flush();
             Err(error)
         }
@@ -710,6 +716,10 @@ fn run_sink(
             pause_deactivate_due.set(true);
         }
     });
+    // The stream stayed inactive/errored when a resume asked it to be active
+    // again: rebuild it instead of leaving the ring unconsumed (silent stuck
+    // transport after a long pause).
+    let reactivate_due = Rc::new(Cell::new(false));
 
     // Follow the default sink live: PipeWire publishes it through the
     // `default` metadata object. Rebinding replaces the previous proxy; the
@@ -838,10 +848,24 @@ fn run_sink(
                     } else {
                         pause_deactivate_due.set(false);
                         _ = pause_timer.update_timer(None, None);
-                        if let Some(active) = active.as_ref()
-                            && let Err(error) = active.stream.set_active(true)
-                        {
-                            crate::debug_log!("pipewire: cannot set stream active state: {error}");
+                        match active.as_ref() {
+                            Some(active)
+                                if matches!(
+                                    active.stream.state(),
+                                    pw::stream::StreamState::Paused
+                                        | pw::stream::StreamState::Streaming
+                                ) =>
+                            {
+                                if let Err(error) = active.stream.set_active(true) {
+                                    crate::debug_log!(
+                                        "pipewire: cannot resume stream, rebuilding: {error}"
+                                    );
+                                    reactivate_due.set(true);
+                                }
+                            }
+                            // Deactivated/dead stream: `set_active(true)` cannot
+                            // revive it, rebuild from scratch below.
+                            _ => reactivate_due.set(true),
                         }
                     }
                 }
@@ -943,6 +967,31 @@ fn run_sink(
                     }
                 }
                 SinkCommand::Shutdown => running = false,
+            }
+        }
+        if running && !ring.paused() && reactivate_due.replace(false) {
+            // A resume asked for an active stream but the old one was already
+            // gone/unusable. Rebuilding keeps the queued PCM (the ring owns it)
+            // and reattaches to the graph; without this the ring would fill and
+            // the decode worker would block forever while the UI shows Playing.
+            match rebuild_stream(
+                &mut active,
+                &core,
+                &ring,
+                &shared,
+                ring.rate(),
+                target.borrow().as_deref(),
+                exclusive,
+            ) {
+                Ok(()) => {
+                    if let Some(active) = active.as_ref() {
+                        let _ = apply_volume(&active.stream, &ring, &hw_volume_active, volume);
+                        let _ = apply_mute(&active.stream, &ring, &hw_mute_active, muted);
+                    }
+                }
+                Err(error) => {
+                    crate::debug_log!("pipewire: cannot rebuild the paused stream: {error}");
+                }
             }
         }
         if running

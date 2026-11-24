@@ -249,10 +249,12 @@ impl Element for MarqueeText {
                 _ => MarqueeCache::shape(key, window),
             };
             let elapsed = cache.elapsed_at(now);
-            // An unfocused window has no visible motion to spend frames on; on
-            // reactivation AppRoot's activation observer repaints and the
+            // An idle unfocused window has no visible motion to spend frames
+            // on; a playing transport keeps animating even unfocused. On
+            // reactivation AppRoot's activation observer also repaints and the
             // marquee resumes from its wall-clock phase.
-            if cache.overflow > 0.0 && window.is_window_active() {
+            if cache.overflow > 0.0 && super::super::perf::frames_wanted(window.is_window_active())
+            {
                 match marquee_next_change(cache.overflow, elapsed) {
                     // Travelling: the offset changes on every frame.
                     None => super::super::perf::request_frame(window, "marquee"),

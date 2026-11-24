@@ -88,6 +88,10 @@ pub(crate) enum CoreCommand {
     /// Retry the current row at `position` as a live playback attempt (the
     /// service's transparent network retry / post-recovery resume).
     ResumeAt(f64),
+    /// Retry/reload the current row at `position` while keeping the transport
+    /// paused (a failure that happened before the user pressed Play must not
+    /// start audio by itself).
+    LoadPaused(f64),
 }
 
 #[derive(Debug, Default)]
@@ -274,6 +278,17 @@ impl PlaybackCore {
     )]
     pub(crate) fn offline(&self) -> bool {
         self.offline
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the loading flag is read directly by the service; this accessor documents the paused-resume tests"
+        )
+    )]
+    pub(crate) fn is_loading(&self) -> bool {
+        self.loading
     }
 
     pub(crate) fn retrying(&self) -> bool {
@@ -467,6 +482,7 @@ impl PlaybackCore {
             CoreCommand::InsertMany { at, tracks } => self.insert_rows(at, tracks, &mut outcome),
             CoreCommand::Recover { position } => self.recover(position, &mut outcome),
             CoreCommand::ResumeAt(position) => self.resume_at(position, &mut outcome),
+            CoreCommand::LoadPaused(position) => self.load_paused_at(position, &mut outcome),
         }
         outcome
     }
@@ -539,6 +555,16 @@ impl PlaybackCore {
                 position,
             } => self.boundary(duration, stream_size, position, now_ns, &mut outcome),
             EngineEvent::Ended => self.advance_after_error(&mut outcome),
+            EngineEvent::PositionReset { position } => {
+                // The decoder could not seek (non-seekable stream) and restarted
+                // at `position`; re-anchor so the UI does not show a position
+                // that was never audible.
+                self.anchor_position = self.clamp_position(position.max(0.0));
+                self.anchor_ns = now_ns;
+                self.rebase = false;
+                self.loading = false;
+                outcome.changed = true;
+            }
             EngineEvent::Failed { error } => {
                 let failure_position = self.position_at(now_ns);
                 outcome.failure_position = Some(failure_position);
@@ -555,15 +581,12 @@ impl PlaybackCore {
                 self.failed = true;
                 outcome.failure = Some(error.clone());
 
-                let remote = self
-                    .queue
-                    .get(self.index)
-                    .is_some_and(|track| crate::player::is_remote_url(&track.url));
-                if remote && !self.loaded_current && self.state == State::Paused {
-                    // A restored queue pre-opens its row while paused. That
-                    // failure is not a play attempt: keep the paused row and
-                    // let the next Play report it. The retry budget is not
-                    // touched by a pre-open.
+                if self.state == State::Paused {
+                    // A restored queue (or a paused reload) pre-opens its row
+                    // while paused. That failure is not a play attempt: keep
+                    // the paused row and let the next Play report/retry it.
+                    // Retrying it here would call `ResumeAt` and start audio
+                    // without the user pressing Play.
                     outcome.deferred_failure = true;
                     return outcome;
                 }
@@ -1069,6 +1092,14 @@ impl PlaybackCore {
         }
         self.state = State::Playing;
         self.load_current_at(position, false, outcome);
+    }
+
+    /// Reloads the current row at `position` without leaving the paused state.
+    fn load_paused_at(&mut self, position: f64, outcome: &mut Outcome) {
+        if self.queue.is_empty() {
+            return;
+        }
+        self.load_current_at(position, true, outcome);
     }
 
     /// Shared engine reload at an explicit position. `paused` preserves the

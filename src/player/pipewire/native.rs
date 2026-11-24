@@ -282,6 +282,16 @@ impl Native {
         self.sink.played_frames()
     }
 
+    /// Hardware-clock epoch (bumped on seek/load/flush/rebuild).
+    pub(crate) fn clock_epoch(&self) -> u64 {
+        self.shared.clock_epoch()
+    }
+
+    /// Consumes a pending "decoder restarted at 0" notice.
+    pub(crate) fn take_position_reset(&self) -> Option<f64> {
+        self.shared.take_position_reset()
+    }
+
     pub(crate) fn rate(&self) -> u32 {
         self.sink.rate()
     }

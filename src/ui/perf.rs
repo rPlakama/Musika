@@ -223,6 +223,10 @@ pub(crate) fn request_frame(window: &gpui::Window, site: &'static str) {
 
 thread_local! {
     static WINDOW_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    /// The transport is playing/loading/retrying, so the UI has visible motion
+    /// (progress, lyrics, marquee) that must keep animating even when the
+    /// window is not focused.
+    static TRANSPORT_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 pub(crate) fn set_window_active(active: bool) {
     WINDOW_ACTIVE.with(|slot| slot.set(active));
@@ -232,9 +236,49 @@ pub(crate) fn window_active() -> bool {
     WINDOW_ACTIVE.with(|slot| slot.get())
 }
 
+pub(crate) fn set_transport_active(active: bool) {
+    TRANSPORT_ACTIVE.with(|slot| slot.set(active));
+}
+
+pub(crate) fn transport_active() -> bool {
+    TRANSPORT_ACTIVE.with(|slot| slot.get())
+}
+
+/// Whether an animation/repaint chain should keep running for the current
+/// window state.
+///
+/// An idle unfocused window sleeps (the `U-15` idle-RAF fix). A *playing*
+/// window does not: the progress bar, lyrics and marquees are still visible on
+/// a second monitor, and GPUI does not repaint an inactive window just because
+/// the daemon published a new state. `MUSIKA_PAUSE_UNFOCUSED=1` restores the
+/// strict "no frames while unfocused" behaviour.
+pub(crate) fn frames_wanted(window_active: bool) -> bool {
+    frames_wanted_with(window_active, transport_active(), pause_unfocused())
+}
+
+fn pause_unfocused() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("MUSIKA_PAUSE_UNFOCUSED").is_some_and(|value| value == "1"))
+}
+
+fn frames_wanted_with(window_active: bool, transport_active: bool, pause_unfocused: bool) -> bool {
+    window_active || (transport_active && !pause_unfocused)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn frame_gate_keeps_playing_animations_when_unfocused() {
+        // Idle + unfocused: sleep (the U-15 win).
+        assert!(!frames_wanted_with(false, false, false));
+        // Playing + unfocused: keep animating (visible second-monitor player).
+        assert!(frames_wanted_with(false, true, false));
+        // Focused: always render.
+        assert!(frames_wanted_with(true, false, false));
+        // The escape hatch restores the strict audit behaviour.
+        assert!(!frames_wanted_with(false, true, true));
+    }
 
     #[test]
     fn percentile_nearest_rank() {

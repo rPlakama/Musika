@@ -14,6 +14,11 @@ impl Render for AppRoot {
         self.win_h = viewport_h;
         self.scale_factor = window.scale_factor();
         perf::set_window_active(window.is_window_active());
+        perf::set_transport_active(
+            self.player.state() == crate::player::State::Playing
+                || self.player.is_loading()
+                || self.player.is_retrying(),
+        );
         if self.awaiting_core {
             // Startup could not reach the core: keep a minimal retry surface
             // up until the supervisor reports `Connected` (it retries in the
@@ -279,7 +284,7 @@ impl Render for AppRoot {
         if toast_animating {
             request_frame(window, "toast");
         } else if let Some(delay) = toast_wake
-            && window.is_window_active()
+            && perf::frames_wanted(window.is_window_active())
         {
             wake_after(cx, std::time::Duration::from_secs_f64(delay.max(0.001)));
         }
@@ -299,7 +304,7 @@ impl Render for AppRoot {
             }
         }
         if let Some(delay) = hold_wake
-            && window.is_window_active()
+            && perf::frames_wanted(window.is_window_active())
         {
             // The bubble is static after its pop-in; wake once at its TTL.
             wake_after(cx, delay);
@@ -603,7 +608,7 @@ impl AppRoot {
 /// there keeps an unfocused UI at zero CPU. The activation observer notifies the
 /// root on focus-in, which resumes every animation from its wall-clock phase.
 pub(in crate::ui) fn request_frame(window: &gpui::Window, site: &'static str) {
-    if window.is_window_active() {
+    if perf::frames_wanted(window.is_window_active()) {
         perf::request_frame(window, site);
     }
 }

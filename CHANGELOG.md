@@ -3,6 +3,25 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.7.9 - _Stream buffering & playhead sync_
+
+- **Stream buffering:** large remote streams now hold audio output in a
+  lock-free `Ring::buffering` state (separate from user pause) until `1.0 s`
+  of decoded PCM is queued on Load/Seek/reopen, or `2.0 s` after a mid-track
+  ring underrun (releasing immediately at EOF so short tracks and near-end
+  seeks never stall), fading in smoothly once ready.
+- **Playhead freeze while loading/buffering:** `PlaybackState::position_at()`
+  now freezes whenever `loading()` or `retrying()` is active and
+  `PlaybackCore::snapshot()` emits `rate_milli = 0` while loading, retrying,
+  or rebasing—preventing the UI and MPRIS playhead from counting seconds up
+  while waiting on network data. Mid-track stalls emit `EngineEvent::Buffering`
+  and snap to the exact hardware-played frame before freezing, and buffering
+  time is excluded from scrobble accumulation.
+- **Verification:** 825 default lib tests (844 total, 19 ignored) and 540
+  headless tests pass, `cargo clippy --all-targets -- -D warnings` is clean in
+  both feature sets, `cargo fmt --check` and `scripts/check-icons.sh` are
+  clean, and the packaged Nix build succeeds.
+
 ## 0.7.8 - _Fast startup & clean resume_
 
 - **Startup performance:** fixed the `5e6f435` daemon launch regression where

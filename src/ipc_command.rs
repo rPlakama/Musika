@@ -202,6 +202,12 @@ pub enum IpcCommand {
     Scrobble(bool),
     /// Cycle the EQ profile through OFF.
     EqNext,
+    /// Disable the active EQ profile.
+    EqOff,
+    /// Load, translate (APO → MPV), and apply a named EQ profile.
+    EqSet(String),
+    /// Read-only: list available APO profiles plus the active profile & translated MPV `af`.
+    EqList,
 }
 
 /// Where a command must run in the core/UI split. The classification is
@@ -276,10 +282,12 @@ impl IpcCommand {
             | Self::ColorSaturation(_)
             | Self::Sleep(_)
             | Self::Scrobble(_)
-            | Self::EqNext => T::CoreBridge,
+            | Self::EqNext
+            | Self::EqOff
+            | Self::EqSet(_) => T::CoreBridge,
 
             // Read-only telemetry.
-            Self::Status | Self::QueueQuery | Self::OutputList => T::Query,
+            Self::Status | Self::QueueQuery | Self::OutputList | Self::EqList => T::Query,
 
             // Lifecycle.
             Self::Quit | Self::Show => T::Lifecycle,
@@ -681,12 +689,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "eq",
-        usage: "eq next",
-        description: "Cycle the active Equalizer APO profile through OFF",
-        form: CommandForm::Word {
-            values: &[("next", IpcCommand::EqNext)],
-            unknown: "eq action",
-        },
+        usage: "eq <next|off|list|profile-name>",
+        description: "Cycle, disable, list, or apply an Equalizer APO profile (translated to MPV)",
+        form: CommandForm::Advanced(ArgHints::Values(&["next", "off", "list"])),
     },
     CommandSpec {
         name: "scrobble",
@@ -1456,6 +1461,16 @@ fn advanced_parse(name: &str, rest: &str, usage: &str) -> Result<IpcCommand, Com
             _ => Err(CommandError("usage: sleep <minutes|off>".to_string())),
         },
 
+        "eq" => match split_quoted_args(rest)?.as_slice() {
+            [action] if action == "next" => Ok(IpcCommand::EqNext),
+            [action] if action == "off" => Ok(IpcCommand::EqOff),
+            [action] if action == "list" => Ok(IpcCommand::EqList),
+            [name] if !name.is_empty() => Ok(IpcCommand::EqSet(name.clone())),
+            _ => Err(CommandError(
+                "usage: eq <next|off|list|profile-name>".to_string(),
+            )),
+        },
+
         "download" => parse_download(rest),
 
         "search" => Ok(IpcCommand::Search {
@@ -2122,6 +2137,9 @@ fn advanced_canonical(command: &IpcCommand) -> String {
         Sleep(None) => "sleep off".to_string(),
 
         EqNext => "eq next".to_string(),
+        EqOff => "eq off".to_string(),
+        EqList => "eq list".to_string(),
+        EqSet(name) => format!("eq {}", quote_arg(name)),
 
         Scrobble(true) => "scrobble on".to_string(),
 
@@ -2614,11 +2632,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_eq_cycle_command() {
+    fn parses_eq_commands() {
         assert_eq!(parse("eq next"), Ok(IpcCommand::EqNext));
+        assert_eq!(parse("eq off"), Ok(IpcCommand::EqOff));
+        assert_eq!(parse("eq list"), Ok(IpcCommand::EqList));
+        assert_eq!(
+            parse("eq \"HD 650\""),
+            Ok(IpcCommand::EqSet("HD 650".to_string()))
+        );
         assert!(parse("eq").is_err());
-        assert!(parse("eq off").is_err());
+        assert!(parse("eq a b").is_err());
         assert_eq!(canonical_string(&IpcCommand::EqNext), "eq next");
+        assert_eq!(canonical_string(&IpcCommand::EqOff), "eq off");
+        assert_eq!(canonical_string(&IpcCommand::EqList), "eq list");
+        assert_eq!(
+            canonical_string(&IpcCommand::EqSet("HD 650".to_string())),
+            "eq \"HD 650\""
+        );
     }
 
     #[test]

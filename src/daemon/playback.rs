@@ -150,6 +150,8 @@ pub(crate) enum PlaybackInput {
     SetScrobble(bool),
     /// Cycle `eqs/*.{txt,eq}` -> OFF -> first.
     CycleEq,
+    /// Load and translate a named Equalizer APO profile (`None` = OFF).
+    SetEq(Option<String>),
     /// Change exclusive / bit-perfect output.
     SetOutputMode {
         exclusive: Option<bool>,
@@ -197,6 +199,7 @@ impl std::fmt::Debug for PlaybackInput {
             Self::SetSleepTimer(minutes) => write!(formatter, "SetSleepTimer({minutes:?})"),
             Self::SetScrobble(enabled) => write!(formatter, "SetScrobble({enabled})"),
             Self::CycleEq => write!(formatter, "CycleEq"),
+            Self::SetEq(profile) => write!(formatter, "SetEq({profile:?})"),
             Self::SetOutputMode {
                 exclusive,
                 bit_perfect,
@@ -262,6 +265,8 @@ pub(crate) struct Snapshot {
     pub retrying: bool,
     pub retry_attempt: u32,
     pub sleep_remaining_secs: u64,
+    pub eq_profile: Option<String>,
+    pub eq_mpv_af: String,
     pub metrics: crate::player::PlaybackMetrics,
 }
 
@@ -410,8 +415,10 @@ struct ServiceState {
     cached_stream_key: Option<(usize, String)>,
     clock_anchor: Option<ClockAnchor>,
     /// Consecutive sink rebuilds since the last healthy stream. Bounded so a
-    /// missing PipeWire/ALSA target cannot spin forever.
+    /// missing output target cannot spin forever.
     sink_failures: u32,
+    /// Translated MPV `af` string for the active Equalizer APO profile.
+    active_eq_af: String,
     metrics: crate::player::PlaybackMetrics,
 }
 
@@ -624,28 +631,71 @@ impl ServiceState {
         });
     }
 
-    /// Loads `settings.eq_profile` from disk and installs it into the engine.
-    /// A missing/invalid file clears the selection instead of keeping a stale
+    /// Loads `settings.eq_profile` from disk, translates it from Equalizer APO
+    /// to MPV `lavfi` syntax, and installs it into the engine. A missing or
+    /// invalid persisted file clears the selection instead of keeping a stale
     /// profile.
     fn apply_eq_from_settings(&mut self) {
         let name = self.settings.eq_profile.clone();
-        let profile = match name.as_deref() {
-            Some(name) => match crate::eq::load_profile(name) {
-                Ok(profile) => Some(std::sync::Arc::new(profile)),
+        let translated = match name.as_deref() {
+            Some(name) => match crate::player::mpv::eq::load_and_translate(name) {
+                Ok(translated) => Some(translated),
                 Err(error) => {
-                    crate::debug_log!("eq: cannot load profile '{name}': {error:#}");
+                    crate::debug_log!("eq: cannot load/translate profile '{name}': {error:#}");
                     None
                 }
             },
             None => None,
         };
-        self.settings.eq_profile = profile.as_ref().map(|profile| profile.name.clone());
+        let active_name = translated.as_ref().map(|eq| eq.name.clone());
+        let mpv_af = translated
+            .as_ref()
+            .map(|eq| eq.mpv_af.clone())
+            .unwrap_or_default();
+        self.settings.eq_profile = active_name.clone();
+        self.active_eq_af = mpv_af.clone();
         if let Some(engine) = self.engine.as_ref() {
-            engine.send(AudioCommand::SetEq(profile.clone()));
+            engine.send(AudioCommand::SetEq(
+                (!mpv_af.is_empty()).then_some(mpv_af),
+            ));
         }
-        _ = self.outputs.send(PlaybackOutput::EqChanged(
-            profile.as_ref().map(|profile| profile.name.clone()),
-        ));
+        _ = self.outputs.send(PlaybackOutput::EqChanged(active_name));
+    }
+
+    /// Explicitly selects an Equalizer APO profile by name (or disables EQ when
+    /// `None`), translating it to MPV `lavfi` syntax in the daemon IPC layer.
+    /// Reports an error without clearing the current EQ if the requested file
+    /// is missing or invalid.
+    fn set_eq_profile(&mut self, name: Option<String>) -> bool {
+        let Some(name) = name else {
+            self.settings.eq_profile = None;
+            self.active_eq_af.clear();
+            if let Some(engine) = self.engine.as_ref() {
+                engine.send(AudioCommand::SetEq(None));
+            }
+            _ = self.outputs.send(PlaybackOutput::EqChanged(None));
+            return true;
+        };
+        match crate::player::mpv::eq::load_and_translate(&name) {
+            Ok(translated) => {
+                self.settings.eq_profile = Some(translated.name.clone());
+                self.active_eq_af = translated.mpv_af.clone();
+                if let Some(engine) = self.engine.as_ref() {
+                    let af = (!translated.mpv_af.is_empty()).then_some(translated.mpv_af);
+                    engine.send(AudioCommand::SetEq(af));
+                }
+                _ = self
+                    .outputs
+                    .send(PlaybackOutput::EqChanged(Some(translated.name)));
+                true
+            }
+            Err(error) => {
+                let message = format!("EQ '{name}': {error:#}");
+                crate::debug_log!("eq: {message}");
+                _ = self.outputs.send(PlaybackOutput::Error(message));
+                false
+            }
+        }
     }
 
     fn cycle_eq(&mut self) {
@@ -770,6 +820,7 @@ fn run(
         cached_stream_key: None,
         clock_anchor: None,
         sink_failures: 0,
+        active_eq_af: String::new(),
         metrics: crate::player::PlaybackMetrics::default(),
     };
     let mut published = PlaybackState {
@@ -1126,6 +1177,12 @@ fn run(
                 service.cycle_eq();
                 capture_settings(&mut service);
                 force = true;
+            }
+            Some(ServiceInput::Command(PlaybackInput::SetEq(profile))) => {
+                if service.set_eq_profile(profile) {
+                    capture_settings(&mut service);
+                    force = true;
+                }
             }
             Some(ServiceInput::Command(PlaybackInput::SetScrobble(enabled))) => {
                 service.settings.scrobble = enabled;
@@ -1608,6 +1665,8 @@ fn store_snapshot(
                     .map(|fade| SLEEP_FADE.saturating_sub(fade.started.elapsed()).as_secs())
             })
             .unwrap_or(0),
+        eq_profile: service.settings.eq_profile.clone(),
+        eq_mpv_af: service.active_eq_af.clone(),
         metrics: service.metrics,
     });
     *snapshot
@@ -1734,6 +1793,7 @@ mod tests {
             cached_stream_key: None,
             clock_anchor: None,
             sink_failures: 0,
+            active_eq_af: String::new(),
             metrics: crate::player::PlaybackMetrics::default(),
         };
         let mut published = PlaybackState {

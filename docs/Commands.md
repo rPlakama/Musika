@@ -49,7 +49,7 @@ ignored. See `docs/Daemon.md` for the process and socket architecture.
 
 ## Status queries
 
-Two read-only commands are answered by the core and work with no window open.
+Three read-only commands are answered by the core and work with no window open.
 Each returns exactly one JSON line on the same connection, so `nc -U` can read
 it back. Typing them on the `:` line also works: the window asks the same
 socket in the background and shows the reply in a toast.
@@ -57,12 +57,14 @@ socket in the background and shows the reply in a toast.
 ```sh
 printf 'status\n' | nc -U ~/.config/musika/ipc.sock
 printf 'queue\n' | nc -U ~/.config/musika/ipc.sock
+printf 'eq list\n' | nc -U ~/.config/musika/ipc.sock
 ```
 
 | Command | Answer (one JSON line) |
 | --- | --- |
-| `status` | `state` (`playing`/`paused`/`stopped`), `index`, `queue_rev`, `duration`, `position`, `volume`, `muted`, `loading`, `normalization` (0 off / 1 track / 2 album), `engine_available`, `current` (`{id,title,artist,album}` or `null`), `last_error` |
+| `status` | `state` (`playing`/`paused`/`stopped`), `index`, `queue_rev`, `duration`, `position`, `volume`, `muted`, `loading`, `normalization` (0 off / 1 track / 2 album), `eq` (active profile name or `null`), `rss_kib` (core RSS in KiB on Linux or `null`), `engine_available`, `current` (`{id,title,artist,album}` or `null`), `last_error` |
 | `queue` | `rev`, `index`, `len`, `ids` (queue ids in order) |
+| `eq list` | `active` (profile name or `null`), `mpv_af` (active translated MPV `lavfi=[...]` filter, or `""`), `profiles` (available profile names) |
 
 Every other `ipc.sock` command stays fire-and-forget and writes no reply, which
 keeps the plain `printf ... | nc -U` snippets working unchanged. The core keeps
@@ -107,7 +109,7 @@ mpris_position:5000000
 | `colors` | `colors contrast <value>` or `colors saturation <value>` | Set the generated palette contrast offset (default `0.4`) or HCT chroma/saturation offset (default `0.0`). Both take `-1.0..=1.0`; `-1` removes contrast/chroma and `+1` is the maximum. In `Ctrl-,`, select **Palette contrast** or **Palette saturation** and use `h`/`l` for 0.1 steps; Enter cycles the signed range. |
 | `stream` | `stream <quality\|format\|cache\|size\|fixed> <value>` | Cap the stream bitrate, request a format, toggle the playback cache, set its size, or force one pipeline rate (`stream fixed 48000` / `off`) for gap-free rate changes. |
 | `sleep` | `sleep <minutes\|off>` | Fade out over five seconds and pause after N minutes; `sleep off` cancels. |
-| `eq` | `eq next` | Cycle the active Equalizer APO profile through OFF. |
+| `eq` | `eq <next\|off\|list\|profile-name>` | Cycle, disable, inspect (`eq list` JSON with live translated MPV `af`), or load a named Equalizer APO profile. |
 | `scrobble` | `scrobble <on\|off>` | Enable or disable now-playing/completed-play submissions; queued offline plays flush on the next successful ping. |
 | `wipe` | `wipe <album|lyrics|covers>` | Clear downloaded album files, cached lyrics, or cached covers. |
 | `wipe_databases` | `wipe_databases` | Open the destructive database wipe chooser; this is not an immediate wipe. |

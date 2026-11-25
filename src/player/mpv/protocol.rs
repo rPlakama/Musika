@@ -188,8 +188,8 @@ pub(crate) fn mpv_args(socket_path: &Path, config: &MpvLaunchConfig) -> Vec<Stri
         "--gapless-audio=yes".to_string(),
         "--audio-client-name=musika".to_string(),
         "--cache=yes".to_string(),
-        "--demuxer-max-bytes=16MiB".to_string(),
-        "--demuxer-max-back-bytes=8MiB".to_string(),
+        "--demuxer-max-bytes=8MiB".to_string(),
+        "--demuxer-max-back-bytes=2MiB".to_string(),
         "--demuxer-readahead-secs=20".to_string(),
         "--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=4,timeout=120000000"
             .to_string(),

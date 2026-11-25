@@ -76,6 +76,7 @@ impl MpvProcess {
 
         let mut command = Command::new(&bin);
         command
+            .arg0("musika-mpv")
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -215,6 +216,9 @@ impl MpvProcess {
             {
                 messages.push(msg);
             }
+        }
+        if self.read_buf.is_empty() && self.read_buf.capacity() > 64 * 1024 {
+            self.read_buf.shrink_to(16 * 1024);
         }
 
         // Return final buffered messages first; the next poll sees EOF.

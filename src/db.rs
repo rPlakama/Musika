@@ -707,8 +707,17 @@ fn connect_options(path: PathBuf, durability: Durability) -> sqlx::sqlite::Sqlit
         .pragma("mmap_size", "268435456")
         .pragma("temp_store", "MEMORY")
         .pragma("journal_size_limit", "16777216")
+        .statement_cache_capacity(32)
         .synchronous(durability.synchronous())
         .optimize_on_close(true, 400)
+}
+
+/// Asks SQLite to release as much heap memory (lookaside + page cache) as
+/// possible back to the allocator after bulk migrations, syncs, or wipes.
+pub(crate) async fn shrink_memory(pool: &SqlitePool) {
+    if let Err(err) = sqlx::query("PRAGMA shrink_memory").execute(pool).await {
+        crate::debug_log!("db: shrink_memory failed: {err:#}");
+    }
 }
 
 // ---------------------------------------------------------------------------

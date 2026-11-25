@@ -20,7 +20,8 @@ dependency of the headless `musika` core.
 | `src/player/mpv/protocol.rs` | pure JSON IPC command encoders, event/reply parsers, argv builder, device normalizer, and error log correlator |
 | `src/player/mpv/process.rs` | persistent `MpvProcess` lifecycle: private runtime socket, `PR_SET_PDEATHSIG(SIGTERM)`, inherited-fd closing, non-blocking IPC framing |
 | `src/player/mpv/transport.rs` | `MpvTransport`: maps `AudioCommand`s to MPV IPC, tracks `playlist_entry_id` for gapless handoff, emits `EngineEvent`s and clock counters |
-| `src/eq.rs` | Equalizer APO profile parser + `EqProfile::to_mpv_af()` compiler to FFmpeg `lavfi` filter chains |
+| `src/player/mpv/eq.rs` | Equalizer APO → MPV `lavfi` translation layer (`Preamp`, parametric filters, and piecewise-linear `GraphicEQ` via `firequalizer`), run once in the daemon/IPC layer |
+| `src/eq.rs` | backend-agnostic Equalizer APO profile parser & directory loader (including AutoEq `Filter N:`, `LSQ`/`HSQ`, `BW Oct`, and up to 128 `GraphicEQ` bands) |
 
 ## Architecture & data flow
 
@@ -41,7 +42,7 @@ PlaybackCore ─► AudioCommand ─► Engine (poll thread) ─► MpvTransport
 
 - **Gapless playback**: `Load` queues the current URL (`loadfile <url> replace`) and the next URL (`loadfile <next> append`) with `--gapless-audio=yes`. `MpvTransport` tracks `playlist_entry_id` so stale `end-file` events from rapid skips are ignored; when MPV advances to `next_entry_id`, `MpvTransport` trims index `0` (`playlist-remove 0`) to keep the playlist bounded and emits `EngineEvent::Boundary`.
 - **ReplayGain loudness normalization**: `Ctrl+Shift+N` / `:normalize <off|track|album>` maps to MPV's `replaygain` property (`no`/`track`/`album`) with `--replaygain-clip=no`.
-- **Equalizer APO profiles**: `Ctrl+E` / `:eq next` parses `~/.config/musika/eqs/*.{txt,eq}` via `src/eq.rs` and compiles preamp + parametric (`PK`/`LS`/`HS`/`LP`/`HP`/`BP`/`NO`) + `GraphicEQ` bands to an FFmpeg `lavfi=[...]` string applied live via MPV's `af` property.
+- **Equalizer APO profiles**: `Ctrl+E` / `:eq <next|off|list|profile-name>` parses `~/.config/musika/eqs/*.{txt,eq}` via `src/eq.rs` (including AutoEq `Filter N:`, `LSQ`/`HSQ`, `BW Oct`, and up to 128 `GraphicEQ` bands) and translates them once in the daemon/IPC layer via `src/player/mpv/eq.rs` into an FFmpeg `lavfi=[...]` string (`volume`, parametric biquads, and `firequalizer` for exact piecewise-linear `GraphicEQ`) applied live via MPV's `af` property. `:eq list` returns `{active, mpv_af, profiles}` over IPC.
 - **Output devices, backends, exclusive & bit-perfect**:
   - `:output list` reads MPV's live observed `audio-device-list` (falling back to `mpv --audio-device=help` only when no engine is running).
   - `:output <device>` / `:output default` sets `audio-device` live (automatically prefixing bare legacy PipeWire node names with `pipewire/`). If a pinned PipeWire device disappears from `audio-device-list`, the transport reverts to `auto` and emits `EngineEvent::OutputFallback`.
@@ -49,7 +50,7 @@ PlaybackCore ─► AudioCommand ─► Engine (poll thread) ─► MpvTransport
   - `:output exclusive on|off` sets `audio-exclusive=yes|no`.
   - `:output bitperfect on|off` clears `af`, `replaygain`, and `audio-samplerate`.
   - `:stream fixed <Hz|off>` sets `audio-samplerate` (`0` = native track rate).
-- **Network resilience & buffering**: MPV runs with `--cache=yes --demuxer-max-bytes=16MiB --demuxer-readahead-secs=20` and FFmpeg reconnect options (`reconnect=1,reconnect_streamed=1,reconnect_delay_max=4,timeout=120000000`). `paused-for-cache` drives `EngineEvent::Buffering(bool)` and the `underruns` counter. Recent `warn`/`error` `log-message` lines are correlated with `end-file` errors so HTTP `401`/`403`/`404`/`5xx`, DNS, and codec errors classify accurately through `PlaybackError::classify`.
+- **Network resilience & buffering**: MPV runs with `--cache=yes --demuxer-max-bytes=8MiB --demuxer-max-back-bytes=2MiB --demuxer-readahead-secs=20` (with `argv[0]` set to `musika-mpv`) and FFmpeg reconnect options (`reconnect=1,reconnect_streamed=1,reconnect_delay_max=4,timeout=120000000`). `paused-for-cache` drives `EngineEvent::Buffering(bool)` and the `underruns` counter. Recent `warn`/`error` `log-message` lines are correlated with `end-file` errors so HTTP `401`/`403`/`404`/`5xx`, DNS, and codec errors classify accurately through `PlaybackError::classify`.
 
 ## Verification commands
 

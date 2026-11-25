@@ -18,11 +18,9 @@
 //! JSON IPC and MPV events/properties to [`EngineEvent`]s + [`EngineClock`].
 
 use std::collections::VecDeque;
-use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use crate::eq::EqProfile;
 use crate::playback_settings::OutputBackend;
 use crate::player::engine::{AudioCommand, EngineEvent};
 use crate::player::{ErrorStage, Normalization, PlaybackError};
@@ -70,7 +68,7 @@ pub(crate) struct MpvTransport {
     underruns: u64,
     clock_epoch: u64,
     normalization: Normalization,
-    eq: Option<Arc<EqProfile>>,
+    eq_af: Option<String>,
     bit_perfect: bool,
     fixed_sample_rate: Option<u32>,
     pinned_target: Option<String>,
@@ -131,7 +129,7 @@ impl MpvTransport {
             underruns: 0,
             clock_epoch: 0,
             normalization: Normalization::Off,
-            eq: None,
+            eq_af: None,
             bit_perfect,
             fixed_sample_rate,
             pinned_target,
@@ -205,8 +203,8 @@ impl MpvTransport {
                 self.sync_dsp()
             }
             AudioCommand::SetOutputTarget(target) => self.cmd_set_output_target(target),
-            AudioCommand::SetEq(profile) => {
-                self.eq = profile;
+            AudioCommand::SetEq(af) => {
+                self.eq_af = af.filter(|value| !value.is_empty());
                 self.sync_dsp()
             }
             AudioCommand::SetExclusive(exclusive) => {
@@ -353,12 +351,9 @@ impl MpvTransport {
         self.send_property("replaygain", json!(rg))?;
 
         let af = if self.bit_perfect {
-            String::new()
+            ""
         } else {
-            self.eq
-                .as_ref()
-                .map(|profile| profile.to_mpv_af())
-                .unwrap_or_default()
+            self.eq_af.as_deref().unwrap_or("")
         };
         self.send_property("af", json!(af))?;
 

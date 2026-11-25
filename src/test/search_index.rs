@@ -9,11 +9,11 @@ fn song(id: &str, title: &str, artist: &str, album: &str, plays: i64) -> SongHit
     SongHit {
         id: id.to_string(),
         title: title.to_string(),
-        artist: Some(artist.to_string()),
-        album: Some(album.to_string()),
+        artist: Some(Arc::from(artist)),
+        album: Some(Arc::from(album)),
         duration: Some(200),
         play_count: plays,
-        album_id: Some(format!("{album}-id")),
+        album_id: Some(Arc::from(format!("{album}-id"))),
         cover_art: None,
         track: Some(1),
         disc_number: Some(1),
@@ -193,15 +193,21 @@ fn bench_100k_songs() {
     // buffer (consumed into `Arc<SongHit>`s) cancels out and the retained
     // count is the catalog itself.
     let ((index, elapsed, estimate), retained) = crate::test_alloc::live(|| {
+        let artist_arc: Arc<str> = Arc::from("Radiohead");
+        let album_arc: Arc<str> = Arc::from("Kid A");
+        let album_id_arc: Arc<str> = Arc::from("Kid A-id");
         let songs: Vec<SongHit> = (0..100_000)
-            .map(|i| {
-                song(
-                    &format!("s{i}"),
-                    &format!("Track {i}"),
-                    "Radiohead",
-                    "Kid A",
-                    i % 100,
-                )
+            .map(|i| SongHit {
+                id: format!("s{i}"),
+                title: format!("Track {i}"),
+                artist: Some(Arc::clone(&artist_arc)),
+                album: Some(Arc::clone(&album_arc)),
+                duration: Some(200),
+                play_count: i % 100,
+                album_id: Some(Arc::clone(&album_id_arc)),
+                cover_art: None,
+                track: Some(1),
+                disc_number: Some(1),
             })
             .collect();
         let songs_len = songs.len();
@@ -260,15 +266,23 @@ fn bench_index_build_peak() {
         new_index(songs, Vec::new(), Vec::new())
     });
     let (_, shared_peak) = crate::test_alloc::measure(|| {
+        let artist_arc: Arc<str> = Arc::from("Radiohead");
+        let album_arc: Arc<str> = Arc::from("Kid A");
+        let album_id_arc: Arc<str> = Arc::from("Kid A-id");
         let songs: Vec<Arc<SongHit>> = (0..100_000)
             .map(|i| {
-                Arc::new(song(
-                    &format!("s{i}"),
-                    &format!("Track {i}"),
-                    "Radiohead",
-                    "Kid A",
-                    i % 100,
-                ))
+                Arc::new(SongHit {
+                    id: format!("s{i}"),
+                    title: format!("Track {i}"),
+                    artist: Some(Arc::clone(&artist_arc)),
+                    album: Some(Arc::clone(&album_arc)),
+                    duration: Some(200),
+                    play_count: i % 100,
+                    album_id: Some(Arc::clone(&album_id_arc)),
+                    cover_art: None,
+                    track: Some(1),
+                    disc_number: Some(1),
+                })
             })
             .collect();
         SearchIndex::from_shared(songs, Vec::new(), Vec::new())

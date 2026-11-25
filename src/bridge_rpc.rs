@@ -45,6 +45,7 @@ macro_rules! for_each_bridge_rpc {
             set_sleep_timer(minutes: Option<u64>),
             set_scrobble(enabled: bool),
             cycle_eq(),
+            set_eq(profile: Option<String>),
             set_output_mode(exclusive: Option<bool>, bit_perfect: Option<bool>),
             set_output_backend(backend: Option<$crate::playback_settings::OutputBackend>, device: Option<String>),
             logout(),

@@ -60,8 +60,8 @@ pub(crate) enum AudioCommand {
     SetNormalization(Normalization),
     /// Retarget the output stream (`None` = follow default / `auto`).
     SetOutputTarget(Option<String>),
-    /// Install/replace the EQ profile (`None` = bypass).
-    SetEq(Option<std::sync::Arc<crate::eq::EqProfile>>),
+    /// Install/replace the translated MPV `af` filter chain (`None` = bypass).
+    SetEq(Option<String>),
     SetExclusive(bool),
     SetBitPerfect(bool),
     /// Force a fixed output sample rate (`None` = native rate).

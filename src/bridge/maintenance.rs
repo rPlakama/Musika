@@ -202,6 +202,10 @@ pub(crate) async fn drive_syncs<F, Fut>(
                 _ = tx.send(Event::LibrarySynced);
             }
             Err(error) => {
+                if let Some(dbs) = crate::app::dbs() {
+                    crate::db::shrink_memory(&dbs.sync).await;
+                    crate::db::shrink_memory(&dbs.library).await;
+                }
                 crate::linux::malloc_trim();
                 if !*online.borrow() {
                     queue.requeue(mode, generation);
@@ -266,6 +270,9 @@ async fn run_sync_once(tx: UnboundedSender<Event>, mode: SyncMode) -> anyhow::Re
     // A sync holds large JSON bodies and cover buffers transiently; return
     // the freed pages now instead of keeping the high-water mark resident
     // for the daemon's whole lifetime.
+    crate::db::shrink_memory(&dbs.sync).await;
+    crate::db::shrink_memory(&dbs.library).await;
+    crate::db::shrink_memory(&dbs.media).await;
     crate::linux::malloc_trim();
     Ok(())
 }
@@ -292,6 +299,8 @@ impl Bridge {
                     _ = tx.send(Event::Error(format!("Wipe failed: {err:#}")));
                 }
             }
+            crate::db::shrink_memory(&dbs.library).await;
+            crate::db::shrink_memory(&dbs.media).await;
             crate::linux::malloc_trim();
         });
     }
@@ -474,6 +483,11 @@ impl Bridge {
     /// UI request: cycle the EQ profile through OFF.
     pub fn cycle_eq(&self) {
         self.send_playback(crate::daemon::playback::PlaybackInput::CycleEq);
+    }
+
+    /// UI request: load & translate a named Equalizer APO profile (`None` = OFF).
+    pub fn set_eq(&self, profile: Option<String>) {
+        self.send_playback(crate::daemon::playback::PlaybackInput::SetEq(profile));
     }
 
     pub fn eq_changed(&self, name: Option<String>) {

@@ -236,12 +236,12 @@ impl SeedSong {
         Self {
             id: hit.id.clone(),
             title: hit.title.clone(),
-            artist: hit.artist.clone(),
-            album: hit.album.clone(),
-            album_id: hit.album_id.clone(),
+            artist: hit.artist.as_deref().map(str::to_string),
+            album: hit.album.as_deref().map(str::to_string),
+            album_id: hit.album_id.as_deref().map(str::to_string),
             track: hit.track,
             duration: hit.duration,
-            cover_art: hit.cover_art.clone(),
+            cover_art: hit.cover_art.as_deref().map(str::to_string),
             play_count: hit.play_count,
         }
     }

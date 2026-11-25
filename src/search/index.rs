@@ -22,7 +22,7 @@
 //! from `library.db`, rebuilt after a sync, and is a disposable cache: the
 //! FTS5 tables stay in place as the fallback engine.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
@@ -55,18 +55,46 @@ const PLAY_CAP: i64 = 500;
 /// A song row as the index stores it. Everything the search payload needs is
 /// carried here, so a typed query never has to join back to `library.db`
 /// (only the cover URL map remains).
-#[derive(Debug, Clone, FromRow)]
+///
+/// Repeated album/artist strings (`artist`, `album`, `album_id`, `cover_art`)
+/// are interned as `Arc<str>` across tracks during catalog construction so a
+/// 100k-song library does not allocate duplicate `String`s per track.
+#[derive(Debug, Clone)]
 pub struct SongHit {
     pub id: String,
     pub title: String,
-    pub artist: Option<String>,
-    pub album: Option<String>,
+    pub artist: Option<Arc<str>>,
+    pub album: Option<Arc<str>>,
     pub duration: Option<i32>,
     pub play_count: i64,
-    pub album_id: Option<String>,
-    pub cover_art: Option<String>,
+    pub album_id: Option<Arc<str>>,
+    pub cover_art: Option<Arc<str>>,
     pub track: Option<i32>,
     pub disc_number: Option<i32>,
+}
+
+#[derive(FromRow)]
+struct RawSongHit {
+    id: String,
+    title: String,
+    artist: Option<String>,
+    album: Option<String>,
+    duration: Option<i32>,
+    play_count: i64,
+    album_id: Option<String>,
+    cover_art: Option<String>,
+    track: Option<i32>,
+    disc_number: Option<i32>,
+}
+
+fn intern_opt(interner: &mut HashSet<Arc<str>>, value: Option<String>) -> Option<Arc<str>> {
+    let value = value?;
+    if let Some(existing) = interner.get(value.as_str()) {
+        return Some(Arc::clone(existing));
+    }
+    let shared: Arc<str> = Arc::from(value);
+    interner.insert(Arc::clone(&shared));
+    Some(shared)
 }
 
 impl SongHit {
@@ -114,16 +142,16 @@ pub struct SearchResults {
 /// The in-memory catalog. Rebuilt as a whole after a library sync; search
 /// requests clone the `Arc` and never see a half-built index.
 ///
-/// ARC-RS-4.6: `most_played`/`by_album` hold `u32` indices into the primary
-/// `songs` store (via `Arc::as_ptr` ordering) instead of second `Arc` vecs.
-/// Resolution is by pointer equality against the nucleo snapshot — cheap and
-/// avoids 2x Arc clones per song.
+/// ARC-RS-4.6: `most_played` and `by_album_tracks` hold compact `u32` indices
+/// into `pool`, and `by_album` stores `(offset, len)` slices into the flat
+/// `by_album_tracks` buffer instead of per-album heap `Vec`s.
 pub struct SearchIndex {
     songs: std::sync::Mutex<SongIndex>,
-    artists: Vec<Indexed<ArtistRow>>,
+    artists: Vec<Arc<ArtistRow>>,
     albums: Vec<Indexed<AlbumRow>>,
-    most_played: Vec<usize>,
-    by_album: HashMap<String, Vec<usize>>,
+    most_played: Vec<u32>,
+    by_album_tracks: Vec<u32>,
+    by_album: HashMap<Arc<str>, (u32, u32)>,
     pool: Vec<Arc<SongHit>>,
     /// `library_revision` this catalog was built from; `None` for builds that
     /// did not come from the sync path (tests) and for pre-revision databases.
@@ -139,7 +167,8 @@ impl SearchIndex {
         artists: Vec<ArtistRow>,
         albums: Vec<AlbumRow>,
     ) -> Self {
-        let nucleo = Nucleo::new(matcher_config(), Arc::new(|| {}), Some(4), 1);
+        let workers = crate::app::worker_limit().clamp(1, 4);
+        let nucleo = Nucleo::new(matcher_config(), Arc::new(|| {}), Some(workers), 1);
         {
             let injector = nucleo.injector();
             for song in &songs {
@@ -149,47 +178,45 @@ impl SearchIndex {
             }
         }
 
-        // ARC-RS-4.6: indices into `songs`, not second Arc vecs.
-        let mut most_played: Vec<usize> = (0..songs.len()).collect();
+        // ARC-RS-4.6: compact `u32` indices into `pool`.
+        let mut most_played: Vec<u32> = (0..songs.len() as u32).collect();
         most_played.sort_by(|&a, &b| {
-            songs[b]
-                .play_count
-                .cmp(&songs[a].play_count)
-                .then_with(|| songs[a].title.cmp(&songs[b].title))
+            let sa = &songs[a as usize];
+            let sb = &songs[b as usize];
+            sb.play_count
+                .cmp(&sa.play_count)
+                .then_with(|| sa.title.cmp(&sb.title))
         });
 
-        let mut by_album: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut grouped: HashMap<Arc<str>, Vec<u32>> = HashMap::new();
         for (idx, song) in songs.iter().enumerate() {
             if let Some(album_id) = &song.album_id {
-                by_album.entry(album_id.clone()).or_default().push(idx);
+                grouped
+                    .entry(Arc::clone(album_id))
+                    .or_default()
+                    .push(idx as u32);
             }
         }
-        for tracks in by_album.values_mut() {
+        let total_grouped: usize = grouped.values().map(Vec::len).sum();
+        let mut by_album_tracks = Vec::with_capacity(total_grouped);
+        let mut by_album = HashMap::with_capacity(grouped.len());
+        for (album_id, mut tracks) in grouped {
             tracks.sort_by(|&a, &b| {
-                songs[a]
-                    .disc_number
+                let sa = &songs[a as usize];
+                let sb = &songs[b as usize];
+                sa.disc_number
                     .unwrap_or(0)
-                    .cmp(&songs[b].disc_number.unwrap_or(0))
-                    .then_with(|| {
-                        songs[a]
-                            .track
-                            .unwrap_or(0)
-                            .cmp(&songs[b].track.unwrap_or(0))
-                    })
-                    .then_with(|| songs[a].title.cmp(&songs[b].title))
+                    .cmp(&sb.disc_number.unwrap_or(0))
+                    .then_with(|| sa.track.unwrap_or(0).cmp(&sb.track.unwrap_or(0)))
+                    .then_with(|| sa.title.cmp(&sb.title))
             });
+            let offset = by_album_tracks.len() as u32;
+            let len = tracks.len() as u32;
+            by_album_tracks.extend_from_slice(&tracks);
+            by_album.insert(album_id, (offset, len));
         }
 
-        let artists = artists
-            .into_iter()
-            .map(|row| {
-                let haystack = row.name.clone();
-                Indexed {
-                    row: Arc::new(row),
-                    haystack,
-                }
-            })
-            .collect();
+        let artists = artists.into_iter().map(Arc::new).collect();
         let albums = albums
             .into_iter()
             .map(|row| {
@@ -212,6 +239,7 @@ impl SearchIndex {
             artists,
             albums,
             most_played,
+            by_album_tracks,
             by_album,
             pool: songs,
             revision: None,
@@ -242,8 +270,22 @@ impl SearchIndex {
 
         let songs = self.search_songs(&pattern, &raw, limit);
         let mut matcher = Matcher::new(matcher_config());
-        let artists = match_indexed(&pattern, &self.artists, &mut matcher, limit);
-        let albums = match_indexed(&pattern, &self.albums, &mut matcher, limit);
+        let artists = match_items(
+            &pattern,
+            &self.artists,
+            |row| &row.name,
+            Arc::clone,
+            &mut matcher,
+            limit,
+        );
+        let albums = match_items(
+            &pattern,
+            &self.albums,
+            |item| &item.haystack,
+            |item| Arc::clone(&item.row),
+            &mut matcher,
+            limit,
+        );
         SearchResults {
             songs,
             artists,
@@ -305,7 +347,7 @@ impl SearchIndex {
         self.most_played
             .iter()
             .take(limit)
-            .map(|&i| Arc::clone(&self.pool[i]))
+            .map(|&i| Arc::clone(&self.pool[i as usize]))
             .collect()
     }
 
@@ -313,36 +355,40 @@ impl SearchIndex {
     pub fn album_tracks(&self, album_id: &str, limit: usize) -> Vec<Arc<SongHit>> {
         self.by_album
             .get(album_id)
-            .map(|tracks| {
-                tracks
+            .map(|&(offset, len)| {
+                let start = offset as usize;
+                let end = start + (len as usize).min(limit);
+                self.by_album_tracks[start..end]
                     .iter()
-                    .take(limit)
-                    .map(|&i| Arc::clone(&self.pool[i]))
+                    .map(|&i| Arc::clone(&self.pool[i as usize]))
                     .collect()
             })
             .unwrap_or_default()
     }
 }
 
-fn match_indexed<T>(
+fn match_items<T, R>(
     pattern: &Pattern,
-    items: &[Indexed<T>],
+    items: &[T],
+    haystack_of: impl Fn(&T) -> &str,
+    clone_row: impl Fn(&T) -> Arc<R>,
     matcher: &mut Matcher,
     limit: usize,
-) -> Vec<Arc<T>> {
+) -> Vec<Arc<R>> {
     let mut buf = Vec::new();
     let mut heap = std::collections::BinaryHeap::new();
     for (idx, item) in items.iter().enumerate() {
-        let haystack = Utf32Str::new(&item.haystack, &mut buf);
+        let text = haystack_of(item);
+        let haystack = Utf32Str::new(text, &mut buf);
         if let Some(score) = pattern.score(haystack, matcher) {
-            heap.push(std::cmp::Reverse((score, &item.haystack, idx)));
+            heap.push(std::cmp::Reverse((score, text, idx)));
         }
     }
-    let mut out: Vec<(u32, &String, usize)> = heap.into_iter().map(|r| r.0).collect();
+    let mut out: Vec<(u32, &str, usize)> = heap.into_iter().map(|r| r.0).collect();
     out.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1)));
     out.truncate(limit);
     out.into_iter()
-        .map(|(_, _, i)| Arc::clone(&items[i].row))
+        .map(|(_, _, i)| clone_row(&items[i]))
         .collect()
 }
 
@@ -435,11 +481,20 @@ pub(crate) async fn catalog_cost(pool: &SqlitePool) -> Result<usize> {
         .saturating_add(text.saturating_mul(HAYSTACK_FACTOR)))
 }
 
-/// Drops the in-memory catalog (wipe/logout). The next search rebuilds it.
+/// Drops the in-memory catalog (wipe/logout/idle eviction). The next search
+/// rebuilds it.
 pub fn clear() {
     EPOCH.fetch_add(1, Ordering::Relaxed);
     OVER_BUDGET.store(false, Ordering::Relaxed);
     *slot().write().unwrap_or_else(|error| error.into_inner()) = None;
+}
+
+/// True when the in-memory catalog is currently resident.
+pub fn is_loaded() -> bool {
+    slot()
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .is_some()
 }
 
 /// FIX-6: serialises the catalog build — concurrent first searches (or a
@@ -551,12 +606,13 @@ async fn rebuild_locked(pool: &SqlitePool, revision: Option<i64>) -> Result<()> 
         }
     }
 
-    // MEMORY: wrap each row in its `Arc` as it arrives instead of collecting
-    // into a `Vec<SongHit>` and converting afterwards; `from_shared` then
-    // injects the same Arcs, so the build never holds both forms.
+    // MEMORY: wrap each row in its `Arc` as it arrives and intern repeated
+    // album/artist strings (`Arc<str>`) on the fly, so neither an intermediate
+    // `Vec<SongHit>` nor duplicate album/artist `String`s sit in RAM.
     let mut songs: Vec<Arc<SongHit>> = Vec::new();
+    let mut interner: HashSet<Arc<str>> = HashSet::new();
     {
-        let mut rows = sqlx::query_as::<_, SongHit>(
+        let mut rows = sqlx::query_as::<_, RawSongHit>(
             "SELECT s.id, s.title, s.artist, s.album, s.duration,
                     COALESCE(s.play_count, 0) AS play_count,
                     s.album_id,
@@ -565,10 +621,22 @@ async fn rebuild_locked(pool: &SqlitePool, revision: Option<i64>) -> Result<()> 
              FROM songs s LEFT JOIN albums al ON al.id = s.album_id",
         )
         .fetch(pool);
-        while let Some(song) = rows.try_next().await? {
-            songs.push(Arc::new(song));
+        while let Some(raw) = rows.try_next().await? {
+            songs.push(Arc::new(SongHit {
+                id: raw.id,
+                title: raw.title,
+                artist: intern_opt(&mut interner, raw.artist),
+                album: intern_opt(&mut interner, raw.album),
+                duration: raw.duration,
+                play_count: raw.play_count,
+                album_id: intern_opt(&mut interner, raw.album_id),
+                cover_art: intern_opt(&mut interner, raw.cover_art),
+                track: raw.track,
+                disc_number: raw.disc_number,
+            }));
         }
     }
+    drop(interner);
     let artists: Vec<ArtistRow> = sqlx::query_as(
         "SELECT id, name, album_count, cover_art, image_url, starred FROM artists
              WHERE EXISTS (SELECT 1 FROM albums WHERE albums.artist_id = artists.id)",

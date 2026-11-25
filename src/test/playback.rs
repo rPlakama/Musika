@@ -2055,7 +2055,6 @@ mod mpv_integration {
 
     use serde_json::{Value, json};
 
-    use crate::eq::EqProfile;
     use crate::player::Normalization;
     use crate::player::engine::{AudioCommand, Engine, EngineEvent, EventSink};
     use crate::player::error::ErrorKind;
@@ -2273,15 +2272,17 @@ mod mpv_integration {
         );
 
         // 3. Bit-perfect mode clears EQ (`af`), ReplayGain (`replaygain`), and sample rate.
-        let eq = Arc::new(
-            EqProfile::parse("Bass", "Preamp: -2 dB\nFilter: ON PK Fc 100 Hz Gain 4 dB Q 1.0\n")
-                .unwrap(),
-        );
+        let eq_af = crate::player::mpv::eq::translate_apo_text(
+            "Bass",
+            "Preamp: -2 dB\nFilter: ON PK Fc 100 Hz Gain 4 dB Q 1.0\n",
+        )
+        .unwrap()
+        .mpv_af;
         engine.send(AudioCommand::SetNormalization(Normalization::Track));
         for _ in 0..3 {
             let _ = read_command(&mut reader);
         }
-        engine.send(AudioCommand::SetEq(Some(eq)));
+        engine.send(AudioCommand::SetEq(Some(eq_af)));
         let rg = read_command(&mut reader);
         let af = read_command(&mut reader);
         let sr = read_command(&mut reader);
@@ -2298,6 +2299,73 @@ mod mpv_integration {
         assert_eq!(sr_bp["command"], json!(["set_property", "audio-samplerate", 0]));
 
         engine.shutdown();
+    }
+
+    #[test]
+    fn real_headless_mpv_applies_translated_apo_eq_live_over_ipc() {
+        let (path, url) = super::wav_url("mpv-headless-eq", 48_000);
+        let translated = crate::player::mpv::eq::translate_apo_text(
+            "FullAPO",
+            "Preamp: -4.0 dB\n\
+             Filter 1: ON PK Fc 1000 Hz Gain 3.0 dB Q 1.41\n\
+             Filter 2: ON LSQ Fc 105 Hz Gain 4.0 dB Q 0.71\n\
+             Filter 3: ON HSQ Fc 8000 Hz Gain -2.0 dB Q 0.71\n\
+             Filter 4: ON LP Fc 16000 Hz Q 0.707\n\
+             Filter 5: ON HP Fc 25 Hz Q 0.707\n\
+             Filter 6: ON BP Fc 500 Hz Q 2.0\n\
+             Filter 7: ON NO Fc 60 Hz Q 8.0\n\
+             GraphicEQ: 25 -2; 100 1.5; 1000 0; 10000 -3\n",
+        )
+        .expect("translate full APO profile");
+        assert!(translated.mpv_af.contains("firequalizer=gain_entry='"));
+
+        let config = MpvLaunchConfig {
+            ao_override: Some("null".to_string()),
+            ..MpvLaunchConfig::default()
+        };
+        let transport = MpvTransport::with_config(config)
+            .expect("real mpv binary must be available on PATH or MUSIKA_MPV_BIN");
+        let (tx, rx) = mpsc::channel();
+        let sink: EventSink = Arc::new(move |event| tx.send(event).is_ok());
+        let engine = Engine::from_transport(transport, sink).expect("headless mpv engine");
+
+        engine.send(AudioCommand::SetEq(Some(translated.mpv_af)));
+        engine.send(AudioCommand::Load {
+            url,
+            next_url: None,
+            paused: false,
+            generation: 1,
+        });
+
+        let mut saw_first_pcm = false;
+        let mut saw_ended = false;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline && !saw_ended {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(EngineEvent::FirstPcm) => {
+                    saw_first_pcm = true;
+                    // Toggle bit-perfect on/off mid-stream to verify live af clear + restore.
+                    engine.send(AudioCommand::SetBitPerfect(true));
+                    engine.send(AudioCommand::SetBitPerfect(false));
+                }
+                Ok(EngineEvent::Ended) => saw_ended = true,
+                Ok(EngineEvent::Failed { error }) => {
+                    panic!("headless mpv failed with translated APO EQ: {error}");
+                }
+                Ok(EngineEvent::SinkFailed { message }) => {
+                    panic!("headless mpv sink failed with translated APO EQ: {message}");
+                }
+                Ok(_) => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        engine.shutdown();
+        _ = std::fs::remove_file(path);
+
+        assert!(saw_first_pcm, "expected FirstPcm from real mpv with translated APO EQ");
+        assert!(saw_ended, "expected clean Ended from real mpv with translated APO EQ");
     }
 
     #[test]

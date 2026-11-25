@@ -93,6 +93,13 @@ impl AppRoot {
                 // instead of being a silent no-op.
                 self.bridge.cycle_eq();
             }
+            IpcCommand::EqOff => {
+                self.bridge.set_eq(None);
+            }
+            IpcCommand::EqSet(profile) => {
+                self.bridge.set_eq(Some(profile));
+            }
+            IpcCommand::EqList => self.query_ipc("eq list", cx),
             IpcCommand::Scrobble(enabled) => {
                 self.bridge.set_scrobble(enabled);
             }

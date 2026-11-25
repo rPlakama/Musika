@@ -21,6 +21,7 @@
 //! gapless audio, and PipeWire/ALSA output. Rust communicates with it over a
 //! private Unix domain socket with zero audio FFI bindings or custom PCM rings.
 
+pub(crate) mod eq;
 pub(crate) mod process;
 pub(crate) mod protocol;
 pub(crate) mod transport;

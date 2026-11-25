@@ -14,21 +14,25 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
-//! Equalizer APO–style profiles.
+//! Backend-agnostic Equalizer APO profile parser and loader.
 //!
-//! Profiles live in `$XDG_CONFIG_HOME/musika/eqs/*.{txt,eq}` and are a safe
-//! subset of Equalizer APO's text format: a `Preamp:` line, parametric
-//! `Filter:` lines (PK/PEQ, LS, HS, LP, HP, BP, NO), and `GraphicEQ:` bands.
-//! Parsing is deliberately strict: a profile either compiles cleanly into an
-//! MPV `lavfi` filter chain or is rejected with the line number, never
-//! silently skipped.
+//! Profiles live in `$XDG_CONFIG_HOME/musika/eqs/*.{txt,eq}` and support the
+//! Equalizer APO / AutoEq / Peace text subset:
+//! - `Preamp: <dB> dB`
+//! - `Filter:` and numbered `Filter <N>:` (`ON|OFF`, `PK|PEQ|LS|LSC|LSQ|HS|HSC|HSQ|LP|LPQ|HP|HPQ|BP|NO|NOTCH`,
+//!   `Fc <Hz>`, `Gain <dB>`, `Q <q>` or `BW Oct <oct>`)
+//! - `GraphicEQ: <freq> <gain>; ...` (up to 128 piecewise-linear bands)
+//! - `Device:`, `Channel:`, and `Stage:` scoping directives (accepted and ignored).
+//!
+//! Translation to MPV's `lavfi` audio filter syntax lives in
+//! [`crate::player::mpv::eq`], invoked from the daemon/IPC layer.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
 const MAX_FILTERS: usize = 64;
-const MAX_GRAPHIC_BANDS: usize = 31;
+const MAX_GRAPHIC_BANDS: usize = 128;
 const MAX_GAIN_DB: f64 = 24.0;
 const MIN_Q: f64 = 0.05;
 const MAX_Q: f64 = 24.0;
@@ -52,11 +56,19 @@ pub struct EqFilter {
     pub q: f64,
 }
 
+/// One piecewise-linear frequency/gain control point from a `GraphicEQ:` line.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GraphicBand {
+    pub freq: f64,
+    pub gain_db: f64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct EqProfile {
     pub name: String,
     pub preamp_db: f64,
     pub filters: Vec<EqFilter>,
+    pub graphic_bands: Vec<GraphicBand>,
 }
 
 impl EqProfile {
@@ -65,6 +77,7 @@ impl EqProfile {
     pub fn parse(name: &str, text: &str) -> Result<Self> {
         let mut preamp_db = 0.0f64;
         let mut filters = Vec::new();
+        let mut graphic_bands = Vec::new();
         for (line_no, raw) in text.lines().enumerate() {
             let line = raw.split('#').next().unwrap_or("").trim();
             if line.is_empty() {
@@ -73,13 +86,17 @@ impl EqProfile {
             let (directive, rest) = line
                 .split_once(':')
                 .with_context(|| format!("line {}: expected 'Directive: value'", line_no + 1))?;
-            match directive.trim().to_ascii_lowercase().as_str() {
+            let directive = directive.trim().to_ascii_lowercase();
+            match directive.as_str() {
                 "preamp" => {
-                    preamp_db = parse_first_number(rest)
-                        .with_context(|| format!("line {}: preamp", line_no + 1))?
-                        .clamp(-60.0, MAX_GAIN_DB);
+                    let value = parse_first_number(rest)
+                        .with_context(|| format!("line {}: preamp", line_no + 1))?;
+                    if !value.is_finite() {
+                        bail!("line {}: preamp must be finite", line_no + 1);
+                    }
+                    preamp_db = value.clamp(-60.0, MAX_GAIN_DB);
                 }
-                "filter" => {
+                dir if is_filter_directive(dir) => {
                     if let Some(filter) =
                         parse_filter(rest).with_context(|| format!("line {}", line_no + 1))?
                     {
@@ -89,75 +106,53 @@ impl EqProfile {
                 "graphiceq" => {
                     let bands =
                         parse_graphic(rest).with_context(|| format!("line {}", line_no + 1))?;
-                    filters.extend(bands);
+                    graphic_bands.extend(bands);
                 }
-                // Equalizer APO may scope a file to a device/channel; Musika
-                // applies the profile to the stereo downmix, so these are
-                // accepted and ignored.
-                "device" | "channel" => {}
+                // Equalizer APO may scope a file to a device/channel/stage;
+                // Musika applies the profile to the active stream.
+                "device" | "channel" | "stage" => {}
                 other => bail!("line {}: unsupported directive '{other}'", line_no + 1),
             }
             if filters.len() > MAX_FILTERS {
                 bail!("too many filters (max {MAX_FILTERS})");
             }
+            if graphic_bands.len() > MAX_GRAPHIC_BANDS {
+                bail!("too many GraphicEQ bands (max {MAX_GRAPHIC_BANDS})");
+            }
         }
+        graphic_bands.sort_by(|a, b| a.freq.total_cmp(&b.freq));
         Ok(Self {
             name: name.to_string(),
             preamp_db,
             filters,
+            graphic_bands,
         })
-    }
-
-    /// Compiles this profile into an MPV `af` property value using FFmpeg's
-    /// `lavfi` audio filters (`lavfi=[...]`). Returns an empty string when the
-    /// profile is a no-op (zero preamp and no active filters).
-    pub fn to_mpv_af(&self) -> String {
-        let mut stages = Vec::with_capacity(self.filters.len() + 1);
-        if self.preamp_db.abs() >= 1e-4 {
-            stages.push(format!("volume={:.3}dB", self.preamp_db));
-        }
-        for filter in &self.filters {
-            let stage = match filter.kind {
-                FilterKind::Peak => format!(
-                    "equalizer=f={:.3}:width_type=q:w={:.4}:g={:.3}",
-                    filter.freq, filter.q, filter.gain_db
-                ),
-                FilterKind::LowShelf => format!(
-                    "lowshelf=f={:.3}:width_type=q:w={:.4}:g={:.3}",
-                    filter.freq, filter.q, filter.gain_db
-                ),
-                FilterKind::HighShelf => format!(
-                    "highshelf=f={:.3}:width_type=q:w={:.4}:g={:.3}",
-                    filter.freq, filter.q, filter.gain_db
-                ),
-                FilterKind::LowPass => format!(
-                    "lowpass=f={:.3}:width_type=q:w={:.4}",
-                    filter.freq, filter.q
-                ),
-                FilterKind::HighPass => format!(
-                    "highpass=f={:.3}:width_type=q:w={:.4}",
-                    filter.freq, filter.q
-                ),
-                FilterKind::BandPass => format!(
-                    "bandpass=f={:.3}:width_type=q:w={:.4}",
-                    filter.freq, filter.q
-                ),
-                FilterKind::Notch => format!(
-                    "bandreject=f={:.3}:width_type=q:w={:.4}",
-                    filter.freq, filter.q
-                ),
-            };
-            stages.push(stage);
-        }
-        if stages.is_empty() {
-            String::new()
-        } else {
-            format!("lavfi=[{}]", stages.join(","))
-        }
     }
 }
 
-/// `ON PK Fc 1000 Hz Gain -3 dB Q 1.4`; an OFF line is a valid no-op.
+/// Accepts `Filter:` and numbered `Filter 1:`, `Filter 2:`, ... (AutoEq / Peace / REW).
+fn is_filter_directive(lower: &str) -> bool {
+    if lower == "filter" {
+        return true;
+    }
+    let Some(rest) = lower.strip_prefix("filter") else {
+        return false;
+    };
+    let rest = rest.trim();
+    !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit())
+}
+
+/// Converts bandwidth in octaves (`BW Oct`) to quality factor `Q`.
+fn octaves_to_q(octaves: f64) -> Result<f64> {
+    if !octaves.is_finite() || !(0.01..=10.0).contains(&octaves) {
+        bail!("BW Oct {octaves} is outside 0.01..=10.0");
+    }
+    let two_bw = 2f64.powf(octaves);
+    let q = two_bw.sqrt() / (two_bw - 1.0);
+    Ok(q.clamp(MIN_Q, MAX_Q))
+}
+
+/// `ON PK Fc 1000 Hz Gain -3 dB Q 1.4` or `BW Oct 0.5`; an `OFF` line is a no-op.
 fn parse_filter(rest: &str) -> Result<Option<EqFilter>> {
     let tokens: Vec<&str> = rest.split_whitespace().collect();
     let Some(on) = tokens.first() else {
@@ -173,8 +168,8 @@ fn parse_filter(rest: &str) -> Result<Option<EqFilter>> {
     };
     let kind = match kind_token.to_ascii_uppercase().as_str() {
         "PK" | "PEQ" => FilterKind::Peak,
-        "LS" | "LSC" => FilterKind::LowShelf,
-        "HS" | "HSC" => FilterKind::HighShelf,
+        "LS" | "LSC" | "LSQ" => FilterKind::LowShelf,
+        "HS" | "HSC" | "HSQ" => FilterKind::HighShelf,
         "LP" | "LPQ" => FilterKind::LowPass,
         "HP" | "HPQ" => FilterKind::HighPass,
         "BP" => FilterKind::BandPass,
@@ -217,6 +212,19 @@ fn parse_filter(rest: &str) -> Result<Option<EqFilter>> {
                     .with_context(|| format!("invalid Q '{}'", tokens[index + 1]))?;
                 index += 2;
             }
+            "bw" => {
+                if !tokens[index + 1].eq_ignore_ascii_case("oct") {
+                    bail!("expected 'BW Oct <value>', got 'BW {}'", tokens[index + 1]);
+                }
+                let Some(val_token) = tokens.get(index + 2) else {
+                    bail!("missing value after 'BW Oct'");
+                };
+                let octaves: f64 = val_token
+                    .parse()
+                    .with_context(|| format!("invalid BW Oct '{val_token}'"))?;
+                q = octaves_to_q(octaves)?;
+                index += 3;
+            }
             other => bail!("unexpected Filter token '{other}'"),
         }
     }
@@ -229,11 +237,14 @@ fn parse_filter(rest: &str) -> Result<Option<EqFilter>> {
     if !enabled {
         return Ok(None);
     }
-    if !(1.0..=48_000.0).contains(&freq) {
+    if !freq.is_finite() || !(1.0..=48_000.0).contains(&freq) {
         bail!("Fc {freq} Hz is outside 1..=48000");
     }
-    if !(-MAX_GAIN_DB..=MAX_GAIN_DB).contains(&gain_db) {
+    if !gain_db.is_finite() || !(-MAX_GAIN_DB..=MAX_GAIN_DB).contains(&gain_db) {
         bail!("Gain {gain_db} dB is outside ±{MAX_GAIN_DB}");
+    }
+    if !q.is_finite() {
+        bail!("Q must be finite");
     }
     Ok(Some(EqFilter {
         kind,
@@ -243,9 +254,9 @@ fn parse_filter(rest: &str) -> Result<Option<EqFilter>> {
     }))
 }
 
-/// `20 -3; 25 -3; ...` as peaking bands with an octave-scale Q.
-fn parse_graphic(rest: &str) -> Result<Vec<EqFilter>> {
-    let mut filters = Vec::new();
+/// `20 -3; 25 -3; ...` piecewise-linear frequency/gain control points.
+fn parse_graphic(rest: &str) -> Result<Vec<GraphicBand>> {
+    let mut bands = Vec::new();
     for pair in rest.split(';') {
         let pair = pair.trim();
         if pair.is_empty() {
@@ -262,22 +273,24 @@ fn parse_graphic(rest: &str) -> Result<Vec<EqFilter>> {
             .context("GraphicEQ band is missing its gain")?
             .parse()
             .with_context(|| format!("invalid GraphicEQ gain '{pair}'"))?;
-        if !(1.0..=48_000.0).contains(&freq) {
+        if parts.next().is_some() {
+            bail!("unexpected extra token in GraphicEQ band '{pair}'");
+        }
+        if !freq.is_finite() || !(1.0..=48_000.0).contains(&freq) {
             bail!("GraphicEQ frequency {freq} Hz is outside 1..=48000");
         }
-        filters.push(EqFilter {
-            kind: FilterKind::Peak,
+        if !gain.is_finite() {
+            bail!("GraphicEQ gain must be finite");
+        }
+        bands.push(GraphicBand {
             freq,
             gain_db: gain.clamp(-MAX_GAIN_DB, MAX_GAIN_DB),
-            // A one-octave peaking band is the standard graphic-EQ
-            // approximation; the parser caps the band count.
-            q: 1.41,
         });
-        if filters.len() > MAX_GRAPHIC_BANDS {
+        if bands.len() > MAX_GRAPHIC_BANDS {
             bail!("too many GraphicEQ bands (max {MAX_GRAPHIC_BANDS})");
         }
     }
-    Ok(filters)
+    Ok(bands)
 }
 
 fn parse_first_number(text: &str) -> Result<f64> {
@@ -370,33 +383,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn to_mpv_af_compiles_preamp_and_all_filter_kinds() {
+    fn parses_autoeq_numbered_filters_shelves_and_bw_oct() {
         let profile = EqProfile::parse(
-            "Full",
-            "Preamp: -4.5 dB\n\
-             Filter: ON PK Fc 1000 Hz Gain 3.0 dB Q 1.41\n\
-             Filter: ON LS Fc 80 Hz Gain 4.0 dB Q 0.707\n\
-             Filter: ON HS Fc 8000 Hz Gain -2.0 dB Q 0.707\n\
-             Filter: ON LP Fc 16000 Hz Q 0.707\n\
-             Filter: ON HP Fc 30 Hz Q 0.707\n\
-             Filter: ON BP Fc 500 Hz Q 2.0\n\
-             Filter: ON NO Fc 60 Hz Q 8.0\n",
+            "AutoEq",
+            "Preamp: -5.4 dB\n\
+             Stage: pre-mix\n\
+             Filter 1: ON LSC Fc 105 Hz Gain 4.5 dB Q 0.71\n\
+             Filter 2: ON PK Fc 1000 Hz Gain -2.0 dB BW Oct 1.0\n\
+             Filter 3: ON HSQ Fc 10000 Hz Gain 1.5 dB Q 0.70\n",
         )
-        .expect("parse full eq");
-        let af = profile.to_mpv_af();
-        assert!(af.starts_with("lavfi=[") && af.ends_with(']'), "af={af}");
-        assert!(af.contains("volume=-4.500dB"), "af={af}");
-        assert!(af.contains("equalizer=f=1000.000:width_type=q:w=1.4100:g=3.000"));
-        assert!(af.contains("lowshelf=f=80.000:width_type=q:w=0.7070:g=4.000"));
-        assert!(af.contains("highshelf=f=8000.000:width_type=q:w=0.7070:g=-2.000"));
-        assert!(af.contains("lowpass=f=16000.000:width_type=q:w=0.7070"));
-        assert!(af.contains("highpass=f=30.000:width_type=q:w=0.7070"));
-        assert!(af.contains("bandpass=f=500.000:width_type=q:w=2.0000"));
-        assert!(af.contains("bandreject=f=60.000:width_type=q:w=8.0000"));
-
-        let flat = EqProfile::parse("Flat", "Preamp: 0 dB\nFilter: OFF PK Fc 1000 Hz Gain 3 dB\n")
-            .expect("parse flat eq");
-        assert!(flat.to_mpv_af().is_empty());
+        .expect("parse autoeq");
+        assert_eq!(profile.filters.len(), 3);
+        assert_eq!(profile.filters[0].kind, FilterKind::LowShelf);
+        assert_eq!(profile.filters[1].kind, FilterKind::Peak);
+        assert!((profile.filters[1].q - std::f64::consts::SQRT_2).abs() < 1e-6);
+        assert_eq!(profile.filters[2].kind, FilterKind::HighShelf);
     }
 
     #[test]
@@ -425,6 +426,7 @@ mod tests {
             "Filter: ON PK Fc 1000 Hz trailing",
             "Filter: OFF LS Gain",
             "Filter: ON HS stray",
+            "Filter: ON PK Fc 1000 Hz BW Oct",
         ] {
             assert!(
                 EqProfile::parse("bad", bad).is_err(),

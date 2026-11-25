@@ -194,6 +194,34 @@ pub(crate) fn malloc_trim() {
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 pub(crate) fn malloc_trim() {}
 
+/// Current process resident set size (`Rss` from `/proc/self/smaps_rollup`,
+/// falling back to `VmRSS` in `/proc/self/status`) in KiB.
+#[cfg(target_os = "linux")]
+pub(crate) fn rss_kib() -> Option<u64> {
+    if let Ok(rollup) = std::fs::read_to_string("/proc/self/smaps_rollup")
+        && let Some(kib) = parse_proc_kib(&rollup, "Rss:")
+    {
+        return Some(kib);
+    }
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    parse_proc_kib(&status, "VmRSS:")
+}
+
+#[cfg(target_os = "linux")]
+fn parse_proc_kib(text: &str, prefix: &str) -> Option<u64> {
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix(prefix) {
+            return rest.split_whitespace().next()?.parse::<u64>().ok();
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn rss_kib() -> Option<u64> {
+    None
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
@@ -207,6 +235,12 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         assert!(prefetch_file(&dir).is_err());
         _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rss_kib_reports_nonzero_on_linux() {
+        let kib = rss_kib().expect("/proc/self/smaps_rollup or status must report RSS");
+        assert!(kib > 0);
     }
 }
 

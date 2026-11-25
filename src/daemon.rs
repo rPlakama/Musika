@@ -243,6 +243,8 @@ async fn run_async() {
             Ok(recovered) => eprintln!("downloads: recovered {recovered} interrupted row(s)"),
             Err(err) => eprintln!("downloads: could not recover interrupted rows: {err:#}"),
         }
+        crate::db::shrink_memory(&dbs.library).await;
+        crate::db::shrink_memory(&dbs.media).await;
     }
     crate::startup::trace("daemon.cap");
     crate::linux::malloc_trim();
@@ -629,6 +631,12 @@ async fn run_async() {
                 ServerEvent::Gone { conn } => {
                     if ui_clients.remove(&conn).is_some() {
                         crate::debug_log!("daemon: client {conn} gone");
+                        if !ui_clients.values().any(|client| client.role == Role::Ui)
+                            && crate::search::index::is_loaded()
+                        {
+                            crate::search::index::clear();
+                            crate::linux::malloc_trim();
+                        }
                     }
                 }
                 ServerEvent::Message { conn, message } => {
@@ -933,6 +941,8 @@ fn query_json(snapshot: &Snapshot, command: &IpcCommand) -> String {
                 "muted": state.muted(),
                 "loading": state.loading(),
                 "normalization": state.normalization_code(),
+                "eq": snapshot.eq_profile,
+                "rss_kib": crate::linux::rss_kib(),
                 "engine_available": snapshot.engine_available,
                 "retrying": snapshot.retrying,
                 "retry_attempt": snapshot.retry_attempt,
@@ -989,6 +999,12 @@ fn query_json(snapshot: &Snapshot, command: &IpcCommand) -> String {
                 Err(error) => serde_json::json!({ "error": error }).to_string(),
             }
         }
+        IpcCommand::EqList => serde_json::json!({
+            "active": snapshot.eq_profile,
+            "mpv_af": snapshot.eq_mpv_af,
+            "profiles": crate::eq::list_profiles(),
+        })
+        .to_string(),
         _ => "{}".to_string(),
     }
 }
@@ -1015,6 +1031,14 @@ fn dispatch_core_bridge(services: &Services, command: &IpcCommand) {
         }
         IpcCommand::EqNext => {
             let _ = services.playback.send(PlaybackInput::CycleEq);
+        }
+        IpcCommand::EqOff => {
+            let _ = services.playback.send(PlaybackInput::SetEq(None));
+        }
+        IpcCommand::EqSet(profile) => {
+            let _ = services
+                .playback
+                .send(PlaybackInput::SetEq(Some(profile.clone())));
         }
         IpcCommand::Scrobble(enabled) => {
             let _ = services.playback.send(PlaybackInput::SetScrobble(*enabled));
@@ -1746,6 +1770,43 @@ mod tests {
             ipc_command::parse("quit").unwrap().target(),
             CommandTarget::Lifecycle
         );
+        assert_eq!(
+            ipc_command::parse("eq list").unwrap().target(),
+            CommandTarget::Query
+        );
+        assert_eq!(
+            ipc_command::parse("eq next").unwrap().target(),
+            CommandTarget::CoreBridge
+        );
+        assert_eq!(
+            ipc_command::parse("eq off").unwrap().target(),
+            CommandTarget::CoreBridge
+        );
+        assert_eq!(
+            ipc_command::parse("eq \"HD 650\"").unwrap().target(),
+            CommandTarget::CoreBridge
+        );
+    }
+
+    #[test]
+    fn query_json_exposes_active_eq_and_translated_mpv_af() {
+        let snapshot = Snapshot {
+            eq_profile: Some("HD 650".to_string()),
+            eq_mpv_af: "lavfi=[volume=-4.000dB]".to_string(),
+            ..Default::default()
+        };
+
+        let status: serde_json::Value =
+            serde_json::from_str(&query_json(&snapshot, &IpcCommand::Status)).unwrap();
+        assert_eq!(status["eq"], serde_json::json!("HD 650"));
+        #[cfg(target_os = "linux")]
+        assert!(status["rss_kib"].as_u64().unwrap_or(0) > 0);
+
+        let eq_list: serde_json::Value =
+            serde_json::from_str(&query_json(&snapshot, &IpcCommand::EqList)).unwrap();
+        assert_eq!(eq_list["active"], serde_json::json!("HD 650"));
+        assert_eq!(eq_list["mpv_af"], serde_json::json!("lavfi=[volume=-4.000dB]"));
+        assert!(eq_list["profiles"].is_array());
     }
 
     #[test]

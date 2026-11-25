@@ -400,7 +400,11 @@ async fn rebuild_search(dbs: &Dbs) -> Result<()> {
     // Paged rebuild: the old path collected every search row into a Vec
     // before writing the FTS table (FIX-26).
     crate::search::rebuild_from_library(&dbs.sync).await?;
+    // Only refresh the in-memory Nucleo catalog if a search session already
+    // materialized it; when running headless/cold, keep it unloaded until the
+    // next `search::index::ensure` so sync does not allocate ~30 MiB unused.
     if crate::search::index::enabled()
+        && crate::search::index::is_loaded()
         && let Err(err) = crate::search::index::rebuild(&dbs.sync).await
     {
         eprintln!("search: could not rebuild the in-memory index: {err:#}");

@@ -2085,7 +2085,10 @@ mod mpv_integration {
         writer.flush().expect("flush mock event");
     }
 
-    fn wait_event(rx: &mpsc::Receiver<EngineEvent>, pred: impl Fn(&EngineEvent) -> bool) -> EngineEvent {
+    fn wait_event(
+        rx: &mpsc::Receiver<EngineEvent>,
+        pred: impl Fn(&EngineEvent) -> bool,
+    ) -> EngineEvent {
         let deadline = Instant::now() + Duration::from_secs(3);
         while Instant::now() < deadline {
             match rx.recv_timeout(Duration::from_millis(50)) {
@@ -2123,23 +2126,56 @@ mod mpv_integration {
             generation: 1,
         });
         let pause_cmd = read_command(&mut reader);
-        assert_eq!(pause_cmd["command"], json!(["set_property", "pause", false]));
+        assert_eq!(
+            pause_cmd["command"],
+            json!(["set_property", "pause", false])
+        );
         let load_a = read_command(&mut reader);
-        assert_eq!(load_a["command"], json!(["loadfile", "file:///a.flac", "replace"]));
+        assert_eq!(
+            load_a["command"],
+            json!(["loadfile", "file:///a.flac", "replace"])
+        );
         let load_a_req = load_a["request_id"].as_u64().unwrap();
         let load_b = read_command(&mut reader);
-        assert_eq!(load_b["command"], json!(["loadfile", "file:///b.flac", "append"]));
+        assert_eq!(
+            load_b["command"],
+            json!(["loadfile", "file:///b.flac", "append"])
+        );
         let load_b_req = load_b["request_id"].as_u64().unwrap();
 
         // Reply with entry IDs 10 and 11; emit stale stop for entry 9 (must be ignored!).
-        send_json(&mut writer, json!({"request_id": load_a_req, "error": "success", "data": {"playlist_entry_id": 10}}));
-        send_json(&mut writer, json!({"request_id": load_b_req, "error": "success", "data": {"playlist_entry_id": 11}}));
-        send_json(&mut writer, json!({"event": "end-file", "reason": "error", "file_error": "stale", "playlist_entry_id": 9}));
-        send_json(&mut writer, json!({"event": "start-file", "playlist_entry_id": 10}));
-        send_json(&mut writer, json!({"event": "property-change", "id": PROP_DURATION, "data": 120.0}));
-        send_json(&mut writer, json!({"event": "property-change", "id": PROP_FILE_SIZE, "data": 4096}));
-        send_json(&mut writer, json!({"event": "property-change", "id": PROP_SEEKABLE, "data": true}));
-        send_json(&mut writer, json!({"event": "property-change", "id": PROP_SAMPLE_RATE, "data": 44100}));
+        send_json(
+            &mut writer,
+            json!({"request_id": load_a_req, "error": "success", "data": {"playlist_entry_id": 10}}),
+        );
+        send_json(
+            &mut writer,
+            json!({"request_id": load_b_req, "error": "success", "data": {"playlist_entry_id": 11}}),
+        );
+        send_json(
+            &mut writer,
+            json!({"event": "end-file", "reason": "error", "file_error": "stale", "playlist_entry_id": 9}),
+        );
+        send_json(
+            &mut writer,
+            json!({"event": "start-file", "playlist_entry_id": 10}),
+        );
+        send_json(
+            &mut writer,
+            json!({"event": "property-change", "id": PROP_DURATION, "data": 120.0}),
+        );
+        send_json(
+            &mut writer,
+            json!({"event": "property-change", "id": PROP_FILE_SIZE, "data": 4096}),
+        );
+        send_json(
+            &mut writer,
+            json!({"event": "property-change", "id": PROP_SEEKABLE, "data": true}),
+        );
+        send_json(
+            &mut writer,
+            json!({"event": "property-change", "id": PROP_SAMPLE_RATE, "data": 44100}),
+        );
         send_json(&mut writer, json!({"event": "file-loaded"}));
         send_json(&mut writer, json!({"event": "playback-restart"}));
 
@@ -2156,11 +2192,20 @@ mod mpv_integration {
         wait_event(&rx, |e| matches!(e, EngineEvent::LoadingCleared));
 
         // 2. Buffering pause/resume increments underruns and emits Buffering(true/false).
-        send_json(&mut writer, json!({"event": "property-change", "id": PROP_PAUSED_FOR_CACHE, "data": true}));
+        send_json(
+            &mut writer,
+            json!({"event": "property-change", "id": PROP_PAUSED_FOR_CACHE, "data": true}),
+        );
         wait_event(&rx, |e| matches!(e, EngineEvent::Buffering(true)));
-        send_json(&mut writer, json!({"event": "property-change", "id": PROP_PAUSED_FOR_CACHE, "data": false}));
+        send_json(
+            &mut writer,
+            json!({"event": "property-change", "id": PROP_PAUSED_FOR_CACHE, "data": false}),
+        );
         wait_event(&rx, |e| matches!(e, EngineEvent::Buffering(false)));
-        send_json(&mut writer, json!({"event": "property-change", "id": PROP_TIME_POS, "data": 10.0}));
+        send_json(
+            &mut writer,
+            json!({"event": "property-change", "id": PROP_TIME_POS, "data": 10.0}),
+        );
         std::thread::sleep(Duration::from_millis(20));
         let clock = engine.clock();
         assert_eq!(clock.sample_rate, 44_100);
@@ -2169,10 +2214,22 @@ mod mpv_integration {
 
         // 3. Gapless handoff: EOF on 10 followed by start-file on 11 emits Boundary (not Ended!)
         //    and trims playlist index 0.
-        send_json(&mut writer, json!({"event": "end-file", "reason": "eof", "playlist_entry_id": 10}));
-        send_json(&mut writer, json!({"event": "start-file", "playlist_entry_id": 11}));
-        send_json(&mut writer, json!({"event": "property-change", "id": PROP_DURATION, "data": 95.5}));
-        send_json(&mut writer, json!({"event": "property-change", "id": PROP_FILE_SIZE, "data": 8192}));
+        send_json(
+            &mut writer,
+            json!({"event": "end-file", "reason": "eof", "playlist_entry_id": 10}),
+        );
+        send_json(
+            &mut writer,
+            json!({"event": "start-file", "playlist_entry_id": 11}),
+        );
+        send_json(
+            &mut writer,
+            json!({"event": "property-change", "id": PROP_DURATION, "data": 95.5}),
+        );
+        send_json(
+            &mut writer,
+            json!({"event": "property-change", "id": PROP_FILE_SIZE, "data": 8192}),
+        );
         send_json(&mut writer, json!({"event": "file-loaded"}));
 
         let boundary = wait_event(&rx, |e| matches!(e, EngineEvent::Boundary { .. }));
@@ -2188,7 +2245,10 @@ mod mpv_integration {
         assert_eq!(remove_cmd["command"], json!(["playlist-remove", 0]));
 
         // 4. Final track reaches EOF with no queued next item -> Ended.
-        send_json(&mut writer, json!({"event": "end-file", "reason": "eof", "playlist_entry_id": 11}));
+        send_json(
+            &mut writer,
+            json!({"event": "end-file", "reason": "eof", "playlist_entry_id": 11}),
+        );
         wait_event(&rx, |e| matches!(e, EngineEvent::Ended));
 
         // 5. Unexpected mpv crash / socket close -> SinkFailed.
@@ -2229,19 +2289,28 @@ mod mpv_integration {
         let _ = read_command(&mut reader); // pause
         let load = read_command(&mut reader);
         let load_req = load["request_id"].as_u64().unwrap();
-        send_json(&mut writer, json!({"request_id": load_req, "error": "success", "data": {"playlist_entry_id": 20}}));
-        send_json(&mut writer, json!({
-            "event": "log-message",
-            "prefix": "ffmpeg",
-            "level": "error",
-            "text": "https: Server returned 401 Unauthorized\n"
-        }));
-        send_json(&mut writer, json!({
-            "event": "end-file",
-            "reason": "error",
-            "file_error": "loading failed",
-            "playlist_entry_id": 20
-        }));
+        send_json(
+            &mut writer,
+            json!({"request_id": load_req, "error": "success", "data": {"playlist_entry_id": 20}}),
+        );
+        send_json(
+            &mut writer,
+            json!({
+                "event": "log-message",
+                "prefix": "ffmpeg",
+                "level": "error",
+                "text": "https: Server returned 401 Unauthorized\n"
+            }),
+        );
+        send_json(
+            &mut writer,
+            json!({
+                "event": "end-file",
+                "reason": "error",
+                "file_error": "loading failed",
+                "playlist_entry_id": 20
+            }),
+        );
         let failed = wait_event(&rx, |e| matches!(e, EngineEvent::Failed { .. }));
         let EngineEvent::Failed { error } = failed else {
             panic!("unexpected: {failed:?}");
@@ -2250,14 +2319,17 @@ mod mpv_integration {
         assert!(!error.retryable());
 
         // 2. Disappeared pinned output device triggers auto fallback + OutputFallback.
-        send_json(&mut writer, json!({
-            "event": "property-change",
-            "id": PROP_AUDIO_DEVICE_LIST,
-            "data": [
-                {"name": "auto", "description": "Autoselect"},
-                {"name": "pipewire/sink.builtin", "description": "Built-in"}
-            ]
-        }));
+        send_json(
+            &mut writer,
+            json!({
+                "event": "property-change",
+                "id": PROP_AUDIO_DEVICE_LIST,
+                "data": [
+                    {"name": "auto", "description": "Autoselect"},
+                    {"name": "pipewire/sink.builtin", "description": "Built-in"}
+                ]
+            }),
+        );
         let fallback = wait_event(&rx, |e| matches!(e, EngineEvent::OutputFallback { .. }));
         assert_eq!(
             fallback,
@@ -2286,17 +2358,29 @@ mod mpv_integration {
         let rg = read_command(&mut reader);
         let af = read_command(&mut reader);
         let sr = read_command(&mut reader);
-        assert_eq!(rg["command"], json!(["set_property", "replaygain", "track"]));
+        assert_eq!(
+            rg["command"],
+            json!(["set_property", "replaygain", "track"])
+        );
         assert!(af["command"][2].as_str().unwrap().starts_with("lavfi=["));
-        assert_eq!(sr["command"], json!(["set_property", "audio-samplerate", 0]));
+        assert_eq!(
+            sr["command"],
+            json!(["set_property", "audio-samplerate", 0])
+        );
 
         engine.send(AudioCommand::SetBitPerfect(true));
         let rg_bp = read_command(&mut reader);
         let af_bp = read_command(&mut reader);
         let sr_bp = read_command(&mut reader);
-        assert_eq!(rg_bp["command"], json!(["set_property", "replaygain", "no"]));
+        assert_eq!(
+            rg_bp["command"],
+            json!(["set_property", "replaygain", "no"])
+        );
         assert_eq!(af_bp["command"], json!(["set_property", "af", ""]));
-        assert_eq!(sr_bp["command"], json!(["set_property", "audio-samplerate", 0]));
+        assert_eq!(
+            sr_bp["command"],
+            json!(["set_property", "audio-samplerate", 0])
+        );
 
         engine.shutdown();
     }
@@ -2364,8 +2448,14 @@ mod mpv_integration {
         engine.shutdown();
         _ = std::fs::remove_file(path);
 
-        assert!(saw_first_pcm, "expected FirstPcm from real mpv with translated APO EQ");
-        assert!(saw_ended, "expected clean Ended from real mpv with translated APO EQ");
+        assert!(
+            saw_first_pcm,
+            "expected FirstPcm from real mpv with translated APO EQ"
+        );
+        assert!(
+            saw_ended,
+            "expected clean Ended from real mpv with translated APO EQ"
+        );
     }
 
     #[test]
@@ -2434,7 +2524,10 @@ mod mpv_integration {
         assert!(saw_loaded, "expected Loaded event from real mpv");
         assert!(saw_duration, "expected ~1.0s duration update from real mpv");
         assert!(saw_first_pcm, "expected FirstPcm event from real mpv");
-        assert!(saw_boundary, "expected gapless Boundary event from real mpv");
+        assert!(
+            saw_boundary,
+            "expected gapless Boundary event from real mpv"
+        );
         assert!(saw_ended, "expected Ended event after second WAV");
     }
 }

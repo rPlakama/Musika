@@ -85,7 +85,11 @@ impl Default for MpvLaunchConfig {
 impl MpvLaunchConfig {
     pub(crate) fn from_settings(settings: &crate::playback_settings::PlaybackSettings) -> Self {
         let env_backend = std::env::var("MUSIKA_OUTPUT_BACKEND").ok();
-        let backend = match env_backend.as_deref().map(str::to_ascii_lowercase).as_deref() {
+        let backend = match env_backend
+            .as_deref()
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
             Some("alsa") => OutputBackend::Alsa,
             Some("pipewire") => OutputBackend::Pipewire,
             _ => settings.output_backend,
@@ -577,10 +581,9 @@ mod tests {
         assert_eq!(parse_ipc_line("not json"), None);
         assert_eq!(parse_ipc_line("[]"), None);
 
-        let reply = parse_ipc_line(
-            r#"{"data":{"playlist_entry_id":7},"request_id":42,"error":"success"}"#,
-        )
-        .expect("reply");
+        let reply =
+            parse_ipc_line(r#"{"data":{"playlist_entry_id":7},"request_id":42,"error":"success"}"#)
+                .expect("reply");
         let MpvMessage::Response {
             request_id,
             error,
@@ -606,10 +609,9 @@ mod tests {
             }
         );
 
-        let prop = parse_ipc_line(
-            r#"{"event":"property-change","id":1,"name":"time-pos","data":12.5}"#,
-        )
-        .expect("property-change");
+        let prop =
+            parse_ipc_line(r#"{"event":"property-change","id":1,"name":"time-pos","data":12.5}"#)
+                .expect("property-change");
         assert_eq!(
             prop,
             MpvMessage::PropertyChange {

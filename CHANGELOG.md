@@ -3,6 +3,42 @@
 All notable changes to Musika, newest first. `TASKLISTMAJOR.md` tracks the
 open work; this file is the release history.
 
+## 0.8.0 - _MPV playback engine, APO→MPV EQ & core memory optimization_
+
+- **Single-process MPV playback engine:** replaced the in-process PipeWire /
+  ALSA / FFmpeg playback stack (`src/player/pipewire/**` and `pipewire`,
+  `alsa`, `ffmpeg-next` crates) with a persistent, crash-isolated headless
+  `mpv` subprocess (`src/player/mpv/**`, `argv[0]` = `musika-mpv`) driven over
+  a private Unix-domain JSON IPC socket with `PR_SET_PDEATHSIG(SIGTERM)`
+  orphan protection, native gapless `loadfile` handoffs, ReplayGain
+  normalization, live output device/backend switching (`pipewire` ↔ `alsa`),
+  exclusive/bit-perfect modes, fixed sample rate, and `log-message` error
+  correlation.
+- **Equalizer APO → MPV IPC translation:** extended `src/eq.rs` for AutoEq /
+  Peace syntax (`Filter N:`, `LSQ`/`HSQ`, `BW Oct`, `Stage:`, up to 128
+  `GraphicEQ` bands), added `src/player/mpv/eq.rs` (including `firequalizer`
+  for piecewise-linear `GraphicEQ`), wired translation once in the daemon/IPC
+  layer (`AudioCommand::SetEq(Option<String>)`), and added `:eq off`,
+  `:eq <profile-name>`, `:eq list` JSON query (`{active, mpv_af, profiles}`),
+  and `"eq"` in `status`.
+- **Crossfade removal:** removed crossfade across `PlaybackCore`,
+  `PlaybackSettings`, IPC commands/protocol (`ipc_protocol::VERSION` bumped to
+  `7`), and UI surfaces while ignoring legacy `crossfade*` keys on restore.
+- **`musika-core` memory optimization:** interned repeated `SongHit` strings
+  (`Arc<str>`), compacted `most_played` (`Vec<u32>`) and `by_album` (flat CSR
+  `Vec<u32>`), removed duplicate artist haystacks (`bench_100k_songs` retained
+  RAM reduced from `48.7 MiB` to `39.8 MiB`), added lazy/headless `SearchIndex`
+  eviction, added `PRAGMA shrink_memory` + bounded statement caches, tuned
+  MPV's audio demuxer cache (`8 MiB / 2 MiB`), and exposed `rss_kib` in
+  `status`.
+- **Nix packaging & dev shell:** packaged stripped audio-only `mpvAudio`
+  (`mpv-unwrapped.override` + `ffmpeg-headless`), removed C audio/clang build
+  inputs from `musika`, and wired `kache` as `RUSTC_WRAPPER` in
+  `devShells.default`.
+- **Verification:** 793 default lib tests and 510 headless tests pass,
+  `cargo clippy --all-targets -- -D warnings` and `scripts/check-icons.sh --strict`
+  are clean, and the packaged Nix release build succeeds.
+
 ## 0.7.9 - _Stream buffering & playhead sync_
 
 - **Stream buffering:** large remote streams now hold audio output in a

@@ -655,9 +655,7 @@ impl ServiceState {
         self.settings.eq_profile = active_name.clone();
         self.active_eq_af = mpv_af.clone();
         if let Some(engine) = self.engine.as_ref() {
-            engine.send(AudioCommand::SetEq(
-                (!mpv_af.is_empty()).then_some(mpv_af),
-            ));
+            engine.send(AudioCommand::SetEq((!mpv_af.is_empty()).then_some(mpv_af)));
         }
         _ = self.outputs.send(PlaybackOutput::EqChanged(active_name));
     }

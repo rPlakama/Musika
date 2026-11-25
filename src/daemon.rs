@@ -1805,7 +1805,10 @@ mod tests {
         let eq_list: serde_json::Value =
             serde_json::from_str(&query_json(&snapshot, &IpcCommand::EqList)).unwrap();
         assert_eq!(eq_list["active"], serde_json::json!("HD 650"));
-        assert_eq!(eq_list["mpv_af"], serde_json::json!("lavfi=[volume=-4.000dB]"));
+        assert_eq!(
+            eq_list["mpv_af"],
+            serde_json::json!("lavfi=[volume=-4.000dB]")
+        );
         assert!(eq_list["profiles"].is_array());
     }
 

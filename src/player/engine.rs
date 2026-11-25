@@ -90,19 +90,13 @@ pub(crate) enum EngineEvent {
     /// Current track reached EOF with no queued next item: advance the queue.
     Ended,
     /// Track/decoder failure: retry or advance depending on the kind.
-    Failed {
-        error: crate::player::PlaybackError,
-    },
+    Failed { error: crate::player::PlaybackError },
     /// MPV process or IPC failure: recover the engine, do NOT advance.
-    SinkFailed {
-        message: String,
-    },
+    SinkFailed { message: String },
     /// The selected output device disappeared from MPV's device list. The
     /// transport already reverted to `auto`; the service must persist
     /// follow-default instead of retrying the dead target.
-    OutputFallback {
-        target: String,
-    },
+    OutputFallback { target: String },
     /// Loading/seek finished; emit once per load/seek.
     LoadingCleared,
     /// MPV entered (`true`) or exited (`false`) `paused-for-cache` buffering.
@@ -113,9 +107,7 @@ pub(crate) enum EngineEvent {
         not(test),
         expect(dead_code, reason = "consumed by PlaybackCore non-seekable seek tests")
     )]
-    PositionReset {
-        position: f64,
-    },
+    PositionReset { position: f64 },
 }
 
 /// Cheap transport clock read by the service (MPRIS/diagnostics).

@@ -209,7 +209,10 @@ impl MpvTransport {
             }
             AudioCommand::SetExclusive(exclusive) => {
                 self.config.exclusive = exclusive;
-                self.send_property("audio-exclusive", json!(if exclusive { "yes" } else { "no" }))
+                self.send_property(
+                    "audio-exclusive",
+                    json!(if exclusive { "yes" } else { "no" }),
+                )
             }
             AudioCommand::SetBitPerfect(enabled) => {
                 self.bit_perfect = enabled;
@@ -282,7 +285,8 @@ impl MpvTransport {
         if let Some(next) = next_url {
             let next_req = self.process.alloc_req();
             self.pending_next_req = Some(next_req);
-            self.process.write_raw(&cmd_loadfile(next_req, next, true))?;
+            self.process
+                .write_raw(&cmd_loadfile(next_req, next, true))?;
         }
         Ok(())
     }

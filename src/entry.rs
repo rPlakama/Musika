@@ -1,7 +1,8 @@
 //! CLI entry for the `musika` binary.
 
 fn is_allowed_dotenv_key(key: &str) -> bool {
-    key.starts_with("MUSIKA_") && !matches!(key, "MUSIKA_UI_BIN" | "MUSIKA_KEY_FILE")
+    key.starts_with("MUSIKA_")
+        && !matches!(key, "MUSIKA_UI_BIN" | "MUSIKA_MPV_BIN" | "MUSIKA_KEY_FILE")
 }
 
 fn parse_allowed_dotenv(text: &str) -> Vec<(String, String)> {
@@ -304,6 +305,7 @@ mod tests {
         let text = "\
             # comment\n\
             MUSIKA_UI_BIN=/tmp/evil\n\
+            MUSIKA_MPV_BIN=/tmp/evil-mpv\n\
             MUSIKA_KEY_FILE=/tmp/evil-key\n\
             LD_PRELOAD=/tmp/evil.so\n\
             LD_LIBRARY_PATH=/tmp/evil-lib\n\

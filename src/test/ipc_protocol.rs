@@ -126,20 +126,17 @@ fn playback_state_is_exactly_48_bytes_and_round_trips() {
     assert!(state.muted() && state.loading());
     assert_eq!(state.volume(), 70.0);
     assert_eq!(state.normalization_code(), 0);
-    assert!(!state.crossfade());
 }
 
 #[test]
-fn playback_state_reserved_bits_carry_normalization_and_crossfade() {
+fn playback_state_reserved_bits_carry_normalization() {
     let mut state = PlaybackState {
-        reserved: 2 | crate::ipc_protocol::RESERVED_CROSSFADE,
+        reserved: 2,
         ..Default::default()
     };
     assert_eq!(state.normalization_code(), 2);
-    assert!(state.crossfade());
     state.reserved = 1;
     assert_eq!(state.normalization_code(), 1);
-    assert!(!state.crossfade());
 }
 
 #[test]
@@ -293,9 +290,7 @@ fn every_player_op_round_trips() {
         },
         PlayerOp::Resync,
         PlayerOp::CycleNormalization,
-        PlayerOp::ToggleCrossfade,
         PlayerOp::SetNormalization(2),
-        PlayerOp::SetCrossfade(true),
     ];
     for (index, op) in ops.into_iter().enumerate() {
         let request = PlayerRequest {

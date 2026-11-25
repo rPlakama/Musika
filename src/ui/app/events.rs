@@ -47,7 +47,7 @@ impl AppRoot {
             }
             Event::OutputDevices { devices } => {
                 let message = if devices.is_empty() {
-                    "No PipeWire output sinks.".to_string()
+                    "No audio output devices.".to_string()
                 } else {
                     let labels: Vec<&str> =
                         devices.iter().map(|device| device.label.as_str()).collect();

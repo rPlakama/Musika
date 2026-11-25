@@ -297,9 +297,7 @@ impl Inner {
             | PlayerOp::ShuffleQueueOrder
             | PlayerOp::SetTrackFavorite { .. }
             | PlayerOp::CycleNormalization
-            | PlayerOp::ToggleCrossfade
             | PlayerOp::SetNormalization(_)
-            | PlayerOp::SetCrossfade(_)
             | PlayerOp::Resync => {
                 let request = PlayerRequest { req, op };
                 if let Some(frame) = self.player_frame(&request) {
@@ -840,7 +838,6 @@ pub struct PlaybackView {
     muted: bool,
     repeat: Repeat,
     normalization: Normalization,
-    crossfade: bool,
     shuffle: bool,
     loading: bool,
     retrying: bool,
@@ -864,7 +861,6 @@ impl Default for PlaybackView {
             muted: false,
             repeat: Repeat::Off,
             normalization: Normalization::Off,
-            crossfade: false,
             shuffle: false,
             loading: false,
             retrying: false,
@@ -906,7 +902,6 @@ impl PlaybackView {
         self.state = state.state().into();
         self.repeat = state.repeat().into();
         self.normalization = Normalization::from_code(state.normalization_code());
-        self.crossfade = state.crossfade();
         self.shuffle = state.shuffle();
         self.volume = state.volume();
         self.muted = state.muted();
@@ -1062,10 +1057,6 @@ impl PlaybackView {
 
     pub fn normalization(&self) -> Normalization {
         self.normalization
-    }
-
-    pub fn crossfade(&self) -> bool {
-        self.crossfade
     }
 
     pub fn shuffle(&self) -> bool {
@@ -1295,12 +1286,6 @@ impl PlaybackClient {
     pub fn cycle_normalization(&self) {
         self.send(PlayerOp::CycleNormalization);
     }
-    pub fn toggle_crossfade(&self) {
-        self.send(PlayerOp::ToggleCrossfade);
-    }
-    pub fn set_crossfade(&self, enabled: bool) {
-        self.send(PlayerOp::SetCrossfade(enabled));
-    }
     pub fn set_normalization(&self, mode: Normalization) {
         self.send(PlayerOp::SetNormalization(mode.code()));
     }
@@ -1366,9 +1351,6 @@ impl AppPlayer {
     }
     pub fn normalization(&self) -> Normalization {
         self.view.normalization()
-    }
-    pub fn crossfade(&self) -> bool {
-        self.view.crossfade()
     }
     pub fn index(&self) -> usize {
         self.view.index()
@@ -1472,12 +1454,6 @@ impl AppPlayer {
     }
     pub fn cycle_normalization(&self) {
         self.client.cycle_normalization();
-    }
-    pub fn toggle_crossfade(&self) {
-        self.client.toggle_crossfade();
-    }
-    pub fn set_crossfade(&self, enabled: bool) {
-        self.client.set_crossfade(enabled);
     }
     pub fn set_normalization(&self, mode: Normalization) {
         self.client.set_normalization(mode);

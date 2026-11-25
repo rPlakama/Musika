@@ -1,11 +1,25 @@
-//! Event-driven playback engine thread over [`Native`].
+// Musika — a keyboard-driven music player.
+// Copyright (C) 2026 rPlakama <rPlakama@proton.me>
+//
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation; either version 2 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, see <https://www.gnu.org/licenses/>.
+
+//! Event-driven playback engine thread over [`MpvTransport`].
 //!
-//! One std thread owns the native transport (PipeWire sink + decode worker) and
-//! a `std::sync::mpsc` command channel. It never polls the position: it sleeps
-//! on an `eventfd` that the sink's RT callback writes on a gapless boundary, the
-//! sink loop thread writes on a stream state change and the decode worker
-//! writes on a decoder lifecycle event. The timeouts (10 ms while
-//! playing/loading, 250 ms idle) are a safety net, not the transport clock.
+//! One std thread owns the persistent `mpv` child process, its Unix IPC socket,
+//! and a `std::sync::mpsc` command channel. It sleeps in `poll(2)` on the
+//! command `eventfd` and the `mpv` IPC descriptor, waking immediately on either
+//! a new [`AudioCommand`] or an asynchronous JSON event from `mpv`.
 //!
 //! The engine is deliberately dumb: it applies [`AudioCommand`]s to the
 //! transport and reports [`EngineEvent`]s. Queue policy lives in
@@ -18,14 +32,12 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use super::Normalization;
-use super::pipewire::{Native, SinkState};
+use super::mpv::MpvTransport;
 
-/// Wake cadence while audible or loading: fast enough that a boundary or a
-/// drained ring is handled within one audio period.
-const ACTIVE_WAIT: Duration = Duration::from_millis(10);
-/// Safety-net wake cadence while paused/stopped. Real work is event-driven:
-/// the command eventfd and the shared transport eventfd wake the poll, so this
-/// timeout only bounds a missed wake; it is not the transport clock.
+/// Safety-net wake cadence while playing/loading; real events wake `poll(2)`
+/// immediately through the `mpv` IPC socket or the command `eventfd`.
+const ACTIVE_WAIT: Duration = Duration::from_millis(250);
+/// Safety-net wake cadence while paused/stopped.
 const IDLE_WAIT: Duration = Duration::from_secs(1);
 
 /// Transport commands the playback core emits for the engine.
@@ -46,32 +58,23 @@ pub(crate) enum AudioCommand {
     SetMuted(bool),
     /// ReplayGain loudness normalization mode.
     SetNormalization(Normalization),
-    /// Optional equal-length crossfade between tracks.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "only the ignored crossfade integration test emits the plain toggle"
-        )
-    )]
-    SetCrossfade(bool),
-    SetCrossfadeConfig(crate::player::CrossfadeConfig),
-    SetCrossfadeAllowed(bool),
-    /// Retarget the output stream to a PipeWire sink (`None` = default).
+    /// Retarget the output stream (`None` = follow default / `auto`).
     SetOutputTarget(Option<String>),
     /// Install/replace the EQ profile (`None` = bypass).
     SetEq(Option<std::sync::Arc<crate::eq::EqProfile>>),
     SetExclusive(bool),
     SetBitPerfect(bool),
+    /// Force a fixed output sample rate (`None` = native rate).
+    SetSampleRate(Option<u32>),
     Stop,
 }
 
 /// Transport/decoder events the engine reports to the playback core.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum EngineEvent {
-    /// First PCM of the current load was written to the ring.
+    /// First audio of the current load reached output (`playback-restart`).
     FirstPcm,
-    /// A decoder opened: duration/stream size/seekability are known.
+    /// A file opened: duration/stream size/seekability are known.
     Loaded {
         duration: f64,
         stream_size: u64,
@@ -81,32 +84,35 @@ pub(crate) enum EngineEvent {
     Boundary {
         duration: f64,
         stream_size: u64,
-        /// Start position in the next track (crossfade consumed this much).
+        /// Start position in the next track (0.0 for gapless).
         position: f64,
     },
-    /// Decoder EOF and the sink drained the ring: advance the queue.
+    /// Current track reached EOF with no queued next item: advance the queue.
     Ended,
     /// Track/decoder failure: retry or advance depending on the kind.
     Failed {
         error: crate::player::PlaybackError,
     },
-    /// PipeWire stream failure: recover the engine, do NOT advance.
+    /// MPV process or IPC failure: recover the engine, do NOT advance.
     SinkFailed {
         message: String,
     },
-    SinkRecovered,
-    /// The selected output node disappeared from the PipeWire registry. The
-    /// sink is already using the graph default; the service must persist
+    /// The selected output device disappeared from MPV's device list. The
+    /// transport already reverted to `auto`; the service must persist
     /// follow-default instead of retrying the dead target.
     OutputFallback {
         target: String,
     },
-    /// The loading heuristic fired; emit once per load.
+    /// Loading/seek finished; emit once per load/seek.
     LoadingCleared,
-    /// The ring entered (`true`) or exited (`false`) pre-/re-buffering hold.
+    /// MPV entered (`true`) or exited (`false`) `paused-for-cache` buffering.
     Buffering(bool),
     /// The decoder had to restart at `position` (non-seekable stream), so the
     /// core must re-anchor the playhead instead of trusting the seek target.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "consumed by PlaybackCore non-seekable seek tests")
+    )]
     PositionReset {
         position: f64,
     },
@@ -120,7 +126,7 @@ pub(crate) struct EngineClock {
     pub underruns: u64,
     pub sample_rate: u32,
     pub loading: bool,
-    /// Hardware-clock epoch: changes on seek/load/flush/rebuild, so consumers
+    /// Hardware-clock epoch: changes on seek/load/boundary/stop, so consumers
     /// discard `played_frames` deltas that span a timeline reset.
     pub epoch: u64,
 }
@@ -135,7 +141,7 @@ struct ClockState {
     epoch: AtomicU64,
 }
 
-/// Handle to the engine thread. Dropping it shuts the engine down.
+/// Handle to the engine thread. Dropping it shuts the engine and `mpv` down.
 pub(crate) struct Engine {
     commands: Option<Sender<AudioCommand>>,
     clock: Arc<ClockState>,
@@ -144,28 +150,29 @@ pub(crate) struct Engine {
 }
 
 /// Callback the transport uses to report events to the playback service.
-///
-/// A callback (instead of a forwarding thread) sends `EngineEvent`s straight
-/// into the service channel: the sender is thread-safe and per-producer order
-/// is preserved, so the old `musika-engine-events` hop and its thread are gone.
 pub(crate) type EventSink = Arc<dyn Fn(EngineEvent) -> bool + Send + Sync>;
 
 impl Engine {
-    /// `Err` when there is no usable PipeWire session; never panics.
+    /// `Err` when `mpv` cannot be spawned or connected; never panics.
     pub(crate) fn new(events: EventSink) -> Result<Self, String> {
         // Reuse the transport created by the startup warm-up
         // (`entry::init_backend` calls `player::warm_native`). Waiting for an
-        // in-flight warm-up instead of racing it is what guarantees a single
-        // PipeWire stream: a second `Native` would never be dropped.
-        let native = match take_warm_transport() {
-            Some(Ok(native)) => native,
+        // in-flight warm-up guarantees a single `mpv` child at startup.
+        let transport = match take_warm_transport() {
+            Some(Ok(transport)) => transport,
             Some(Err(error)) => {
                 return Err(format!("cannot start the audio engine: {error}"));
             }
-            None => {
-                Native::new().map_err(|error| format!("cannot start the audio engine: {error}"))?
-            }
+            None => MpvTransport::new()
+                .map_err(|error| format!("cannot start the audio engine: {error}"))?,
         };
+        Self::from_transport(transport, events)
+    }
+
+    pub(crate) fn from_transport(
+        transport: MpvTransport,
+        events: EventSink,
+    ) -> Result<Self, String> {
         let (command_tx, command_rx) = mpsc::channel::<AudioCommand>();
         let clock = Arc::new(ClockState::default());
         // SAFETY: `eventfd` has no Rust-side preconditions: it creates a new
@@ -177,7 +184,7 @@ impl Engine {
         let thread_clock = Arc::clone(&clock);
         let join = match thread::Builder::new()
             .name("musika-engine".to_string())
-            .spawn(move || engine_thread(native, command_rx, events, thread_clock, thread_wake))
+            .spawn(move || engine_thread(transport, command_rx, events, thread_clock, thread_wake))
         {
             Ok(join) => join,
             Err(error) => {
@@ -202,8 +209,7 @@ impl Engine {
         self.signal();
     }
 
-    /// Last pumped transport counters. While paused these are frozen at the
-    /// last pump (nothing advances), so they are stable to sample.
+    /// Last pumped transport counters.
     pub(crate) fn clock(&self) -> EngineClock {
         EngineClock {
             played_frames: self.clock.played_frames.load(Ordering::Relaxed),
@@ -215,7 +221,7 @@ impl Engine {
         }
     }
 
-    /// Stops the thread and releases the PipeWire stream (joins every thread).
+    /// Stops the thread and terminates the child `mpv` cleanly.
     pub(crate) fn shutdown(self) {
         drop(self);
     }
@@ -225,20 +231,15 @@ impl Engine {
     }
 }
 
-/// Takes the startup warm-up transport, waiting while it is still connecting.
-///
-/// `None` means no warm-up was started (a direct `Native::new` is then the only
-/// transport). `Some(Err(..))` means the warm-up failed: the caller must not
-/// silently start a second one.
-fn take_warm_transport() -> Option<Result<Native, String>> {
+/// Takes the startup warm-up transport, waiting while it is still starting.
+fn take_warm_transport() -> Option<Result<MpvTransport, String>> {
     if let Some(result) = crate::player::take_warm_native() {
         return Some(result);
     }
     if !crate::player::warm_native_pending() {
         return None;
     }
-    // The warm-up thread is bounded by the sink's 10 s connect timeout.
-    let deadline = std::time::Instant::now() + Duration::from_secs(12);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while std::time::Instant::now() < deadline {
         if let Some(result) = crate::player::take_warm_native() {
             return Some(result);
@@ -253,8 +254,6 @@ fn take_warm_transport() -> Option<Result<Native, String>> {
 
 impl Drop for Engine {
     fn drop(&mut self) {
-        // Closing the command channel makes the thread break out of its loop;
-        // the wakeup cuts the current `poll` short so shutdown is bounded.
         drop(self.commands.take());
         self.signal();
         if let Some(join) = self.join.take() {
@@ -265,32 +264,39 @@ impl Drop for Engine {
 }
 
 fn engine_thread(
-    native: Native,
+    mut transport: MpvTransport,
     commands: Receiver<AudioCommand>,
     events: EventSink,
     clock: Arc<ClockState>,
     wake_fd: libc::c_int,
 ) {
-    let shared_fd = native.wake_fd();
-    let mut paused = true;
-    let mut sink_failed = false;
-    let mut was_buffering = false;
+    let mut emit = |event: EngineEvent| -> bool { events(event) };
+
+    // Drain any initial startup property events immediately (e.g., audio-device-list).
+    if !transport.pump(&mut emit) {
+        return;
+    }
+    store_clock(&clock, &transport);
+
     loop {
-        let timeout = if !paused || native.loading() {
+        let timeout = if transport.is_active() {
             ACTIVE_WAIT
         } else {
             IDLE_WAIT
         };
-        wait(wake_fd, shared_fd, timeout);
-        // Both descriptors are level-triggered eventfds; drain them so the next
-        // `poll` blocks instead of spinning.
+        wait(wake_fd, transport.ipc_fd(), timeout);
         drain_fd(wake_fd);
-        native.drain_wake();
 
         let mut disconnected = false;
+        let mut alive = true;
         loop {
             match commands.try_recv() {
-                Ok(command) => apply_command(&native, command, &mut paused),
+                Ok(command) => {
+                    if !transport.apply_command(command, &mut emit) {
+                        alive = false;
+                        break;
+                    }
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     disconnected = true;
@@ -298,178 +304,38 @@ fn engine_thread(
                 }
             }
         }
-        if disconnected {
+        if disconnected || !alive {
             break;
         }
 
-        if !pump(
-            &native,
-            events.as_ref(),
-            &paused,
-            &mut sink_failed,
-            &mut was_buffering,
-        ) {
+        if !transport.pump(&mut emit) {
             break;
         }
-
-        clock
-            .played_frames
-            .store(native.played_frames(), Ordering::Relaxed);
-        clock
-            .buffered_frames
-            .store(native.buffered_frames(), Ordering::Relaxed);
-        clock.underruns.store(native.underruns(), Ordering::Relaxed);
-        clock.sample_rate.store(native.rate(), Ordering::Relaxed);
-        clock.loading.store(native.loading(), Ordering::Relaxed);
-        clock.epoch.store(native.clock_epoch(), Ordering::Relaxed);
+        store_clock(&clock, &transport);
     }
 }
 
-/// Applies one transport command. `paused` mirrors the transport so the wait
-/// cadence and the loading heuristic stay honest.
-fn apply_command(native: &Native, command: AudioCommand, paused: &mut bool) {
-    match command {
-        AudioCommand::Load {
-            url,
-            next_url,
-            paused: load_paused,
-            generation,
-        } => {
-            native.load_with_next_generation(&url, next_url, load_paused, generation);
-            *paused = load_paused;
-        }
-        AudioCommand::SetNextUrl(next_url) => native.set_next_url(next_url),
-        AudioCommand::Pause => {
-            native.set_paused(true);
-            *paused = true;
-        }
-        AudioCommand::Resume => {
-            native.set_paused(false);
-            *paused = false;
-        }
-        AudioCommand::Seek(seconds) => native.seek_to(seconds),
-        AudioCommand::SetVolume(volume) => {
-            // Volume/mute are ring atomics plus a loop-thread stream control,
-            // so they apply while paused too.
-            native.set_volume(volume);
-        }
-        AudioCommand::SetMuted(muted) => native.set_muted(muted),
-        AudioCommand::SetNormalization(mode) => native.set_normalization(mode),
-        AudioCommand::SetCrossfade(enabled) => native.set_crossfade(enabled),
-        AudioCommand::SetCrossfadeConfig(config) => native.set_crossfade_config(config),
-        AudioCommand::SetCrossfadeAllowed(allowed) => native.set_crossfade_allowed(allowed),
-        AudioCommand::SetOutputTarget(target) => {
-            if let Err(error) = native.set_output_target(target) {
-                crate::debug_log!("pipewire: cannot change output device: {error}");
-            }
-        }
-        AudioCommand::SetEq(profile) => native.set_eq(profile),
-        AudioCommand::SetExclusive(exclusive) => {
-            if let Err(error) = native.set_exclusive(exclusive) {
-                crate::debug_log!("pipewire: cannot change exclusive mode: {error}");
-            }
-        }
-        AudioCommand::SetBitPerfect(enabled) => native.set_bit_perfect(enabled),
-        AudioCommand::Stop => {
-            native.stop();
-            *paused = true;
-        }
-    }
+fn store_clock(clock: &ClockState, transport: &MpvTransport) {
+    clock
+        .played_frames
+        .store(transport.played_frames(), Ordering::Relaxed);
+    clock
+        .buffered_frames
+        .store(transport.buffered_frames(), Ordering::Relaxed);
+    clock
+        .underruns
+        .store(transport.underruns(), Ordering::Relaxed);
+    clock
+        .sample_rate
+        .store(transport.sample_rate(), Ordering::Relaxed);
+    clock.loading.store(transport.loading(), Ordering::Relaxed);
+    clock
+        .epoch
+        .store(transport.clock_epoch(), Ordering::Relaxed);
 }
 
-/// Drains the native transport into events. Returns `false` when the event
-/// receiver closed (the engine must end).
-fn pump(
-    native: &Native,
-    events: &(dyn Fn(EngineEvent) -> bool + Send + Sync),
-    paused: &bool,
-    sink_failed: &mut bool,
-    was_buffering: &mut bool,
-) -> bool {
-    let emit = |event: EngineEvent| -> bool { events(event) };
-
-    if let Some((duration, stream_size, position)) = native.take_boundary_event()
-        && !emit(EngineEvent::Boundary {
-            duration,
-            stream_size,
-            position,
-        })
-    {
-        return false;
-    }
-    if let Some((duration, stream_size, seekable)) = native.take_loaded()
-        && !emit(EngineEvent::Loaded {
-            duration,
-            stream_size,
-            seekable,
-        })
-    {
-        return false;
-    }
-    if let Some(position) = native.take_position_reset()
-        && !emit(EngineEvent::PositionReset { position })
-    {
-        return false;
-    }
-    if native.take_first_pcm() && !emit(EngineEvent::FirstPcm) {
-        return false;
-    }
-    if let Some(error) = native.take_failed()
-        && !emit(EngineEvent::Failed { error })
-    {
-        return false;
-    }
-    if native.take_ended() && !emit(EngineEvent::Ended) {
-        return false;
-    }
-    if let Some(target) = native.take_output_fallback()
-        && !emit(EngineEvent::OutputFallback { target })
-    {
-        return false;
-    }
-    if let Some(status) = native.take_sink_transition() {
-        match status.state {
-            SinkState::Error => {
-                *sink_failed = true;
-                let message = status
-                    .error
-                    .unwrap_or_else(|| "PipeWire stream stopped".to_string());
-                if !emit(EngineEvent::SinkFailed { message }) {
-                    return false;
-                }
-            }
-            _ if *sink_failed => {
-                // A rebuilt or auto-reconnected stream is live again. The
-                // service replays the current row (`CoreCommand::Recover`).
-                *sink_failed = false;
-                if !emit(EngineEvent::SinkRecovered) {
-                    return false;
-                }
-            }
-            SinkState::Unconnected
-            | SinkState::Connecting
-            | SinkState::Paused
-            | SinkState::Streaming => {}
-        }
-    }
-    let is_buffering = !*paused && native.buffering();
-    if is_buffering != *was_buffering {
-        *was_buffering = is_buffering;
-        if !emit(EngineEvent::Buffering(is_buffering)) {
-            return false;
-        }
-    }
-    // The loading heuristic moved out of `Native::poll`: the legacy player keeps
-    // its own copy through the same helper, and the engine emits the transition
-    // once per load.
-    if native.loading_clear(!*paused) && !emit(EngineEvent::LoadingCleared) {
-        return false;
-    }
-    true
-}
-
-/// Blocks until a command fd, a shared wake fd or the timeout fires.
-fn wait(command_fd: libc::c_int, shared_fd: libc::c_int, timeout: Duration) {
+/// Blocks until a command eventfd, the MPV IPC socket, or the timeout fires.
+fn wait(command_fd: libc::c_int, ipc_fd: libc::c_int, timeout: Duration) {
     let mut fds = [
         libc::pollfd {
             fd: command_fd,
@@ -477,7 +343,7 @@ fn wait(command_fd: libc::c_int, shared_fd: libc::c_int, timeout: Duration) {
             revents: 0,
         },
         libc::pollfd {
-            fd: shared_fd,
+            fd: ipc_fd,
             events: libc::POLLIN,
             revents: 0,
         },
@@ -495,11 +361,8 @@ fn signal_fd(fd: libc::c_int) {
         return;
     }
     let one = 1u64;
-    // SAFETY: `fd` is the eventfd owned by `Engine` and it is closed only when
-    // the engine is dropped, so it cannot be closed while a signal is in
-    // flight from the engine thread or its command senders. `one` is a live
-    // `u64` and the requested length matches it; the descriptor was created
-    // with `EFD_NONBLOCK`, so the write cannot block.
+    // SAFETY: `fd` is the eventfd owned by `Engine` and closed only in `Drop`.
+    // `one` is a live `u64` and the descriptor is non-blocking.
     unsafe {
         _ = libc::write(
             fd,
@@ -514,10 +377,8 @@ fn drain_fd(fd: libc::c_int) {
         return;
     }
     let mut value = 0u64;
-    // SAFETY: `fd` is the engine's owned eventfd (still open; only `Drop`
-    // closes it) and `value` is a live `u64` used as the 8-byte output buffer
-    // eventfd expects. The descriptor is non-blocking, and an empty counter is
-    // reported as an error that is intentionally ignored.
+    // SAFETY: `fd` is the engine's owned non-blocking eventfd and `value` is a
+    // live 8-byte buffer.
     unsafe {
         _ = libc::read(
             fd,
@@ -531,9 +392,8 @@ fn close_fd(fd: libc::c_int) {
     if fd < 0 {
         return;
     }
-    // SAFETY: `fd` is a valid open descriptor owned by the engine; the caller
-    // closes it exactly once (the `Engine::new` spawn-error path or
-    // `Engine::drop`, never both), and no other code uses it afterwards.
+    // SAFETY: `fd` is a valid open descriptor owned by `Engine` and closed
+    // exactly once here.
     unsafe {
         _ = libc::close(fd);
     }

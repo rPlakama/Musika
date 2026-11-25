@@ -35,10 +35,6 @@ fn signed_percent(value: f64) -> String {
 enum SettingsRowAction {
     Shuffle,
     Repeat,
-    Crossfade,
-    Length,
-    Curve,
-    AlbumOnly,
     Normalize,
     Eq,
     ColorContrast,
@@ -386,16 +382,6 @@ impl AppRoot {
         }
     }
 
-    pub(in crate::ui) fn on_crossfade_toggle(
-        &mut self,
-        _: &CrossfadeToggle,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.player.toggle_crossfade();
-        cx.notify();
-    }
-
     pub(in crate::ui) fn on_normalization_cycle(
         &mut self,
         _: &NormalizationCycle,
@@ -446,26 +432,6 @@ impl AppRoot {
                 SettingsRowAction::Shuffle,
             ),
             ("Repeat".into(), repeat.into(), SettingsRowAction::Repeat),
-            (
-                "Crossfade".into(),
-                yes_no(self.player.crossfade()),
-                SettingsRowAction::Crossfade,
-            ),
-            (
-                "Crossfade length".into(),
-                format!("{:.0}s", s.crossfade_seconds),
-                SettingsRowAction::Length,
-            ),
-            (
-                "Crossfade curve".into(),
-                s.crossfade_curve.clone(),
-                SettingsRowAction::Curve,
-            ),
-            (
-                "Album-only crossfade".into(),
-                yes_no(s.crossfade_album_only),
-                SettingsRowAction::AlbumOnly,
-            ),
             (
                 "Normalization".into(),
                 format!("{:?}", self.player.normalization()),
@@ -554,17 +520,8 @@ impl AppRoot {
                 let next = contrast_after_step(self.settings.color_saturation, direction);
                 self.bridge.set_color_saturation(next);
             }
-            SettingsRowAction::Length => {
-                let next =
-                    (self.settings.crossfade_seconds + f64::from(direction)).clamp(1.0, 12.0);
-                self.bridge
-                    .set_crossfade_change(crate::playback_settings::CrossfadeChange::Length(next));
-            }
             SettingsRowAction::Shuffle
             | SettingsRowAction::Repeat
-            | SettingsRowAction::Crossfade
-            | SettingsRowAction::Curve
-            | SettingsRowAction::AlbumOnly
             | SettingsRowAction::Normalize
             | SettingsRowAction::Eq
             | SettingsRowAction::Scrobble
@@ -591,28 +548,6 @@ impl AppRoot {
         match action {
             SettingsRowAction::Shuffle => self.player.shuffle_queue(),
             SettingsRowAction::Repeat => self.player.cycle_repeat(),
-            SettingsRowAction::Crossfade => self.player.toggle_crossfade(),
-            SettingsRowAction::Length => {
-                let next = match self.settings.crossfade_seconds.round() as u32 {
-                    0..=3 => 5.0,
-                    4..=5 => 8.0,
-                    6..=8 => 12.0,
-                    _ => 3.0,
-                };
-                self.bridge
-                    .set_crossfade_change(crate::playback_settings::CrossfadeChange::Length(next));
-            }
-            SettingsRowAction::Curve => {
-                let equal = self.settings.crossfade_curve != "linear";
-                self.bridge
-                    .set_crossfade_change(crate::playback_settings::CrossfadeChange::Curve(!equal));
-            }
-            SettingsRowAction::AlbumOnly => {
-                let enabled = !self.settings.crossfade_album_only;
-                self.bridge.set_crossfade_change(
-                    crate::playback_settings::CrossfadeChange::AlbumOnly(enabled),
-                );
-            }
             SettingsRowAction::Normalize => self.player.cycle_normalization(),
             SettingsRowAction::Eq => {
                 self.bridge.cycle_eq();

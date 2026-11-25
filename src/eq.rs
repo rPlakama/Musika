@@ -19,10 +19,10 @@
 //! Profiles live in `$XDG_CONFIG_HOME/musika/eqs/*.{txt,eq}` and are a safe
 //! subset of Equalizer APO's text format: a `Preamp:` line, parametric
 //! `Filter:` lines (PK/PEQ, LS, HS, LP, HP, BP, NO), and `GraphicEQ:` bands.
-//! Parsing is deliberately strict: a profile either produces a deterministic
-//! biquad chain or is rejected with the line number, never silently skipped.
+//! Parsing is deliberately strict: a profile either compiles cleanly into an
+//! MPV `lavfi` filter chain or is rejected with the line number, never
+//! silently skipped.
 
-use std::f64::consts::PI;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -108,8 +108,52 @@ impl EqProfile {
         })
     }
 
-    pub fn gain(&self) -> f32 {
-        10f64.powf(self.preamp_db / 20.0) as f32
+    /// Compiles this profile into an MPV `af` property value using FFmpeg's
+    /// `lavfi` audio filters (`lavfi=[...]`). Returns an empty string when the
+    /// profile is a no-op (zero preamp and no active filters).
+    pub fn to_mpv_af(&self) -> String {
+        let mut stages = Vec::with_capacity(self.filters.len() + 1);
+        if self.preamp_db.abs() >= 1e-4 {
+            stages.push(format!("volume={:.3}dB", self.preamp_db));
+        }
+        for filter in &self.filters {
+            let stage = match filter.kind {
+                FilterKind::Peak => format!(
+                    "equalizer=f={:.3}:width_type=q:w={:.4}:g={:.3}",
+                    filter.freq, filter.q, filter.gain_db
+                ),
+                FilterKind::LowShelf => format!(
+                    "lowshelf=f={:.3}:width_type=q:w={:.4}:g={:.3}",
+                    filter.freq, filter.q, filter.gain_db
+                ),
+                FilterKind::HighShelf => format!(
+                    "highshelf=f={:.3}:width_type=q:w={:.4}:g={:.3}",
+                    filter.freq, filter.q, filter.gain_db
+                ),
+                FilterKind::LowPass => format!(
+                    "lowpass=f={:.3}:width_type=q:w={:.4}",
+                    filter.freq, filter.q
+                ),
+                FilterKind::HighPass => format!(
+                    "highpass=f={:.3}:width_type=q:w={:.4}",
+                    filter.freq, filter.q
+                ),
+                FilterKind::BandPass => format!(
+                    "bandpass=f={:.3}:width_type=q:w={:.4}",
+                    filter.freq, filter.q
+                ),
+                FilterKind::Notch => format!(
+                    "bandreject=f={:.3}:width_type=q:w={:.4}",
+                    filter.freq, filter.q
+                ),
+            };
+            stages.push(stage);
+        }
+        if stages.is_empty() {
+            String::new()
+        } else {
+            format!("lavfi=[{}]", stages.join(","))
+        }
     }
 }
 
@@ -321,260 +365,38 @@ fn is_profile_path(path: &Path) -> bool {
         })
 }
 
-/// Normalized biquad coefficients.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Biquad {
-    pub(crate) b0: f64,
-    pub(crate) b1: f64,
-    pub(crate) b2: f64,
-    pub(crate) a1: f64,
-    pub(crate) a2: f64,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct BiquadState {
-    x1: f64,
-    x2: f64,
-    y1: f64,
-    y2: f64,
-}
-
-impl BiquadState {
-    pub(crate) fn process(&mut self, biquad: &Biquad, x: f64) -> f64 {
-        let y = biquad.b0 * x + biquad.b1 * self.x1 + biquad.b2 * self.x2
-            - biquad.a1 * self.y1
-            - biquad.a2 * self.y2;
-        let y = if y.abs() < 1e-18 { 0.0 } else { y };
-        self.x2 = self.x1;
-        self.x1 = x;
-        self.y2 = self.y1;
-        self.y1 = y;
-        y
-    }
-}
-
-/// A profile compiled for one sample rate and channel count.
-#[derive(Debug, Clone)]
-pub struct EqRuntime {
-    preamp: f32,
-    biquads: Vec<Biquad>,
-    states: Vec<Vec<BiquadState>>,
-    channels: usize,
-}
-
-impl EqRuntime {
-    pub fn new(profile: std::sync::Arc<EqProfile>, sample_rate: u32, channels: usize) -> Self {
-        let preamp = profile.gain();
-        let biquads = profile
-            .filters
-            .iter()
-            .map(|filter| biquad_for(filter, f64::from(sample_rate.max(1))))
-            .collect();
-        let states = vec![vec![BiquadState::default(); channels]; profile.filters.len()];
-        Self {
-            preamp,
-            biquads,
-            states,
-            channels,
-        }
-    }
-
-    /// Applies the chain to interleaved F32 PCM.
-    pub fn process(&mut self, pcm: &mut [f32], frames: usize) {
-        if self.biquads.is_empty() && (self.preamp - 1.0).abs() < 1e-6 {
-            return;
-        }
-        let channels = self.channels.max(1);
-        let frames = frames.min(pcm.len() / channels);
-        let preamp = f64::from(self.preamp);
-        for frame in 0..frames {
-            for channel in 0..channels {
-                let index = frame * channels + channel;
-                let mut sample = f64::from(pcm[index]) * preamp;
-                for (biquad, states) in self.biquads.iter().zip(self.states.iter_mut()) {
-                    sample = states[channel].process(biquad, sample);
-                }
-                pcm[index] = sample as f32;
-            }
-        }
-    }
-}
-
-pub(crate) fn biquad_for(filter: &EqFilter, sample_rate: f64) -> Biquad {
-    let freq = filter.freq.clamp(1.0, sample_rate * 0.49);
-    let omega = 2.0 * PI * freq / sample_rate;
-    let sin = omega.sin();
-    let cos = omega.cos();
-    let q = filter.q.max(MIN_Q);
-    let alpha = sin / (2.0 * q);
-    let a = 10f64.powf(filter.gain_db / 40.0);
-    let (mut b0, mut b1, mut b2, a0, mut a1, mut a2) = match filter.kind {
-        FilterKind::Peak => (
-            1.0 + alpha * a,
-            -2.0 * cos,
-            1.0 - alpha * a,
-            1.0 + alpha / a,
-            -2.0 * cos,
-            1.0 - alpha / a,
-        ),
-        FilterKind::LowShelf => {
-            let beta = 2.0 * a.sqrt() * alpha;
-            (
-                a * ((a + 1.0) - (a - 1.0) * cos + beta),
-                2.0 * a * ((a - 1.0) - (a + 1.0) * cos),
-                a * ((a + 1.0) - (a - 1.0) * cos - beta),
-                (a + 1.0) + (a - 1.0) * cos + beta,
-                -2.0 * ((a - 1.0) + (a + 1.0) * cos),
-                (a + 1.0) + (a - 1.0) * cos - beta,
-            )
-        }
-        FilterKind::HighShelf => {
-            let beta = 2.0 * a.sqrt() * alpha;
-            (
-                a * ((a + 1.0) + (a - 1.0) * cos + beta),
-                -2.0 * a * ((a - 1.0) + (a + 1.0) * cos),
-                a * ((a + 1.0) + (a - 1.0) * cos - beta),
-                (a + 1.0) - (a - 1.0) * cos + beta,
-                2.0 * ((a - 1.0) - (a + 1.0) * cos),
-                (a + 1.0) - (a - 1.0) * cos - beta,
-            )
-        }
-        FilterKind::LowPass => (
-            (1.0 - cos) / 2.0,
-            1.0 - cos,
-            (1.0 - cos) / 2.0,
-            1.0 + alpha,
-            -2.0 * cos,
-            1.0 - alpha,
-        ),
-        FilterKind::HighPass => (
-            (1.0 + cos) / 2.0,
-            -(1.0 + cos),
-            (1.0 + cos) / 2.0,
-            1.0 + alpha,
-            -2.0 * cos,
-            1.0 - alpha,
-        ),
-        FilterKind::BandPass => (alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),
-        FilterKind::Notch => (1.0, -2.0 * cos, 1.0, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),
-    };
-    if a0.abs() < f64::EPSILON {
-        return Biquad {
-            b0: 1.0,
-            b1: 0.0,
-            b2: 0.0,
-            a1: 0.0,
-            a2: 0.0,
-        };
-    }
-    b0 /= a0;
-    b1 /= a0;
-    b2 /= a0;
-    a1 /= a0;
-    a2 /= a0;
-    Biquad { b0, b1, b2, a1, a2 }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn low_shelf_and_high_shelf_match_rbj_cookbook_dc_and_nyquist_gain() {
-        let fs = 48_000.0;
-        let f0 = fs / 6.0; // 8 kHz: omega = pi/3, so alpha is large and 2*sqrt(A)*alpha != 2*sqrt(2*sqrt(A)*alpha)
-        let gain_db = 12.0;
-        let q = std::f64::consts::FRAC_1_SQRT_2;
+    fn to_mpv_af_compiles_preamp_and_all_filter_kinds() {
+        let profile = EqProfile::parse(
+            "Full",
+            "Preamp: -4.5 dB\n\
+             Filter: ON PK Fc 1000 Hz Gain 3.0 dB Q 1.41\n\
+             Filter: ON LS Fc 80 Hz Gain 4.0 dB Q 0.707\n\
+             Filter: ON HS Fc 8000 Hz Gain -2.0 dB Q 0.707\n\
+             Filter: ON LP Fc 16000 Hz Q 0.707\n\
+             Filter: ON HP Fc 30 Hz Q 0.707\n\
+             Filter: ON BP Fc 500 Hz Q 2.0\n\
+             Filter: ON NO Fc 60 Hz Q 8.0\n",
+        )
+        .expect("parse full eq");
+        let af = profile.to_mpv_af();
+        assert!(af.starts_with("lavfi=[") && af.ends_with(']'), "af={af}");
+        assert!(af.contains("volume=-4.500dB"), "af={af}");
+        assert!(af.contains("equalizer=f=1000.000:width_type=q:w=1.4100:g=3.000"));
+        assert!(af.contains("lowshelf=f=80.000:width_type=q:w=0.7070:g=4.000"));
+        assert!(af.contains("highshelf=f=8000.000:width_type=q:w=0.7070:g=-2.000"));
+        assert!(af.contains("lowpass=f=16000.000:width_type=q:w=0.7070"));
+        assert!(af.contains("highpass=f=30.000:width_type=q:w=0.7070"));
+        assert!(af.contains("bandpass=f=500.000:width_type=q:w=2.0000"));
+        assert!(af.contains("bandreject=f=60.000:width_type=q:w=8.0000"));
 
-        let omega = 2.0 * PI * f0 / fs;
-        let sin = omega.sin();
-        let cos = omega.cos();
-        let alpha = sin / (2.0 * q);
-        let a = 10f64.powf(gain_db / 40.0);
-        let beta = 2.0 * a.sqrt() * alpha;
-        let linear_gain = 10f64.powf(gain_db / 20.0);
-
-        // LowShelf exact RBJ cookbook coefficients
-        let ls = biquad_for(
-            &EqFilter {
-                kind: FilterKind::LowShelf,
-                freq: f0,
-                gain_db,
-                q,
-            },
-            fs,
-        );
-        let ls_a0 = (a + 1.0) + (a - 1.0) * cos + beta;
-        let expected_ls = Biquad {
-            b0: (a * ((a + 1.0) - (a - 1.0) * cos + beta)) / ls_a0,
-            b1: (2.0 * a * ((a - 1.0) - (a + 1.0) * cos)) / ls_a0,
-            b2: (a * ((a + 1.0) - (a - 1.0) * cos - beta)) / ls_a0,
-            a1: (-2.0 * ((a - 1.0) + (a + 1.0) * cos)) / ls_a0,
-            a2: ((a + 1.0) + (a - 1.0) * cos - beta) / ls_a0,
-        };
-        assert!((ls.b0 - expected_ls.b0).abs() < 1e-12);
-        assert!((ls.b1 - expected_ls.b1).abs() < 1e-12);
-        assert!((ls.b2 - expected_ls.b2).abs() < 1e-12);
-        assert!((ls.a1 - expected_ls.a1).abs() < 1e-12);
-        assert!((ls.a2 - expected_ls.a2).abs() < 1e-12);
-
-        // LowShelf DC gain (z = 1) is linear_gain, Nyquist gain (z = -1) is 1.0
-        let ls_dc = (ls.b0 + ls.b1 + ls.b2) / (1.0 + ls.a1 + ls.a2);
-        let ls_nyquist = (ls.b0 - ls.b1 + ls.b2) / (1.0 - ls.a1 + ls.a2);
-        assert!(
-            (ls_dc - linear_gain).abs() < 1e-12,
-            "ls_dc={ls_dc}, expected={linear_gain}"
-        );
-        assert!((ls_nyquist - 1.0).abs() < 1e-12, "ls_nyquist={ls_nyquist}");
-
-        // HighShelf exact RBJ cookbook coefficients
-        let hs = biquad_for(
-            &EqFilter {
-                kind: FilterKind::HighShelf,
-                freq: f0,
-                gain_db,
-                q,
-            },
-            fs,
-        );
-        let hs_a0 = (a + 1.0) - (a - 1.0) * cos + beta;
-        let expected_hs = Biquad {
-            b0: (a * ((a + 1.0) + (a - 1.0) * cos + beta)) / hs_a0,
-            b1: (-2.0 * a * ((a - 1.0) + (a + 1.0) * cos)) / hs_a0,
-            b2: (a * ((a + 1.0) + (a - 1.0) * cos - beta)) / hs_a0,
-            a1: (2.0 * ((a - 1.0) - (a + 1.0) * cos)) / hs_a0,
-            a2: ((a + 1.0) - (a - 1.0) * cos - beta) / hs_a0,
-        };
-        assert!((hs.b0 - expected_hs.b0).abs() < 1e-12);
-        assert!((hs.b1 - expected_hs.b1).abs() < 1e-12);
-        assert!((hs.b2 - expected_hs.b2).abs() < 1e-12);
-        assert!((hs.a1 - expected_hs.a1).abs() < 1e-12);
-        assert!((hs.a2 - expected_hs.a2).abs() < 1e-12);
-
-        // HighShelf DC gain (z = 1) is 1.0, Nyquist gain (z = -1) is linear_gain
-        let hs_dc = (hs.b0 + hs.b1 + hs.b2) / (1.0 + hs.a1 + hs.a2);
-        let hs_nyquist = (hs.b0 - hs.b1 + hs.b2) / (1.0 - hs.a1 + hs.a2);
-        assert!((hs_dc - 1.0).abs() < 1e-12, "hs_dc={hs_dc}");
-        assert!(
-            (hs_nyquist - linear_gain).abs() < 1e-12,
-            "hs_nyquist={hs_nyquist}, expected={linear_gain}"
-        );
-
-        // Time-domain steady-state DC and Nyquist responses + denormal flushing
-        let mut ls_state = BiquadState::default();
-        let mut hs_state = BiquadState::default();
-        let mut ls_out = 0.0;
-        let mut hs_out = 0.0;
-        for _ in 0..512 {
-            ls_out = ls_state.process(&ls, 1.0);
-            hs_out = hs_state.process(&hs, 1.0);
-        }
-        assert!((ls_out - linear_gain).abs() < 1e-9);
-        assert!((hs_out - 1.0).abs() < 1e-9);
-
-        let mut denorm_state = BiquadState::default();
-        assert_eq!(denorm_state.process(&ls, 1e-20), 0.0);
-        assert_eq!(denorm_state.y1, 0.0);
+        let flat = EqProfile::parse("Flat", "Preamp: 0 dB\nFilter: OFF PK Fc 1000 Hz Gain 3 dB\n")
+            .expect("parse flat eq");
+        assert!(flat.to_mpv_af().is_empty());
     }
 
     #[test]

@@ -422,12 +422,11 @@ impl Bridge {
         });
     }
 
-    /// UI request: enumerate the PipeWire sinks. Discovery blocks on a short
-    /// private PipeWire connection, so it runs on the blocking pool.
+    /// UI request: enumerate the available audio output devices.
     pub fn request_output_devices(&self) {
         let tx = self.tx.clone();
         crate::app::runtime().spawn(async move {
-            let result = tokio::task::spawn_blocking(crate::player::pipewire::list_output_devices)
+            let result = tokio::task::spawn_blocking(crate::player::list_output_devices)
                 .await
                 .unwrap_or_else(|error| Err(format!("output discovery task: {error}")));
             match result {
@@ -483,13 +482,6 @@ impl Bridge {
 
     pub fn settings_changed(&self, settings: crate::playback_settings::PlaybackSettings) {
         _ = self.tx.send(Event::Settings(Box::new(settings)));
-    }
-
-    /// UI request: change one crossfade field.
-    pub fn set_crossfade_change(&self, change: crate::playback_settings::CrossfadeChange) {
-        self.send_playback(crate::daemon::playback::PlaybackInput::SetCrossfadeConfig(
-            change,
-        ));
     }
 
     /// UI request: change exclusive/bit-perfect output mode.

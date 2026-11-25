@@ -72,7 +72,7 @@ pub enum Event {
     },
     /// Core answer: the available PipeWire output sinks.
     OutputDevices {
-        devices: Vec<crate::player::pipewire::OutputDevice>,
+        devices: Vec<crate::player::OutputDevice>,
     },
     /// Core answer: the active EQ profile (`None` = off).
     EqChanged(Option<String>),
@@ -442,7 +442,7 @@ mod serde_tests {
             Event::Connection { online: false },
             Event::SyncPaused,
             Event::OutputDevices {
-                devices: vec![crate::player::pipewire::OutputDevice {
+                devices: vec![crate::player::OutputDevice {
                     id: "sink.one".to_string(),
                     label: "Sink One".to_string(),
                 }],

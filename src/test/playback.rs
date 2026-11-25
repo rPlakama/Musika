@@ -123,10 +123,9 @@ fn load_starts_playing_and_resets_repeat() {
 }
 
 #[test]
-fn normalization_and_crossfade_commands_reach_the_engine_and_snapshot() {
+fn normalization_commands_reach_the_engine_and_snapshot() {
     let mut core = PlaybackCore::new();
     assert_eq!(core.normalization(), Normalization::Off);
-    assert!(!core.crossfade());
 
     let outcome = core.apply(CoreCommand::CycleNormalization);
     assert_eq!(core.normalization(), Normalization::Track);
@@ -138,33 +137,17 @@ fn normalization_and_crossfade_commands_reach_the_engine_and_snapshot() {
     assert!(outcome.changed);
     let snapshot = core.snapshot(1, 0);
     assert_eq!(snapshot.normalization_code(), 1);
-    assert!(!snapshot.crossfade());
 
     let outcome = core.apply(CoreCommand::CycleNormalization);
     assert_eq!(core.normalization(), Normalization::Album);
     assert!(outcome.changed);
     assert_eq!(core.snapshot(2, 0).normalization_code(), 2);
 
-    let outcome = core.apply(CoreCommand::ToggleCrossfade);
-    assert!(core.crossfade());
-    assert!(outcome.audio.iter().any(|command| matches!(
-        command,
-        AudioCommand::SetCrossfadeConfig(config) if config.enabled
-    )));
-    let snapshot = core.snapshot(3, 0);
-    assert!(snapshot.crossfade());
-    assert_eq!(snapshot.normalization_code(), 2);
-
     let sync = core.audio_sync();
     assert!(sync.contains(&AudioCommand::SetNormalization(Normalization::Album)));
-    assert!(sync.iter().any(|command| matches!(
-        command,
-        AudioCommand::SetCrossfadeConfig(config) if config.enabled
-    )));
 
     // Explicit setters are idempotent and only mark the state changed when the
-    // mode actually moves (the text `crossfade on|off` / `normalize album`
-    // commands map here).
+    // mode actually moves (`normalize album` maps here).
     let outcome = core.apply(CoreCommand::SetNormalization(Normalization::Album));
     assert!(!outcome.changed);
     let outcome = core.apply(CoreCommand::SetNormalization(Normalization::Off));
@@ -175,15 +158,6 @@ fn normalization_and_crossfade_commands_reach_the_engine_and_snapshot() {
             .audio
             .contains(&AudioCommand::SetNormalization(Normalization::Off))
     );
-    let outcome = core.apply(CoreCommand::SetCrossfade(true));
-    assert!(!outcome.changed);
-    let outcome = core.apply(CoreCommand::SetCrossfade(false));
-    assert!(outcome.changed);
-    assert!(!core.crossfade());
-    assert!(outcome.audio.iter().any(|command| matches!(
-        command,
-        AudioCommand::SetCrossfadeConfig(config) if !config.enabled
-    )));
 }
 
 #[test]
@@ -665,8 +639,8 @@ fn missing_output_target_falls_back_only_for_an_absent_pipewire_node() {
     use crate::daemon::playback::{fall_back_to_default_output, selected_output_missing};
     use crate::playback_settings::{OutputBackend, PlaybackSettings};
 
-    let devices = vec![crate::player::pipewire::OutputDevice {
-        id: "sink.one".to_string(),
+    let devices = vec![crate::player::OutputDevice {
+        id: "pipewire/sink.one".to_string(),
         label: "One".to_string(),
     }];
     let selected = |device: Option<&str>, follow_default: bool| PlaybackSettings {
@@ -1690,53 +1664,6 @@ fn drain_events(
 
 #[test]
 #[ignore = "requires a running PipeWire session"]
-fn engine_crossfade_reports_the_next_track_offset() {
-    use crate::player::engine::Engine;
-    let (first_path, first_url) = wav_url("crossfade-a", 48_000 * 7);
-    let (second_path, second_url) = wav_url("crossfade-b", 48_000 * 10);
-    let (event_tx, event_rx) = std::sync::mpsc::channel();
-    let events: crate::player::engine::EventSink =
-        std::sync::Arc::new(move |event| event_tx.send(event).is_ok());
-    let engine = Engine::new(events).expect("PipeWire engine");
-    engine.send(AudioCommand::SetCrossfade(true));
-    engine.send(AudioCommand::Load {
-        url: first_url,
-        next_url: Some(second_url),
-        paused: false,
-        generation: 1,
-    });
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    let mut boundary = None;
-    while std::time::Instant::now() < deadline {
-        match event_rx.recv_timeout(std::time::Duration::from_millis(100)) {
-            Ok(EngineEvent::Boundary {
-                position, duration, ..
-            }) => {
-                boundary = Some((position, duration));
-                break;
-            }
-            Ok(EngineEvent::Failed { error }) => panic!("crossfade failed: {error}"),
-            Ok(_) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-    let (position, duration) = boundary.expect("crossfade boundary did not arrive");
-    assert!(
-        position > 1.0,
-        "crossfade should start the next row several seconds in, got {position}"
-    );
-    assert!(
-        (duration - 10.0).abs() < 0.5,
-        "boundary must describe the next row, got {duration}"
-    );
-    engine.shutdown();
-    _ = std::fs::remove_file(first_path);
-    _ = std::fs::remove_file(second_path);
-}
-
-#[test]
-#[ignore = "requires a running PipeWire session"]
 fn engine_pause_resume_keeps_progress_and_shuts_down() {
     use crate::player::engine::Engine;
     let (path, url) = wav_url("pause", 96_000 * 30);
@@ -1812,12 +1739,12 @@ fn engine_pause_resume_keeps_progress_and_shuts_down() {
 
 #[test]
 #[ignore = "requires a running PipeWire session"]
-fn native_can_be_rebuilt_cleanly() {
-    use crate::player::pipewire::Native;
+fn mpv_transport_can_be_rebuilt_cleanly() {
+    use crate::player::mpv::MpvTransport;
     for _ in 0..3 {
-        let native = Native::new().expect("PipeWire native");
+        let transport = MpvTransport::new().expect("MPV transport");
         std::thread::sleep(std::time::Duration::from_millis(50));
-        drop(native);
+        drop(transport);
     }
 }
 
@@ -1948,7 +1875,7 @@ fn retry_backoff_is_bounded_and_transport_actions_cancel_it() {
     assert!(cancels_retry(&CoreCommand::Pause));
     assert!(!cancels_retry(&CoreCommand::SetVolume(50.0)));
     assert!(!cancels_retry(&CoreCommand::SetMuted(true)));
-    assert!(!cancels_retry(&CoreCommand::ToggleCrossfade));
+    assert!(!cancels_retry(&CoreCommand::CycleNormalization));
 }
 
 #[test]
@@ -1995,66 +1922,6 @@ fn sleep_fade_curve_reaches_zero_without_overshooting() {
     assert!((original_fade_volume(80.0, 5.0, 5.0)).abs() < f64::EPSILON);
     assert!((original_fade_volume(80.0, 9.0, 5.0)).abs() < f64::EPSILON);
     assert!((original_fade_volume(500.0, 0.0, 5.0) - 100.0).abs() < f64::EPSILON);
-}
-
-#[test]
-fn crossfade_config_respects_album_only_and_publishes_the_allowed_flag() {
-    use crate::player::CrossfadeConfig;
-
-    let mut first = track("0", 100.0);
-    first.album_id = "album-a".to_string();
-    let mut second = track("1", 100.0);
-    second.album_id = "album-a".to_string();
-    let mut other = track("2", 100.0);
-    other.album_id = "album-b".to_string();
-
-    let config = CrossfadeConfig {
-        enabled: true,
-        seconds: 3.0,
-        equal_power: true,
-        album_only: true,
-    };
-
-    let mut core = PlaybackCore::new();
-    core.load(vec![first, second], 0, false);
-    let outcome = core.apply(CoreCommand::SetCrossfadeConfig(config));
-    assert!(core.crossfade());
-    assert!(outcome.changed);
-    assert!(
-        outcome
-            .audio
-            .iter()
-            .any(|command| matches!(command, AudioCommand::SetCrossfadeAllowed(true)))
-    );
-    assert!(outcome.audio.iter().any(|command| matches!(
-        command,
-        AudioCommand::SetCrossfadeConfig(config) if config.seconds == 3.0 && config.equal_power
-    )));
-
-    core.load(vec![other, track("3", 100.0)], 0, false);
-    let outcome = core.apply(CoreCommand::SetCrossfadeConfig(config));
-    assert!(
-        outcome
-            .audio
-            .iter()
-            .any(|command| matches!(command, AudioCommand::SetCrossfadeAllowed(false))),
-        "different albums must not crossfade"
-    );
-}
-
-#[test]
-fn crossfade_curves_are_complementary_and_power_preserving() {
-    let (out, next) = crate::player::crossfade_gains(0.0, true);
-    assert!((out - 1.0).abs() < 1e-6 && next.abs() < 1e-6);
-    let (out, next) = crate::player::crossfade_gains(1.0, true);
-    assert!(out.abs() < 1e-6 && (next - 1.0).abs() < 1e-6);
-    for step in 0..=10 {
-        let progress = step as f32 / 10.0;
-        let (out, next) = crate::player::crossfade_gains(progress, true);
-        assert!((out * out + next * next - 1.0).abs() < 1e-5);
-        let (out, next) = crate::player::crossfade_gains(progress, false);
-        assert!((out + next - 1.0).abs() < 1e-6);
-    }
 }
 
 #[test]
@@ -2174,4 +2041,332 @@ fn snapshot_freezes_playhead_while_loading_and_mid_track_buffering() {
     assert_eq!(after.rate_milli, 1000);
     assert!((after.position_at(14 * SECOND) - 3.0).abs() < 1e-6);
     assert!((after.position_at(16 * SECOND) - 5.0).abs() < 1e-6);
+}
+
+// ---------------------------------------------------------------------------
+// MPV transport mock-socket & headless integration tests
+// ---------------------------------------------------------------------------
+
+mod mpv_integration {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+    use std::sync::{Arc, mpsc};
+    use std::time::{Duration, Instant};
+
+    use serde_json::{Value, json};
+
+    use crate::eq::EqProfile;
+    use crate::player::Normalization;
+    use crate::player::engine::{AudioCommand, Engine, EngineEvent, EventSink};
+    use crate::player::error::ErrorKind;
+    use crate::player::mpv::MpvTransport;
+    use crate::player::mpv::protocol::{
+        MpvLaunchConfig, PROP_AUDIO_DEVICE_LIST, PROP_DURATION, PROP_FILE_SIZE,
+        PROP_PAUSED_FOR_CACHE, PROP_SAMPLE_RATE, PROP_SEEKABLE, PROP_TIME_POS,
+    };
+
+    fn read_command(reader: &mut BufReader<UnixStream>) -> Value {
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read mock mpv command");
+        serde_json::from_str(line.trim()).expect("valid json command")
+    }
+
+    fn drain_initial_subscriptions(reader: &mut BufReader<UnixStream>) {
+        // 1 request_log_messages + 11 observe_property commands.
+        for _ in 0..12 {
+            let cmd = read_command(reader);
+            assert!(cmd.get("command").is_some(), "expected command: {cmd}");
+        }
+    }
+
+    fn send_json(writer: &mut UnixStream, value: Value) {
+        let mut line = value.to_string();
+        line.push('\n');
+        writer.write_all(line.as_bytes()).expect("write mock event");
+        writer.flush().expect("flush mock event");
+    }
+
+    fn wait_event(rx: &mpsc::Receiver<EngineEvent>, pred: impl Fn(&EngineEvent) -> bool) -> EngineEvent {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(event) if pred(&event) => return event,
+                Ok(_) => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => panic!("engine event channel closed"),
+            }
+        }
+        panic!("timed out waiting for expected EngineEvent");
+    }
+
+    #[test]
+    fn mock_mpv_load_gapless_boundary_stale_stop_buffering_and_disconnect() {
+        let (client, server) = UnixStream::pair().expect("unix socket pair");
+        server
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .expect("read timeout");
+        let mut reader = BufReader::new(server.try_clone().expect("clone server"));
+        let mut writer = server;
+
+        let transport =
+            MpvTransport::from_test_stream(client, MpvLaunchConfig::default()).expect("transport");
+        drain_initial_subscriptions(&mut reader);
+
+        let (tx, rx) = mpsc::channel();
+        let sink: EventSink = Arc::new(move |event| tx.send(event).is_ok());
+        let engine = Engine::from_transport(transport, sink).expect("engine");
+
+        // 1. Load track A with gapless next track B.
+        engine.send(AudioCommand::Load {
+            url: "file:///a.flac".to_string(),
+            next_url: Some("file:///b.flac".to_string()),
+            paused: false,
+            generation: 1,
+        });
+        let pause_cmd = read_command(&mut reader);
+        assert_eq!(pause_cmd["command"], json!(["set_property", "pause", false]));
+        let load_a = read_command(&mut reader);
+        assert_eq!(load_a["command"], json!(["loadfile", "file:///a.flac", "replace"]));
+        let load_a_req = load_a["request_id"].as_u64().unwrap();
+        let load_b = read_command(&mut reader);
+        assert_eq!(load_b["command"], json!(["loadfile", "file:///b.flac", "append"]));
+        let load_b_req = load_b["request_id"].as_u64().unwrap();
+
+        // Reply with entry IDs 10 and 11; emit stale stop for entry 9 (must be ignored!).
+        send_json(&mut writer, json!({"request_id": load_a_req, "error": "success", "data": {"playlist_entry_id": 10}}));
+        send_json(&mut writer, json!({"request_id": load_b_req, "error": "success", "data": {"playlist_entry_id": 11}}));
+        send_json(&mut writer, json!({"event": "end-file", "reason": "error", "file_error": "stale", "playlist_entry_id": 9}));
+        send_json(&mut writer, json!({"event": "start-file", "playlist_entry_id": 10}));
+        send_json(&mut writer, json!({"event": "property-change", "id": PROP_DURATION, "data": 120.0}));
+        send_json(&mut writer, json!({"event": "property-change", "id": PROP_FILE_SIZE, "data": 4096}));
+        send_json(&mut writer, json!({"event": "property-change", "id": PROP_SEEKABLE, "data": true}));
+        send_json(&mut writer, json!({"event": "property-change", "id": PROP_SAMPLE_RATE, "data": 44100}));
+        send_json(&mut writer, json!({"event": "file-loaded"}));
+        send_json(&mut writer, json!({"event": "playback-restart"}));
+
+        let loaded = wait_event(&rx, |e| matches!(e, EngineEvent::Loaded { .. }));
+        assert_eq!(
+            loaded,
+            EngineEvent::Loaded {
+                duration: 120.0,
+                stream_size: 4096,
+                seekable: true,
+            }
+        );
+        wait_event(&rx, |e| matches!(e, EngineEvent::FirstPcm));
+        wait_event(&rx, |e| matches!(e, EngineEvent::LoadingCleared));
+
+        // 2. Buffering pause/resume increments underruns and emits Buffering(true/false).
+        send_json(&mut writer, json!({"event": "property-change", "id": PROP_PAUSED_FOR_CACHE, "data": true}));
+        wait_event(&rx, |e| matches!(e, EngineEvent::Buffering(true)));
+        send_json(&mut writer, json!({"event": "property-change", "id": PROP_PAUSED_FOR_CACHE, "data": false}));
+        wait_event(&rx, |e| matches!(e, EngineEvent::Buffering(false)));
+        send_json(&mut writer, json!({"event": "property-change", "id": PROP_TIME_POS, "data": 10.0}));
+        std::thread::sleep(Duration::from_millis(20));
+        let clock = engine.clock();
+        assert_eq!(clock.sample_rate, 44_100);
+        assert_eq!(clock.underruns, 1);
+        assert_eq!(clock.played_frames, 441_000);
+
+        // 3. Gapless handoff: EOF on 10 followed by start-file on 11 emits Boundary (not Ended!)
+        //    and trims playlist index 0.
+        send_json(&mut writer, json!({"event": "end-file", "reason": "eof", "playlist_entry_id": 10}));
+        send_json(&mut writer, json!({"event": "start-file", "playlist_entry_id": 11}));
+        send_json(&mut writer, json!({"event": "property-change", "id": PROP_DURATION, "data": 95.5}));
+        send_json(&mut writer, json!({"event": "property-change", "id": PROP_FILE_SIZE, "data": 8192}));
+        send_json(&mut writer, json!({"event": "file-loaded"}));
+
+        let boundary = wait_event(&rx, |e| matches!(e, EngineEvent::Boundary { .. }));
+        assert_eq!(
+            boundary,
+            EngineEvent::Boundary {
+                duration: 95.5,
+                stream_size: 8192,
+                position: 0.0,
+            }
+        );
+        let remove_cmd = read_command(&mut reader);
+        assert_eq!(remove_cmd["command"], json!(["playlist-remove", 0]));
+
+        // 4. Final track reaches EOF with no queued next item -> Ended.
+        send_json(&mut writer, json!({"event": "end-file", "reason": "eof", "playlist_entry_id": 11}));
+        wait_event(&rx, |e| matches!(e, EngineEvent::Ended));
+
+        // 5. Unexpected mpv crash / socket close -> SinkFailed.
+        drop(reader);
+        drop(writer);
+        wait_event(&rx, |e| matches!(e, EngineEvent::SinkFailed { .. }));
+
+        engine.shutdown();
+    }
+
+    #[test]
+    fn mock_mpv_classifies_log_enriched_errors_unplug_fallback_and_bitperfect() {
+        let (client, server) = UnixStream::pair().expect("unix socket pair");
+        server
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .expect("read timeout");
+        let mut reader = BufReader::new(server.try_clone().expect("clone server"));
+        let mut writer = server;
+
+        let config = MpvLaunchConfig {
+            output_device: Some("sink.usb".to_string()),
+            ..MpvLaunchConfig::default()
+        };
+        let transport = MpvTransport::from_test_stream(client, config).expect("transport");
+        drain_initial_subscriptions(&mut reader);
+
+        let (tx, rx) = mpsc::channel();
+        let sink: EventSink = Arc::new(move |event| tx.send(event).is_ok());
+        let engine = Engine::from_transport(transport, sink).expect("engine");
+
+        // 1. Generic "loading failed" enriched by preceding log-message -> ErrorKind::Auth.
+        engine.send(AudioCommand::Load {
+            url: "https://server/rest/stream?id=1".to_string(),
+            next_url: None,
+            paused: false,
+            generation: 1,
+        });
+        let _ = read_command(&mut reader); // pause
+        let load = read_command(&mut reader);
+        let load_req = load["request_id"].as_u64().unwrap();
+        send_json(&mut writer, json!({"request_id": load_req, "error": "success", "data": {"playlist_entry_id": 20}}));
+        send_json(&mut writer, json!({
+            "event": "log-message",
+            "prefix": "ffmpeg",
+            "level": "error",
+            "text": "https: Server returned 401 Unauthorized\n"
+        }));
+        send_json(&mut writer, json!({
+            "event": "end-file",
+            "reason": "error",
+            "file_error": "loading failed",
+            "playlist_entry_id": 20
+        }));
+        let failed = wait_event(&rx, |e| matches!(e, EngineEvent::Failed { .. }));
+        let EngineEvent::Failed { error } = failed else {
+            panic!("unexpected: {failed:?}");
+        };
+        assert_eq!(error.kind, ErrorKind::Auth);
+        assert!(!error.retryable());
+
+        // 2. Disappeared pinned output device triggers auto fallback + OutputFallback.
+        send_json(&mut writer, json!({
+            "event": "property-change",
+            "id": PROP_AUDIO_DEVICE_LIST,
+            "data": [
+                {"name": "auto", "description": "Autoselect"},
+                {"name": "pipewire/sink.builtin", "description": "Built-in"}
+            ]
+        }));
+        let fallback = wait_event(&rx, |e| matches!(e, EngineEvent::OutputFallback { .. }));
+        assert_eq!(
+            fallback,
+            EngineEvent::OutputFallback {
+                target: "sink.usb".to_string()
+            }
+        );
+        let auto_cmd = read_command(&mut reader);
+        assert_eq!(
+            auto_cmd["command"],
+            json!(["set_property", "audio-device", "auto"])
+        );
+
+        // 3. Bit-perfect mode clears EQ (`af`), ReplayGain (`replaygain`), and sample rate.
+        let eq = Arc::new(
+            EqProfile::parse("Bass", "Preamp: -2 dB\nFilter: ON PK Fc 100 Hz Gain 4 dB Q 1.0\n")
+                .unwrap(),
+        );
+        engine.send(AudioCommand::SetNormalization(Normalization::Track));
+        for _ in 0..3 {
+            let _ = read_command(&mut reader);
+        }
+        engine.send(AudioCommand::SetEq(Some(eq)));
+        let rg = read_command(&mut reader);
+        let af = read_command(&mut reader);
+        let sr = read_command(&mut reader);
+        assert_eq!(rg["command"], json!(["set_property", "replaygain", "track"]));
+        assert!(af["command"][2].as_str().unwrap().starts_with("lavfi=["));
+        assert_eq!(sr["command"], json!(["set_property", "audio-samplerate", 0]));
+
+        engine.send(AudioCommand::SetBitPerfect(true));
+        let rg_bp = read_command(&mut reader);
+        let af_bp = read_command(&mut reader);
+        let sr_bp = read_command(&mut reader);
+        assert_eq!(rg_bp["command"], json!(["set_property", "replaygain", "no"]));
+        assert_eq!(af_bp["command"], json!(["set_property", "af", ""]));
+        assert_eq!(sr_bp["command"], json!(["set_property", "audio-samplerate", 0]));
+
+        engine.shutdown();
+    }
+
+    #[test]
+    fn real_headless_mpv_plays_gapless_wavs_seeks_and_shuts_down() {
+        let (path_a, url_a) = super::wav_url("mpv-headless-a", 48_000);
+        let (path_b, url_b) = super::wav_url("mpv-headless-b", 48_000);
+
+        let config = MpvLaunchConfig {
+            ao_override: Some("null".to_string()),
+            ..MpvLaunchConfig::default()
+        };
+        let transport = MpvTransport::with_config(config)
+            .expect("real mpv binary must be available on PATH or MUSIKA_MPV_BIN");
+        let (tx, rx) = mpsc::channel();
+        let sink: EventSink = Arc::new(move |event| tx.send(event).is_ok());
+        let engine = Engine::from_transport(transport, sink).expect("headless mpv engine");
+
+        engine.send(AudioCommand::Load {
+            url: url_a,
+            next_url: Some(url_b),
+            paused: false,
+            generation: 1,
+        });
+
+        let mut saw_loaded = false;
+        let mut saw_duration = false;
+        let mut saw_first_pcm = false;
+        let mut saw_boundary = false;
+        let mut saw_ended = false;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline && !saw_ended {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(EngineEvent::Loaded { duration, .. }) => {
+                    saw_loaded = true;
+                    if (duration - 1.0).abs() < 0.2 {
+                        saw_duration = true;
+                    }
+                }
+                Ok(EngineEvent::FirstPcm) => {
+                    saw_first_pcm = true;
+                    engine.send(AudioCommand::Pause);
+                    engine.send(AudioCommand::Resume);
+                }
+                Ok(EngineEvent::Boundary { .. }) => {
+                    saw_boundary = true;
+                }
+                Ok(EngineEvent::Ended) => {
+                    saw_ended = true;
+                }
+                Ok(EngineEvent::Failed { error }) => {
+                    panic!("headless mpv failed: {error}");
+                }
+                Ok(EngineEvent::SinkFailed { message }) => {
+                    panic!("headless mpv sink failed: {message}");
+                }
+                Ok(_) => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        engine.shutdown();
+        _ = std::fs::remove_file(path_a);
+        _ = std::fs::remove_file(path_b);
+
+        assert!(saw_loaded, "expected Loaded event from real mpv");
+        assert!(saw_duration, "expected ~1.0s duration update from real mpv");
+        assert!(saw_first_pcm, "expected FirstPcm event from real mpv");
+        assert!(saw_boundary, "expected gapless Boundary event from real mpv");
+        assert!(saw_ended, "expected Ended event after second WAV");
+    }
 }

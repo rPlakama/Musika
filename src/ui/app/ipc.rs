@@ -54,12 +54,10 @@ impl AppRoot {
                 PlayerOp::SeekRelative(offset) => self.player.seek_relative(offset),
                 PlayerOp::CycleRepeat => self.player.cycle_repeat(),
                 PlayerOp::CycleNormalization => self.player.cycle_normalization(),
-                PlayerOp::ToggleCrossfade => self.player.toggle_crossfade(),
                 PlayerOp::SetNormalization(code) => {
                     self.player
                         .set_normalization(crate::player::Normalization::from_code(code));
                 }
-                PlayerOp::SetCrossfade(enabled) => self.player.set_crossfade(enabled),
                 PlayerOp::ShuffleQueue => self.player.shuffle_queue(),
                 PlayerOp::ShuffleQueueOrder => self.player.shuffle_queue_order(),
                 PlayerOp::SetMuted(_)
@@ -77,7 +75,7 @@ impl AppRoot {
             return;
         }
         match command {
-            IpcCommand::Crossfade(_) | IpcCommand::Normalize(_) => {
+            IpcCommand::Normalize(_) => {
                 unreachable!("IPC playback mapping returned a playback op")
             }
             IpcCommand::OutputBackend { backend, device } => {
@@ -88,9 +86,6 @@ impl AppRoot {
                 bit_perfect,
             } => {
                 self.bridge.set_output_mode(exclusive, bit_perfect);
-            }
-            IpcCommand::CrossfadeConfig(change) => {
-                self.bridge.set_crossfade_change(change);
             }
             IpcCommand::EqNext => {
                 // Mirror the daemon's core-bridge handling locally so a typed

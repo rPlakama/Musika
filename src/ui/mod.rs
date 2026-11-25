@@ -124,7 +124,6 @@ actions!(
         PasteBelow,
         PasteAbove,
         RepeatCycle,
-        CrossfadeToggle,
         NormalizationCycle,
         EqCycle,
         SettingsOverlay,
@@ -154,7 +153,6 @@ pub fn run() {
                 KeyBinding::new("ctrl-shift-k", QueueUp, Some("main")),
                 KeyBinding::new("ctrl-shift-j", QueueDown, Some("main")),
                 KeyBinding::new("ctrl-r", RepeatCycle, Some("main")),
-                KeyBinding::new("ctrl-f", CrossfadeToggle, Some("main")),
                 KeyBinding::new("ctrl-shift-n", NormalizationCycle, Some("main")),
                 KeyBinding::new("ctrl-e", EqCycle, Some("main")),
                 KeyBinding::new("ctrl-,", SettingsOverlay, Some("main")),
@@ -1328,23 +1326,12 @@ impl AppRoot {
                             // the anchor carries the position between them.
                             let was_seeded = this.state_seeded;
                             let old_normalization = this.player.normalization();
-                            let old_crossfade = this.player.crossfade();
                             this.player.apply_state(state);
                             this.state_seeded = true;
                             this.repeat = this.player.repeat();
                             this.clamp_queue();
                             this.drain_resync();
                             this.sync_mute_toast(this.player.muted());
-                            if was_seeded && this.player.crossfade() != old_crossfade {
-                                this.push_toast(
-                                    if this.player.crossfade() {
-                                        "Crossfade on".to_string()
-                                    } else {
-                                        "Crossfade off".to_string()
-                                    },
-                                    None,
-                                );
-                            }
                             if was_seeded && this.player.normalization() != old_normalization {
                                 this.push_toast(
                                     format!(

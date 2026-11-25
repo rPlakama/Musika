@@ -85,21 +85,6 @@ pub struct PlaybackError {
 }
 
 impl PlaybackError {
-    #[cfg_attr(
-        not(feature = "alsa-backend"),
-        expect(
-            dead_code,
-            reason = "only the direct-ALSA sink constructs structured playback errors"
-        )
-    )]
-    pub fn new(kind: ErrorKind, stage: ErrorStage, message: impl Into<String>) -> Self {
-        Self {
-            kind,
-            stage,
-            message: message.into(),
-        }
-    }
-
     /// Classifies a decoder/worker message by stage. The message itself is
     /// preserved verbatim for diagnostics and the final toast.
     pub fn classify(stage: ErrorStage, message: impl Into<String>) -> Self {
@@ -197,9 +182,11 @@ fn classify_kind(message: &str) -> ErrorKind {
         || lower.contains("name or service not known")
         || lower.contains("temporary failure in name resolution")
         || lower.contains("could not resolve")
+        || lower.contains("failed to resolve")
         || lower.contains("connection reset")
         || lower.contains("broken pipe")
         || lower.contains("remote end closed")
+        || lower.contains("tls fatal alert")
     {
         return ErrorKind::Network;
     }
@@ -208,6 +195,9 @@ fn classify_kind(message: &str) -> ErrorKind {
     }
     if lower.contains("invalid data")
         || lower.contains("could not find codec")
+        || lower.contains("could not open codec")
+        || lower.contains("file format not recognized")
+        || lower.contains("failed to recognize file format")
         || lower.contains("decoder:")
         || lower.contains("codec")
         || lower.contains("malformed")
@@ -216,6 +206,9 @@ fn classify_kind(message: &str) -> ErrorKind {
     }
     if lower.contains("no such device")
         || lower.contains("device busy")
+        || lower.contains("could not open/initialize audio device")
+        || lower.contains("audio output")
+        || lower.contains("ao/")
         || lower.contains("pipewire")
         || lower.contains("alsa")
     {

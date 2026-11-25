@@ -7,7 +7,7 @@
 use std::fmt;
 
 use crate::bridge::SyncMode;
-use crate::playback_settings::{CrossfadeChange, OutputBackend, StreamChange};
+use crate::playback_settings::{OutputBackend, StreamChange};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum WipeScope {
@@ -28,14 +28,6 @@ pub enum QuickDirection {
 pub enum TrackCommand {
     Next,
     Previous,
-}
-
-/// Three-state crossfade control for the text/IPC command surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CrossfadeCommand {
-    Toggle,
-    On,
-    Off,
 }
 
 /// Loudness-normalization control for the text/IPC command surface.
@@ -135,7 +127,6 @@ pub enum IpcCommand {
     PasteAbove,
     DeleteRow,
     RepeatCycle,
-    Crossfade(CrossfadeCommand),
     Normalize(NormalizeCommand),
     ToggleFullscreen,
     LyricsOverlay,
@@ -211,8 +202,6 @@ pub enum IpcCommand {
     Scrobble(bool),
     /// Cycle the EQ profile through OFF.
     EqNext,
-    /// Change the crossfade length/curve/album-only gate.
-    CrossfadeConfig(CrossfadeChange),
 }
 
 /// Where a command must run in the core/UI split. The classification is
@@ -251,7 +240,6 @@ impl IpcCommand {
             | Self::Seek(_)
             | Self::SeekRelative(_)
             | Self::RepeatCycle
-            | Self::Crossfade(_)
             | Self::Normalize(_)
             | Self::ShuffleMode { .. } => T::CorePlayback,
             // `shuffle queue` is playback; album/artist shuffles build a queue
@@ -288,8 +276,7 @@ impl IpcCommand {
             | Self::ColorSaturation(_)
             | Self::Sleep(_)
             | Self::Scrobble(_)
-            | Self::EqNext
-            | Self::CrossfadeConfig(_) => T::CoreBridge,
+            | Self::EqNext => T::CoreBridge,
 
             // Read-only telemetry.
             Self::Status | Self::QueueQuery | Self::OutputList => T::Query,
@@ -382,11 +369,6 @@ impl IpcCommand {
             I::SeekForward => P::SeekRelative(5.0),
             I::SeekRelative(offset) => P::SeekRelative(*offset),
             I::RepeatCycle => P::CycleRepeat,
-            I::Crossfade(crossfade) => match crossfade {
-                CrossfadeCommand::Toggle => P::ToggleCrossfade,
-                CrossfadeCommand::On => P::SetCrossfade(true),
-                CrossfadeCommand::Off => P::SetCrossfade(false),
-            },
             I::Normalize(normalize) => match normalize {
                 NormalizeCommand::Cycle => P::CycleNormalization,
                 NormalizeCommand::Off => {
@@ -974,12 +956,6 @@ pub const COMMANDS: &[CommandSpec] = &[
         form: CommandForm::Bare(IpcCommand::RepeatCycle),
     },
     CommandSpec {
-        name: "crossfade",
-        usage: "crossfade [on|off|length <seconds>|curve <equal|linear>|album <on|off>]",
-        description: "Toggle the crossfade or set its length, curve and album-only gate",
-        form: CommandForm::Advanced(ArgHints::Values(&["on", "off", "length", "curve", "album"])),
-    },
-    CommandSpec {
         name: "normalize",
         usage: "normalize [off|track|album]",
         description: "Cycle or set ReplayGain loudness normalization",
@@ -1325,38 +1301,6 @@ pub fn parse(input: &str) -> Result<IpcCommand, CommandError> {
 /// numbers, quoted targets and the playlist/download/radio sub-grammars.
 fn advanced_parse(name: &str, rest: &str, usage: &str) -> Result<IpcCommand, CommandError> {
     match name {
-        "crossfade" => match split_quoted_args(rest)?.as_slice() {
-            [] => Ok(IpcCommand::Crossfade(CrossfadeCommand::Toggle)),
-            [value] if value == "on" => Ok(IpcCommand::Crossfade(CrossfadeCommand::On)),
-            [value] if value == "off" => Ok(IpcCommand::Crossfade(CrossfadeCommand::Off)),
-            [value] if value == "toggle" => Ok(IpcCommand::Crossfade(CrossfadeCommand::Toggle)),
-            [what, value] if what == "length" => Ok(IpcCommand::CrossfadeConfig(
-                CrossfadeChange::Length(parse_number(value, "seconds")?),
-            )),
-            [what, value] if what == "curve" => match value.as_str() {
-                "equal" | "equal-power" => {
-                    Ok(IpcCommand::CrossfadeConfig(CrossfadeChange::Curve(true)))
-                }
-                "linear" => Ok(IpcCommand::CrossfadeConfig(CrossfadeChange::Curve(false))),
-                _ => Err(CommandError(
-                    "usage: crossfade curve <equal|linear>".to_string(),
-                )),
-            },
-            [what, value] if what == "album" => match value.as_str() {
-                "on" | "true" => Ok(IpcCommand::CrossfadeConfig(CrossfadeChange::AlbumOnly(
-                    true,
-                ))),
-                "off" | "false" => Ok(IpcCommand::CrossfadeConfig(CrossfadeChange::AlbumOnly(
-                    false,
-                ))),
-                _ => Err(CommandError("usage: crossfade album <on|off>".to_string())),
-            },
-            _ => Err(CommandError(
-                "usage: crossfade [on|off|length <s>|curve <equal|linear>|album <on|off>]"
-                    .to_string(),
-            )),
-        },
-
         "playlist" => parse_playlist(rest),
 
         "shuffle" => match split_quoted_args(rest)?.as_slice() {
@@ -2155,22 +2099,6 @@ fn advanced_canonical(command: &IpcCommand) -> String {
 
         OutputBackend { .. } => "output".to_string(),
 
-        Crossfade(CrossfadeCommand::Toggle) => "crossfade".to_string(),
-        Crossfade(CrossfadeCommand::On) => "crossfade on".to_string(),
-        Crossfade(CrossfadeCommand::Off) => "crossfade off".to_string(),
-
-        CrossfadeConfig(CrossfadeChange::Length(seconds)) => {
-            format!("crossfade length {seconds}")
-        }
-
-        CrossfadeConfig(CrossfadeChange::Curve(true)) => "crossfade curve equal".to_string(),
-
-        CrossfadeConfig(CrossfadeChange::Curve(false)) => "crossfade curve linear".to_string(),
-
-        CrossfadeConfig(CrossfadeChange::AlbumOnly(enabled)) => {
-            format!("crossfade album {}", if *enabled { "on" } else { "off" })
-        }
-
         Stream(StreamChange::Quality(bitrate)) => format!("stream quality {bitrate}"),
 
         Stream(StreamChange::Format(Some(format))) => {
@@ -2686,31 +2614,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_crossfade_configuration() {
-        use crate::playback_settings::CrossfadeChange;
-
-        assert_eq!(
-            parse("crossfade length 7"),
-            Ok(IpcCommand::CrossfadeConfig(CrossfadeChange::Length(7.0)))
-        );
-        assert_eq!(
-            parse("crossfade curve linear"),
-            Ok(IpcCommand::CrossfadeConfig(CrossfadeChange::Curve(false)))
-        );
-        assert_eq!(
-            parse("crossfade album on"),
-            Ok(IpcCommand::CrossfadeConfig(CrossfadeChange::AlbumOnly(
-                true
-            )))
-        );
-        assert!(parse("crossfade curve maybe").is_err());
-        assert_eq!(
-            canonical_string(&IpcCommand::CrossfadeConfig(CrossfadeChange::Length(7.0))),
-            "crossfade length 7"
-        );
-    }
-
-    #[test]
     fn parses_eq_cycle_command() {
         assert_eq!(parse("eq next"), Ok(IpcCommand::EqNext));
         assert!(parse("eq").is_err());
@@ -2759,10 +2662,6 @@ mod tests {
             assert!(
                 parse(&format!("mpris_position:{bad}")).is_err(),
                 "mpris_position:{bad}"
-            );
-            assert!(
-                parse(&format!("crossfade length {bad}")).is_err(),
-                "crossfade length {bad}"
             );
             assert!(
                 parse(&format!("colors contrast {bad}")).is_err(),
@@ -3573,9 +3472,6 @@ mod tests {
             "paste_above",
             "delete_row",
             "repeat_cycle",
-            "crossfade",
-            "crossfade on",
-            "crossfade off",
             "eq next",
             "normalize",
             "normalize off",
@@ -3634,19 +3530,7 @@ mod tests {
     }
 
     #[test]
-    fn crossfade_and_normalize_commands_are_core_playback() {
-        assert_eq!(
-            parse("crossfade").unwrap(),
-            IpcCommand::Crossfade(CrossfadeCommand::Toggle)
-        );
-        assert_eq!(
-            parse("crossfade off").unwrap(),
-            IpcCommand::Crossfade(CrossfadeCommand::Off)
-        );
-        assert_eq!(
-            canonical_string(&parse("crossfade on").unwrap()),
-            "crossfade on"
-        );
+    fn normalize_commands_are_core_playback() {
         assert_eq!(
             parse("normalize").unwrap(),
             IpcCommand::Normalize(NormalizeCommand::Cycle)
@@ -3659,15 +3543,11 @@ mod tests {
             canonical_string(&parse("normalize track").unwrap()),
             "normalize track"
         );
-        for sample in ["crossfade", "normalize album"] {
-            assert_eq!(
-                parse(sample).unwrap().target(),
-                CommandTarget::CorePlayback,
-                "{sample}"
-            );
-        }
+        assert_eq!(
+            parse("normalize album").unwrap().target(),
+            CommandTarget::CorePlayback
+        );
         assert!(parse("normalize loud").is_err());
-        assert!(parse("crossfade maybe").is_err());
     }
 
     #[test]

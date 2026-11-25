@@ -276,23 +276,20 @@ mod gpuui {
     }
 
     #[test]
-    fn state_carries_normalization_and_crossfade_modes() {
+    fn state_carries_normalization_mode() {
         use crate::player::Normalization;
         let mut view = PlaybackView::new();
         assert_eq!(view.normalization(), Normalization::Off);
-        assert!(!view.crossfade());
         view.apply_state(PlaybackState {
-            reserved: 2 | crate::ipc_protocol::RESERVED_CROSSFADE,
+            reserved: 2,
             ..PlaybackState::default()
         });
         assert_eq!(view.normalization(), Normalization::Album);
-        assert!(view.crossfade());
         view.apply_state(PlaybackState {
             reserved: 1,
             ..PlaybackState::default()
         });
         assert_eq!(view.normalization(), Normalization::Track);
-        assert!(!view.crossfade());
     }
 
     #[test]

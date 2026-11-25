@@ -16,7 +16,6 @@ pub(in crate::ui) struct TopBarInfo {
     pub output: String,
     pub codec: String,
     pub bitrate: String,
-    pub crossfade: bool,
     pub normalization: bool,
     pub equalizer: bool,
     pub favorite: bool,
@@ -26,8 +25,7 @@ pub(in crate::ui) struct TopBarInfo {
 
 impl TopBarInfo {
     fn has_insights(&self) -> bool {
-        self.crossfade
-            || self.normalization
+        self.normalization
             || self.equalizer
             || self.favorite
             || self.downloaded
@@ -802,7 +800,6 @@ impl AppRoot {
         };
         let insights = TopBarInfo {
             output,
-            crossfade: self.player.crossfade(),
             normalization: self.player.normalization().enabled(),
             equalizer: self.eq_profile.is_some(),
             ..TopBarInfo::default()
@@ -852,13 +849,6 @@ impl AppRoot {
     fn top_bar_insights_view(&self, info: &TopBarInfo) -> gpui::AnyElement {
         let m = self.top_bar_metrics();
         let mut row = div().flex().flex_none().items_center().gap(px(m.gap * 0.5));
-        if info.crossfade {
-            row = row.child(self.top_bar_insight_slot(icon(
-                "transition-fade-sharp.svg",
-                m.insight_icon,
-                palette::primary(),
-            )));
-        }
         if info.normalization {
             row = row.child(
                 self.top_bar_insight_slot(
@@ -1257,16 +1247,9 @@ impl AppRoot {
                                         .child(repeat_label(self.repeat)),
                                 )
                             })
-                            // The player bar keeps crossfade/EQ left of the
-                            // volume meter; normalization lives in the top bar
-                            // so the same N is not painted twice.
-                            .when(self.player.crossfade(), |this| {
-                                this.child(div().flex_none().flex().items_center().child(icon(
-                                    "transition-fade-sharp.svg",
-                                    m.eq_icon,
-                                    palette::primary(),
-                                )))
-                            })
+                            // The player bar keeps EQ left of the volume
+                            // meter; normalization lives in the top bar so
+                            // the same N is not painted twice.
                             .when_some(self.eq_profile.clone(), |this, _name| {
                                 this.child(
                                     div()
@@ -1508,10 +1491,6 @@ mod topbar_info_tests {
         assert!(info.output.is_empty() && info.codec.is_empty() && info.bitrate.is_empty());
         assert!(!info.has_insights());
         for info in [
-            TopBarInfo {
-                crossfade: true,
-                ..TopBarInfo::default()
-            },
             TopBarInfo {
                 normalization: true,
                 ..TopBarInfo::default()

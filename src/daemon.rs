@@ -933,7 +933,6 @@ fn query_json(snapshot: &Snapshot, command: &IpcCommand) -> String {
                 "muted": state.muted(),
                 "loading": state.loading(),
                 "normalization": state.normalization_code(),
-                "crossfade": state.crossfade(),
                 "engine_available": snapshot.engine_available,
                 "retrying": snapshot.retrying,
                 "retry_attempt": snapshot.retry_attempt,
@@ -968,10 +967,9 @@ fn query_json(snapshot: &Snapshot, command: &IpcCommand) -> String {
         }
         IpcCommand::OutputList => {
             // The text-socket dispatcher invokes this from a synchronous
-            // callback. The PipeWire probe blocks on a private connection, so
-            // it runs on the blocking pool; only this callback thread parks
-            // while the pool works (D-18).
-            let discover = crate::player::pipewire::list_output_devices;
+            // callback. Run output discovery on the blocking pool in case the
+            // cold fallback invokes `mpv --audio-device=help` (D-18).
+            let discover = crate::player::list_output_devices;
             let result = match tokio::runtime::Handle::try_current() {
                 Ok(handle)
                     if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread =>
@@ -1014,11 +1012,6 @@ fn dispatch_core_bridge(services: &Services, command: &IpcCommand) {
             let _ = services
                 .playback
                 .send(PlaybackInput::SetSleepTimer(*minutes));
-        }
-        IpcCommand::CrossfadeConfig(change) => {
-            let _ = services
-                .playback
-                .send(PlaybackInput::SetCrossfadeConfig(*change));
         }
         IpcCommand::EqNext => {
             let _ = services.playback.send(PlaybackInput::CycleEq);

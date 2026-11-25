@@ -34,9 +34,9 @@ jobs:
           workspaces: ". -> target"
           key: clippy-${{ hashFiles('Cargo.lock') }}
 
-      # The flake dev shell is the single source of truth for the PipeWire,
-      # FFmpeg, clang/bindgen and GPUI (wayland/vulkan/fontconfig) toolchain,
-      # so CI builds exactly the same dependency set as `nix develop`.
+      # The flake dev shell is the single source of truth for the audio-only
+      # mpv runtime and GPUI (wayland/vulkan/fontconfig) toolchain, so CI
+      # builds and tests exactly the same dependency set as `nix develop`.
       - name: Clippy (warnings are errors)
         env:
           XDG_CACHE_HOME: ${{ github.workspace }}/.nix-cache

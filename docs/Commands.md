@@ -61,7 +61,7 @@ printf 'queue\n' | nc -U ~/.config/musika/ipc.sock
 
 | Command | Answer (one JSON line) |
 | --- | --- |
-| `status` | `state` (`playing`/`paused`/`stopped`), `index`, `queue_rev`, `duration`, `position`, `volume`, `muted`, `loading`, `normalization` (0 off / 1 track / 2 album), `crossfade`, `engine_available`, `current` (`{id,title,artist,album}` or `null`), `last_error` |
+| `status` | `state` (`playing`/`paused`/`stopped`), `index`, `queue_rev`, `duration`, `position`, `volume`, `muted`, `loading`, `normalization` (0 off / 1 track / 2 album), `engine_available`, `current` (`{id,title,artist,album}` or `null`), `last_error` |
 | `queue` | `rev`, `index`, `len`, `ids` (queue ids in order) |
 
 Every other `ipc.sock` command stays fire-and-forget and writes no reply, which
@@ -103,7 +103,7 @@ mpris_position:5000000
 | --- | --- | --- |
 | `sync` | `sync [all|repair]` | Incremental sync by default; `all` performs the deep pass; `repair` rebuilds the search/library indexes. The first successful server ping after the app opens (or after a login) starts one incremental sync automatically. If the server goes away during a sync, the pass pauses and replays the same mode when connectivity returns. |
 | `refresh` | `refresh` | Start an incremental sync. |
-| `output` | `output <list\|default\|node-name\|exclusive <on\|off>\|bitperfect <on\|off>\|backend <pipewire\|alsa>\|alsa <device>>` | List PipeWire sinks, follow the default, target a named `node.name`, request exclusive access, bypass DSP, or select the direct ALSA backend/device; choices are persisted (backend changes apply at the next engine start). |
+| `output` | `output <list\|default\|device-name\|exclusive <on\|off>\|bitperfect <on\|off>\|backend <pipewire\|alsa>\|alsa <device>>` | List MPV audio devices, follow the default (`auto`), target a named device, request exclusive access, bypass DSP, or switch between MPV's PipeWire and ALSA backends live; choices are persisted. |
 | `colors` | `colors contrast <value>` or `colors saturation <value>` | Set the generated palette contrast offset (default `0.4`) or HCT chroma/saturation offset (default `0.0`). Both take `-1.0..=1.0`; `-1` removes contrast/chroma and `+1` is the maximum. In `Ctrl-,`, select **Palette contrast** or **Palette saturation** and use `h`/`l` for 0.1 steps; Enter cycles the signed range. |
 | `stream` | `stream <quality\|format\|cache\|size\|fixed> <value>` | Cap the stream bitrate, request a format, toggle the playback cache, set its size, or force one pipeline rate (`stream fixed 48000` / `off`) for gap-free rate changes. |
 | `sleep` | `sleep <minutes\|off>` | Fade out over five seconds and pause after N minutes; `sleep off` cancels. |
@@ -303,7 +303,6 @@ Rules:
 | `seek_forward` | `seek_forward` | Seek forward 5 seconds. |
 | `seek` | `seek <seconds>` | Seek to an absolute position. |
 | `seek_relative` | `seek_relative <±seconds>` | Seek relative to the playhead. |
-| `crossfade` | `crossfade [on\|off]` | Toggle or explicitly set the optional 5 s track crossfade. |
 | `normalize` | `normalize [off\|track\|album]` | Cycle or explicitly set ReplayGain loudness normalization (default off). |
 | `toggle_fullscreen` | `toggle_fullscreen` | Toggle fullscreen playback (`fullscreen`). |
 | `lyrics_overlay` | `lyrics_overlay` | Toggle the fullscreen lyrics overlay (`lyrics`). |

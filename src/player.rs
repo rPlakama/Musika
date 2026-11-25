@@ -14,12 +14,12 @@
 // You should have received a copy of the GNU General Public License
 // along with this program; if not, see <https://www.gnu.org/licenses/>.
 
-//! Playback model and native transport building blocks.
+//! Playback model and MPV transport building blocks.
 //!
-//! [`Track`], [`Repeat`] and [`State`] are the queue/transport vocabulary shared
-//! by the core, the engine and the IPC protocol. [`core`] owns the pure queue
-//! policy, [`engine`] owns the event-driven audio thread, and [`pipewire`]
-//! owns the libpipewire sink plus the FFmpeg decode workers.
+//! [`Track`], [`Repeat`], [`State`] and [`OutputDevice`] are the queue and
+//! transport vocabulary shared by the core, the engine and the IPC protocol.
+//! [`core`] owns the pure queue policy, [`engine`] owns the event-driven audio
+//! thread, and [`mpv`] owns the persistent headless `mpv` child process.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -27,13 +27,27 @@ use std::sync::{LazyLock, Mutex};
 pub(crate) mod core;
 pub(crate) mod engine;
 pub(crate) mod error;
-pub(crate) mod pipewire;
+pub(crate) mod mpv;
 
 pub(crate) use error::{ErrorStage, PlaybackError};
 
+/// One audio output device that the transport may target.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OutputDevice {
+    /// Device identifier accepted by MPV (`pipewire/<node>`, `alsa/<dev>`, ...).
+    pub id: String,
+    /// Human-readable description for the picker/toast.
+    pub label: String,
+}
+
+/// Enumerates available audio output devices through the MPV transport.
+pub(crate) fn list_output_devices() -> Result<Vec<OutputDevice>, String> {
+    mpv::list_output_devices()
+}
+
 /// The transport is created once at startup, off the daemon's async runtime;
-/// the playback engine takes it from here instead of connecting PipeWire again.
-static WARM_NATIVE: LazyLock<Mutex<Option<Result<pipewire::Native, String>>>> =
+/// the playback engine takes it from here instead of spawning a second `mpv`.
+static WARM_NATIVE: LazyLock<Mutex<Option<Result<mpv::MpvTransport, String>>>> =
     LazyLock::new(|| Mutex::new(None));
 static WARM_STARTED: AtomicBool = AtomicBool::new(false);
 /// Set once the warm-up thread stored its result in `WARM_NATIVE`.
@@ -44,24 +58,24 @@ pub(crate) fn warm_native() {
         return;
     }
     std::thread::spawn(|| {
-        let native = pipewire::Native::new();
+        let transport = mpv::MpvTransport::new();
         *WARM_NATIVE
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(native);
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(transport);
         WARM_DONE.store(true, Ordering::SeqCst);
     });
 }
 
-/// True while the startup warm-up thread is still creating the transport.
+/// True while the startup warm-up thread is still starting the transport.
 ///
-/// The event-driven engine consumes the warm transport instead of connecting a
-/// second time; this predicate lets it wait for an in-flight warm-up rather
-/// than racing it (a second `Native` would leak an idle PipeWire stream).
+/// The event-driven engine consumes the warm transport instead of spawning a
+/// second `mpv` child; this predicate lets it wait for an in-flight warm-up
+/// rather than racing it.
 pub(crate) fn warm_native_pending() -> bool {
     WARM_STARTED.load(Ordering::SeqCst) && !WARM_DONE.load(Ordering::SeqCst)
 }
 
-pub(crate) fn take_warm_native() -> Option<Result<pipewire::Native, String>> {
+pub(crate) fn take_warm_native() -> Option<Result<mpv::MpvTransport, String>> {
     WARM_NATIVE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -107,57 +121,12 @@ pub struct PlaybackMetrics {
     pub retries: u64,
     /// Automatic resumes after a successful server health probe.
     pub reconnects: u64,
-    /// Engine rebuilds after a PipeWire stream failure.
+    /// Engine rebuilds after an MPV/output failure.
     pub sink_rebuilds: u64,
-    /// Frames queued in the PCM ring at the last published snapshot.
+    /// Estimated buffered audio frames reported by MPV's demuxer cache.
     pub buffered_frames: u64,
-    /// Frames the graph requested but the ring could not supply.
+    /// Mid-playback rebuffering stalls (`paused-for-cache`).
     pub underruns: u64,
-}
-
-/// Crossfade policy shared by core, engine and persisted settings.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct CrossfadeConfig {
-    pub enabled: bool,
-    /// Fade length in seconds (1..=12 when enabled).
-    pub seconds: f64,
-    /// Equal-power (`sin`/`cos`) instead of the legacy linear gains.
-    pub equal_power: bool,
-    /// Only crossfade adjacent rows from the same (non-empty) album.
-    pub album_only: bool,
-}
-
-impl Default for CrossfadeConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            seconds: Self::DEFAULT_SECONDS,
-            equal_power: true,
-            album_only: false,
-        }
-    }
-}
-
-impl CrossfadeConfig {
-    pub const MIN_SECONDS: f64 = 1.0;
-    pub const MAX_SECONDS: f64 = 12.0;
-    pub const DEFAULT_SECONDS: f64 = 5.0;
-
-    pub fn sanitized(mut self) -> Self {
-        if !self.seconds.is_finite() {
-            self.seconds = Self::DEFAULT_SECONDS;
-        }
-        self.seconds = self.seconds.clamp(Self::MIN_SECONDS, Self::MAX_SECONDS);
-        self
-    }
-
-    pub fn with_seconds(seconds: f64) -> Self {
-        Self {
-            seconds,
-            ..Self::default()
-        }
-        .sanitized()
-    }
 }
 
 /// The one user-facing message for a track the server was supposed to serve
@@ -165,18 +134,6 @@ impl CrossfadeConfig {
 /// Shared by the core decision and the daemon's toast so the wording cannot
 /// drift.
 pub(crate) const SERVER_UNAVAILABLE: &str = "Unable to play track, server unavailable";
-
-/// Complementary gains for one crossfade position. Equal-power keeps the
-/// summed power constant (`cos/sin`); the legacy curve is linear.
-pub(crate) fn crossfade_gains(progress: f32, equal_power: bool) -> (f32, f32) {
-    let progress = progress.clamp(0.0, 1.0);
-    if equal_power {
-        let angle = progress * std::f32::consts::FRAC_PI_2;
-        (angle.cos(), angle.sin())
-    } else {
-        (1.0 - progress, progress)
-    }
-}
 
 /// A queue row whose URL leaves the machine (the only rows that need a live
 /// server; downloaded blobs are `file://`).
@@ -237,6 +194,10 @@ impl Normalization {
         }
     }
 
+    #[cfg_attr(
+        not(feature = "gpuui"),
+        expect(dead_code, reason = "consumed by the GPUI front end")
+    )]
     pub fn enabled(self) -> bool {
         self != Self::Off
     }

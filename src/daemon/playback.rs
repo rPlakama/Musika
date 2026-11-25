@@ -150,14 +150,12 @@ pub(crate) enum PlaybackInput {
     SetScrobble(bool),
     /// Cycle `eqs/*.{txt,eq}` -> OFF -> first.
     CycleEq,
-    /// Change one crossfade field (length/curve/album-only).
-    SetCrossfadeConfig(crate::playback_settings::CrossfadeChange),
     /// Change exclusive / bit-perfect output.
     SetOutputMode {
         exclusive: Option<bool>,
         bit_perfect: Option<bool>,
     },
-    /// Select the backend/ALSA device for the next engine start.
+    /// Select the backend/ALSA device (rebuilds MPV live if running).
     SetOutputBackend {
         backend: Option<crate::playback_settings::OutputBackend>,
         device: Option<String>,
@@ -199,9 +197,6 @@ impl std::fmt::Debug for PlaybackInput {
             Self::SetSleepTimer(minutes) => write!(formatter, "SetSleepTimer({minutes:?})"),
             Self::SetScrobble(enabled) => write!(formatter, "SetScrobble({enabled})"),
             Self::CycleEq => write!(formatter, "CycleEq"),
-            Self::SetCrossfadeConfig(change) => {
-                write!(formatter, "SetCrossfadeConfig({change:?})")
-            }
             Self::SetOutputMode {
                 exclusive,
                 bit_perfect,
@@ -420,12 +415,12 @@ struct ServiceState {
     metrics: crate::player::PlaybackMetrics,
 }
 
-/// The selected PipeWire node when it is absent from a fresh registry
+/// The selected PipeWire node when it is absent from a fresh device
 /// snapshot. `None` means there is nothing to fall back from: already
 /// following the default, no explicit node, or another backend.
 pub(crate) fn selected_output_missing(
     settings: &crate::playback_settings::PlaybackSettings,
-    devices: &[crate::player::pipewire::OutputDevice],
+    devices: &[crate::player::OutputDevice],
 ) -> Option<String> {
     if settings.output_backend != crate::playback_settings::OutputBackend::Pipewire
         || settings.follow_default
@@ -436,14 +431,17 @@ pub(crate) fn selected_output_missing(
     if target.is_empty() {
         return None;
     }
-    (!devices.iter().any(|device| device.id == target)).then(|| target.to_string())
+    (!devices
+        .iter()
+        .any(|device| crate::player::mpv::protocol::device_id_matches(target, &device.id)))
+    .then(|| target.to_string())
 }
 
-/// Drops a selected PipeWire node that is absent from a registry snapshot and
+/// Drops a selected PipeWire node that is absent from a device snapshot and
 /// flips the settings to follow-default. Returns the missing node name.
 pub(crate) fn fall_back_to_default_output(
     settings: &mut crate::playback_settings::PlaybackSettings,
-    devices: &[crate::player::pipewire::OutputDevice],
+    devices: &[crate::player::OutputDevice],
 ) -> Option<String> {
     let target = selected_output_missing(settings, devices)?;
     settings.output_device = None;
@@ -452,7 +450,7 @@ pub(crate) fn fall_back_to_default_output(
 }
 
 impl ServiceState {
-    /// Device name the stream should target; `None` follows PipeWire's default.
+    /// Device name the stream should target; `None` follows the default (`auto`).
     fn output_target(&self) -> Option<String> {
         if self.settings.follow_default {
             None
@@ -461,16 +459,16 @@ impl ServiceState {
         }
     }
 
-    /// Drops a selected PipeWire node that disappeared from the registry and
-    /// returns to the default sink. A failed registry query is not evidence
-    /// that the node is gone, so the selection is kept in that case.
+    /// Drops a selected PipeWire node that disappeared from MPV's device list
+    /// and returns to the default sink. A failed probe is not evidence that the
+    /// node is gone, so the selection is kept in that case.
     fn fallback_from_missing_output(&mut self) -> bool {
         if self.settings.follow_default
             || self.settings.output_backend != crate::playback_settings::OutputBackend::Pipewire
         {
             return false;
         }
-        let Ok(devices) = crate::player::pipewire::list_output_devices() else {
+        let Ok(devices) = crate::player::list_output_devices() else {
             return false;
         };
         let Some(target) = fall_back_to_default_output(&mut self.settings, &devices) else {
@@ -483,13 +481,18 @@ impl ServiceState {
         true
     }
 
-    /// Applies the current output target to the live engine. A later engine
-    /// creation applies it in `ensure_engine`.
+    /// Applies the current output target, exclusive/bit-perfect flags and
+    /// fixed sample-rate preference to the live engine.
     fn apply_output_target(&self) {
         if let Some(engine) = self.engine.as_ref() {
             engine.send(AudioCommand::SetOutputTarget(self.output_target()));
             engine.send(AudioCommand::SetExclusive(self.settings.exclusive));
             engine.send(AudioCommand::SetBitPerfect(self.settings.bit_perfect));
+            let fixed_rate = self
+                .settings
+                .fixed_pipeline_rate
+                .then_some(self.settings.fixed_pipeline_hz);
+            engine.send(AudioCommand::SetSampleRate(fixed_rate));
         }
     }
 
@@ -1012,9 +1015,6 @@ fn run(
                     service
                         .core
                         .apply(CoreCommand::SetNormalization(normalization)),
-                    service.core.apply(CoreCommand::SetCrossfadeConfig(
-                        service.settings.crossfade_config(),
-                    )),
                 ] {
                     outcome.audio.extend(extra.audio);
                     outcome.changed |= extra.changed;
@@ -1040,8 +1040,13 @@ fn run(
                 force = true;
             }
             Some(ServiceInput::Command(PlaybackInput::ApplyStreamChange(change))) => {
+                let fixed_changed =
+                    matches!(change, crate::playback_settings::StreamChange::FixedRate(_));
                 change.apply(&mut service.settings);
                 crate::playback_settings::install(&service.settings);
+                if fixed_changed {
+                    service.apply_output_target();
+                }
                 capture_settings(&mut service);
                 force = true;
             }
@@ -1077,13 +1082,30 @@ fn run(
                 force = true;
             }
             Some(ServiceInput::Command(PlaybackInput::SetOutputBackend { backend, device })) => {
-                if let Some(backend) = backend {
+                let mut changed = false;
+                if let Some(backend) = backend
+                    && service.settings.output_backend != backend
+                {
                     service.settings.output_backend = backend;
+                    changed = true;
                 }
-                if let Some(device) = device {
+                if let Some(device) = device
+                    && service.settings.alsa_device != device
+                {
                     service.settings.alsa_device = device;
+                    changed = true;
                 }
                 capture_settings(&mut service);
+                if changed && service.engine.is_some() {
+                    let position = service.core.position_at(crate::linux::monotonic_ns());
+                    service.drop_engine();
+                    service.last_engine_attempt = None;
+                    if service.ensure_engine() {
+                        service.sync_audio();
+                        let outcome = service.core.apply(CoreCommand::Recover { position });
+                        apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
+                    }
+                }
                 force = true;
             }
             Some(ServiceInput::Command(PlaybackInput::SetOutputMode {
@@ -1097,14 +1119,6 @@ fn run(
                     service.settings.bit_perfect = bit_perfect;
                 }
                 service.apply_output_target();
-                capture_settings(&mut service);
-                force = true;
-            }
-            Some(ServiceInput::Command(PlaybackInput::SetCrossfadeConfig(change))) => {
-                change.apply(&mut service.settings);
-                let config = service.settings.crossfade_config();
-                let outcome = service.core.apply(CoreCommand::SetCrossfadeConfig(config));
-                apply_outcome(&service, &outcome, &mut force, &mut queue_reset);
                 capture_settings(&mut service);
                 force = true;
             }
@@ -1204,7 +1218,7 @@ fn run(
                             let resumed = if fallback {
                                 "Default output restored; playback resumed"
                             } else {
-                                "PipeWire restarted; playback resumed"
+                                "Audio engine restarted; playback resumed"
                             };
                             _ = service
                                 .outputs
@@ -1218,7 +1232,6 @@ fn run(
                 | EngineEvent::Boundary { .. }
                 | EngineEvent::Ended
                 | EngineEvent::Failed { .. }
-                | EngineEvent::SinkRecovered
                 | EngineEvent::LoadingCleared
                 | EngineEvent::Buffering(_)
                 | EngineEvent::PositionReset { .. }) => {
@@ -1228,7 +1241,7 @@ fn run(
                     let boundary = matches!(event, EngineEvent::Boundary { .. });
                     let ended = matches!(event, EngineEvent::Ended);
                     let entering_buffer = matches!(event, EngineEvent::Buffering(true));
-                    if healthy || matches!(event, EngineEvent::SinkRecovered) {
+                    if healthy {
                         service.sink_failures = 0;
                     }
                     let failure = if let EngineEvent::Failed { error } = &event {
@@ -1385,9 +1398,6 @@ fn is_setting_command(command: &CoreCommand) -> bool {
             | CoreCommand::SetShuffle(_)
             | CoreCommand::CycleNormalization
             | CoreCommand::SetNormalization(_)
-            | CoreCommand::ToggleCrossfade
-            | CoreCommand::SetCrossfade(_)
-            | CoreCommand::SetCrossfadeConfig(_)
     )
 }
 
@@ -1396,15 +1406,6 @@ fn is_setting_command(command: &CoreCommand) -> bool {
 fn capture_settings(service: &mut ServiceState) {
     service.settings.repeat = service.core.repeat().code();
     service.settings.normalization = service.core.normalization().code();
-    service.settings.crossfade = service.core.crossfade();
-    let crossfade = service.core.crossfade_config();
-    service.settings.crossfade_seconds = crossfade.seconds;
-    service.settings.crossfade_curve = if crossfade.equal_power {
-        "equal-power".to_string()
-    } else {
-        "linear".to_string()
-    };
-    service.settings.crossfade_album_only = crossfade.album_only;
     service.settings.shuffle = service.core.shuffle();
     crate::playback_settings::install(&service.settings);
     _ = service
@@ -1646,11 +1647,9 @@ fn core_command(op: &PlayerOp) -> Option<CoreCommand> {
         },
         P::CycleRepeat => CoreCommand::CycleRepeat,
         P::CycleNormalization => CoreCommand::CycleNormalization,
-        P::ToggleCrossfade => CoreCommand::ToggleCrossfade,
         P::SetNormalization(code) => {
             CoreCommand::SetNormalization(crate::player::Normalization::from_code(*code))
         }
-        P::SetCrossfade(enabled) => CoreCommand::SetCrossfade(*enabled),
         P::ShuffleQueue => CoreCommand::ShuffleQueue,
         P::ShuffleQueueOrder => CoreCommand::ShuffleQueueOrder(crate::consts::now_nanos()),
         P::SetTrackFavorite { id, favorite } => CoreCommand::SetTrackFavorite {

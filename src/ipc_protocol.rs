@@ -49,7 +49,7 @@ use crate::bridge::Event;
 use crate::player::{Repeat, State, Track};
 
 /// Wire protocol version. Bumped whenever a message layout changes.
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
 
 /// Largest accepted frame. The queue row chunks are sized well below this.
 pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
@@ -487,12 +487,8 @@ pub enum PlayerOp {
     },
     /// Cycle the ReplayGain normalization mode (off -> track -> album).
     CycleNormalization,
-    /// Toggle optional crossfade between tracks.
-    ToggleCrossfade,
     /// Set the normalization mode by code (0 off, 1 track, 2 album).
     SetNormalization(u8),
-    /// Enable/disable crossfade explicitly.
-    SetCrossfade(bool),
     /// Ask the core to replay the playback state and the queue rows.
     Resync,
 }
@@ -530,9 +526,7 @@ impl PlayerOp {
             Self::SetTrackFavorite { .. } => 20,
             Self::Resync => 21,
             Self::CycleNormalization => 22,
-            Self::ToggleCrossfade => 23,
             Self::SetNormalization(_) => 24,
-            Self::SetCrossfade(_) => 25,
             Self::ShuffleQueueOrder => 26,
         }
     }
@@ -570,10 +564,8 @@ pub struct PlaybackState {
     pub reserved: u16,
 }
 
-/// `PlaybackState::reserved` layout: bits 0-1 ReplayGain normalization mode,
-/// bit 2 crossfade enabled.
+/// `PlaybackState::reserved` layout: bits 0-1 ReplayGain normalization mode.
 pub const RESERVED_NORMALIZATION_MASK: u16 = 0b11;
-pub const RESERVED_CROSSFADE: u16 = 1 << 2;
 
 pub const STATE_FLAG_MUTED: u32 = 1 << 0;
 pub const STATE_FLAG_LOADING: u32 = 1 << 1;
@@ -626,10 +618,6 @@ impl PlaybackState {
     /// ReplayGain mode code (0 off, 1 track, 2 album).
     pub fn normalization_code(&self) -> u8 {
         (self.reserved & RESERVED_NORMALIZATION_MASK) as u8
-    }
-
-    pub fn crossfade(&self) -> bool {
-        self.reserved & RESERVED_CROSSFADE != 0
     }
 
     pub fn position(&self) -> f64 {
@@ -1134,10 +1122,8 @@ impl PlayerRequest {
             | PlayerOp::ShuffleQueue
             | PlayerOp::ShuffleQueueOrder
             | PlayerOp::CycleNormalization
-            | PlayerOp::ToggleCrossfade
             | PlayerOp::Resync => {}
             PlayerOp::SetNormalization(code) => w.u8(*code),
-            PlayerOp::SetCrossfade(enabled) => w.u8(u8::from(*enabled)),
         }
         Ok(w.0)
     }
@@ -1186,9 +1172,7 @@ impl PlayerRequest {
             },
             21 => PlayerOp::Resync,
             22 => PlayerOp::CycleNormalization,
-            23 => PlayerOp::ToggleCrossfade,
             24 => PlayerOp::SetNormalization(r.u8()?),
-            25 => PlayerOp::SetCrossfade(r.u8()? != 0),
             26 => PlayerOp::ShuffleQueueOrder,
             tag => {
                 return Err(ProtocolError::new(

@@ -18,9 +18,9 @@
 //!
 //! Volume, mute and the queue snapshot already live in `session_status`.
 //! This module owns the behaviour that is not per-track: repeat/shuffle,
-//! crossfade, normalization, the selected EQ profile, the output device and
-//! the stream quality/cache policy. One JSON document under one key keeps the
-//! schema change-free when a later phase adds a field.
+//! normalization, the selected EQ profile, the output device and the stream
+//! quality/cache policy. One JSON document under one key keeps the schema
+//! change-free when a later phase adds or retires a field.
 
 use std::sync::{OnceLock, RwLock};
 
@@ -65,18 +65,13 @@ pub struct PlaybackSettings {
     /// 0 off, 1 one, 2 all (`Repeat::code`).
     pub repeat: i64,
     pub shuffle: bool,
-    pub crossfade: bool,
-    pub crossfade_seconds: f64,
-    /// `equal-power` (default) or `linear`.
-    pub crossfade_curve: String,
-    pub crossfade_album_only: bool,
     /// 0 off, 1 track, 2 album (`Normalization::code`).
     pub normalization: u8,
     pub eq_profile: Option<String>,
     pub output_device: Option<String>,
     pub follow_default: bool,
     pub exclusive: bool,
-    /// `pipewire` (default) or the optional direct ALSA backend.
+    /// `pipewire` (default) or `alsa` (selected via MPV `--ao`).
     pub output_backend: OutputBackend,
     /// ALSA PCM device (`default`, `hw:0,0`, ...); ignored by PipeWire.
     pub alsa_device: String,
@@ -87,13 +82,12 @@ pub struct PlaybackSettings {
     pub stream_cache: bool,
     pub stream_cache_mib: u64,
     /// Resample every track to `fixed_pipeline_hz` instead of following native
-    /// rates. Opt-in: it removes rate-change gaps but sacrifices native-rate
-    /// playback/bit-perfect sourcing.
+    /// rates. Opt-in: forces MPV `--audio-samplerate`.
     pub fixed_pipeline_rate: bool,
     pub fixed_pipeline_hz: u32,
     /// Submit now-playing/completed plays to the server.
     pub scrobble: bool,
-    /// Bypass EQ, ReplayGain and crossfade (a best-effort bit-perfect path).
+    /// Bypass EQ, ReplayGain and fixed-rate resampling (best-effort bit-perfect).
     pub bit_perfect: bool,
     /// Material palette contrast offset (-1..=1). 0 is the spec baseline;
     /// the default 0.4 asks for roughly 40% more separation.
@@ -107,10 +101,6 @@ impl Default for PlaybackSettings {
         Self {
             repeat: 0,
             shuffle: false,
-            crossfade: false,
-            crossfade_seconds: crate::player::CrossfadeConfig::DEFAULT_SECONDS,
-            crossfade_curve: "equal-power".to_string(),
-            crossfade_album_only: false,
             normalization: 0,
             eq_profile: None,
             output_device: None,
@@ -128,34 +118,6 @@ impl Default for PlaybackSettings {
             bit_perfect: false,
             color_contrast: crate::colors::engine::DEFAULT_CONTRAST,
             color_saturation: 0.0,
-        }
-    }
-}
-
-/// One live crossfade-policy change from the command line/UI.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum CrossfadeChange {
-    Length(f64),
-    /// `true` = equal-power, `false` = legacy linear.
-    Curve(bool),
-    AlbumOnly(bool),
-}
-
-impl CrossfadeChange {
-    pub fn apply(self, settings: &mut PlaybackSettings) {
-        match self {
-            Self::Length(seconds) => {
-                settings.crossfade_seconds =
-                    crate::player::CrossfadeConfig::with_seconds(seconds).seconds;
-            }
-            Self::Curve(equal_power) => {
-                settings.crossfade_curve = if equal_power {
-                    "equal-power".to_string()
-                } else {
-                    "linear".to_string()
-                };
-            }
-            Self::AlbumOnly(enabled) => settings.crossfade_album_only = enabled,
         }
     }
 }
@@ -199,16 +161,6 @@ impl StreamChange {
 }
 
 impl PlaybackSettings {
-    pub fn crossfade_config(&self) -> crate::player::CrossfadeConfig {
-        crate::player::CrossfadeConfig {
-            enabled: self.crossfade,
-            seconds: self.crossfade_seconds,
-            equal_power: self.crossfade_curve != "linear",
-            album_only: self.crossfade_album_only,
-        }
-        .sanitized()
-    }
-
     fn clamp_stream_bitrate(bitrate: u32) -> u32 {
         bitrate.min(512)
     }
@@ -255,21 +207,6 @@ impl PlaybackSettings {
     pub fn sanitized(mut self) -> Self {
         self.repeat = self.repeat.clamp(0, 2);
         self.normalization = self.normalization.min(2);
-        let crossfade = crate::player::CrossfadeConfig {
-            enabled: self.crossfade,
-            seconds: self.crossfade_seconds,
-            equal_power: self.crossfade_curve != "linear",
-            album_only: self.crossfade_album_only,
-        }
-        .sanitized();
-        self.crossfade = crossfade.enabled;
-        self.crossfade_seconds = crossfade.seconds;
-        self.crossfade_curve = if crossfade.equal_power {
-            "equal-power".to_string()
-        } else {
-            "linear".to_string()
-        };
-        self.crossfade_album_only = crossfade.album_only;
         if self.alsa_device.trim().is_empty() {
             self.alsa_device = "default".to_string();
         }

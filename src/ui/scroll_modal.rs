@@ -179,6 +179,10 @@ impl ScrollModal {
             0.0
         };
         self.follow.start(current, target, now, duration);
+        if !animated && count > 0 {
+            self.handle
+                .scroll_to_item_strict(cursor.min(count - 1), gpui::ScrollStrategy::Center);
+        }
     }
 
     pub fn apply(&mut self, now: f64) -> bool {

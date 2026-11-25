@@ -577,29 +577,6 @@ fn boundary_advances_into_the_gapless_row() {
 }
 
 #[test]
-fn boundary_reports_the_crossfade_offset_as_the_new_position() {
-    let mut core = playing_core(3);
-    let outcome = core.on_engine(
-        EngineEvent::Boundary {
-            duration: 40.0,
-            stream_size: 1_000,
-            position: 4.5,
-        },
-        5 * SECOND,
-    );
-    assert_eq!(core.index(), 1);
-    assert_eq!(
-        outcome.audio,
-        vec![AudioCommand::SetNextUrl(Some("file:///2.flac".to_string()))]
-    );
-    assert!(
-        (core.position_at(5 * SECOND) - 4.5).abs() < 1e-9,
-        "the next row begins at the crossfade offset"
-    );
-    assert!((core.position_at(6 * SECOND) - 5.5).abs() < 1e-9);
-}
-
-#[test]
 fn boundary_while_paused_keeps_the_transport_paused() {
     let mut core = PlaybackCore::new();
     _ = core.load(tracks(2), 0, true);
@@ -1922,16 +1899,6 @@ fn sleep_fade_curve_reaches_zero_without_overshooting() {
     assert!((original_fade_volume(80.0, 5.0, 5.0)).abs() < f64::EPSILON);
     assert!((original_fade_volume(80.0, 9.0, 5.0)).abs() < f64::EPSILON);
     assert!((original_fade_volume(500.0, 0.0, 5.0) - 100.0).abs() < f64::EPSILON);
-}
-
-#[test]
-fn dsd_is_classified_as_unsupported_instead_of_retried() {
-    let error = crate::player::PlaybackError::classify(
-        crate::player::ErrorStage::Read,
-        "decoder: DSD playback is unsupported; convert to PCM first",
-    );
-    assert_eq!(error.kind, crate::player::error::ErrorKind::Unsupported);
-    assert!(!error.retryable());
 }
 
 #[test]

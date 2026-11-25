@@ -57,20 +57,21 @@ const PLAY_CAP: i64 = 500;
 /// (only the cover URL map remains).
 ///
 /// Repeated album/artist strings (`artist`, `album`, `album_id`, `cover_art`)
-/// are interned as `Arc<str>` across tracks during catalog construction so a
-/// 100k-song library does not allocate duplicate `String`s per track.
+/// are interned as `Arc<str>` across tracks during catalog construction, and
+/// immutable `id`/`title` use `Box<str>` with compact scalar widths (`u32`/`u16`)
+/// so `ArcInner<SongHit>` stays 128 B instead of 192 B.
 #[derive(Debug, Clone)]
 pub struct SongHit {
-    pub id: String,
-    pub title: String,
+    pub id: Box<str>,
+    pub title: Box<str>,
     pub artist: Option<Arc<str>>,
     pub album: Option<Arc<str>>,
-    pub duration: Option<i32>,
-    pub play_count: i64,
     pub album_id: Option<Arc<str>>,
     pub cover_art: Option<Arc<str>>,
-    pub track: Option<i32>,
-    pub disc_number: Option<i32>,
+    pub play_count: u32,
+    pub duration: u32,
+    pub track: u16,
+    pub disc_number: u16,
 }
 
 #[derive(FromRow)]
@@ -205,9 +206,8 @@ impl SearchIndex {
                 let sa = &songs[a as usize];
                 let sb = &songs[b as usize];
                 sa.disc_number
-                    .unwrap_or(0)
-                    .cmp(&sb.disc_number.unwrap_or(0))
-                    .then_with(|| sa.track.unwrap_or(0).cmp(&sb.track.unwrap_or(0)))
+                    .cmp(&sb.disc_number)
+                    .then_with(|| sa.track.cmp(&sb.track))
                     .then_with(|| sa.title.cmp(&sb.title))
             });
             let offset = by_album_tracks.len() as u32;
@@ -326,7 +326,7 @@ impl SearchIndex {
             else {
                 continue;
             };
-            let plays = item.data.play_count.clamp(0, PLAY_CAP);
+            let plays = i64::from(item.data.play_count).clamp(0, PLAY_CAP);
             scored.push((
                 i64::from(text_score) + plays * PLAY_BOOST,
                 text_score,
@@ -418,13 +418,10 @@ static OVER_BUDGET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 /// libraries that prefer the catalog. ARC-RS-4.7: halved from 64 MiB default.
 const DEFAULT_BUDGET_MIB: usize = 32;
 
-/// Fixed per-song cost of the catalog: `ArcInner<SongHit>` (192 B), the
+/// Fixed per-song cost of the catalog: `ArcInner<SongHit>` (128 B), the
 /// boxcar entry holding the `Arc` plus its `Utf32String` column (~32 B) and
-/// the two secondary index slots (~16 B), with a little slack. Calibrated
-/// against `bench_100k_songs` (256 + 3×text lands within ~10% of the
-/// measured retained bytes). ARC-RS-4.6 drops the second Arc vecs, so the
-/// fixed term is now ~240 B; keep 256 as slack for index overhead.
-pub(crate) const SONG_FIXED_COST: usize = 256;
+/// the two `u32` secondary index slots (~8 B), with a little slack.
+pub(crate) const SONG_FIXED_COST: usize = 200;
 /// Text factor: every byte is stored once in the `SongHit` `String` and once
 /// more in Nucleo's haystack — 1 byte/char for ASCII, up to 4 bytes for
 /// non-ASCII (UTF-32). Three is the conservative middle, so a non-Latin
@@ -623,16 +620,22 @@ async fn rebuild_locked(pool: &SqlitePool, revision: Option<i64>) -> Result<()> 
         .fetch(pool);
         while let Some(raw) = rows.try_next().await? {
             songs.push(Arc::new(SongHit {
-                id: raw.id,
-                title: raw.title,
+                id: raw.id.into_boxed_str(),
+                title: raw.title.into_boxed_str(),
                 artist: intern_opt(&mut interner, raw.artist),
                 album: intern_opt(&mut interner, raw.album),
-                duration: raw.duration,
-                play_count: raw.play_count,
                 album_id: intern_opt(&mut interner, raw.album_id),
                 cover_art: intern_opt(&mut interner, raw.cover_art),
-                track: raw.track,
-                disc_number: raw.disc_number,
+                play_count: u32::try_from(raw.play_count.max(0)).unwrap_or(u32::MAX),
+                duration: raw
+                    .duration
+                    .and_then(|v| u32::try_from(v).ok())
+                    .unwrap_or(0),
+                track: raw.track.and_then(|v| u16::try_from(v).ok()).unwrap_or(0),
+                disc_number: raw
+                    .disc_number
+                    .and_then(|v| u16::try_from(v).ok())
+                    .unwrap_or(0),
             }));
         }
     }

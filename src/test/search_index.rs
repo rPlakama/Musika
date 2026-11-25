@@ -7,16 +7,16 @@ fn new_index(songs: Vec<SongHit>, artists: Vec<ArtistRow>, albums: Vec<AlbumRow>
 
 fn song(id: &str, title: &str, artist: &str, album: &str, plays: i64) -> SongHit {
     SongHit {
-        id: id.to_string(),
-        title: title.to_string(),
+        id: id.into(),
+        title: title.into(),
         artist: Some(Arc::from(artist)),
         album: Some(Arc::from(album)),
-        duration: Some(200),
-        play_count: plays,
         album_id: Some(Arc::from(format!("{album}-id"))),
         cover_art: None,
-        track: Some(1),
-        disc_number: Some(1),
+        play_count: plays.max(0) as u32,
+        duration: 200,
+        track: 1,
+        disc_number: 1,
     }
 }
 
@@ -92,7 +92,7 @@ fn play_count_boosts_equal_text_scores() {
     );
 
     let hits = index.search("hello", 10);
-    let ids: Vec<&str> = hits.songs.iter().map(|song| song.id.as_str()).collect();
+    let ids: Vec<&str> = hits.songs.iter().map(|song| song.id.as_ref()).collect();
     assert_eq!(ids, ["loud", "quiet"]);
 }
 
@@ -110,23 +110,23 @@ fn most_played_orders_by_count_then_title() {
     );
 
     let hits = index.most_played(10);
-    let ids: Vec<&str> = hits.iter().map(|song| song.id.as_str()).collect();
+    let ids: Vec<&str> = hits.iter().map(|song| song.id.as_ref()).collect();
     assert_eq!(ids, ["2", "4", "3", "1"]);
 }
 
 #[test]
 fn album_tracks_follow_disc_and_track() {
     let mut second = song("b", "Second", "A", "X", 0);
-    second.track = Some(2);
+    second.track = 2;
     let mut first = song("a", "First", "A", "X", 0);
-    first.track = Some(1);
+    first.track = 1;
     let mut disc2 = song("c", "Disc Two", "A", "X", 0);
-    disc2.disc_number = Some(2);
-    disc2.track = Some(1);
+    disc2.disc_number = 2;
+    disc2.track = 1;
     let index = new_index(vec![second, first, disc2], Vec::new(), Vec::new());
 
     let tracks = index.album_tracks("X-id", 10);
-    let ids: Vec<&str> = tracks.iter().map(|song| song.id.as_str()).collect();
+    let ids: Vec<&str> = tracks.iter().map(|song| song.id.as_ref()).collect();
     assert_eq!(ids, ["a", "b", "c"]);
 }
 
@@ -198,16 +198,16 @@ fn bench_100k_songs() {
         let album_id_arc: Arc<str> = Arc::from("Kid A-id");
         let songs: Vec<SongHit> = (0..100_000)
             .map(|i| SongHit {
-                id: format!("s{i}"),
-                title: format!("Track {i}"),
+                id: format!("s{i}").into_boxed_str(),
+                title: format!("Track {i}").into_boxed_str(),
                 artist: Some(Arc::clone(&artist_arc)),
                 album: Some(Arc::clone(&album_arc)),
-                duration: Some(200),
-                play_count: i % 100,
                 album_id: Some(Arc::clone(&album_id_arc)),
                 cover_art: None,
-                track: Some(1),
-                disc_number: Some(1),
+                play_count: (i % 100) as u32,
+                duration: 200,
+                track: 1,
+                disc_number: 1,
             })
             .collect();
         let songs_len = songs.len();
@@ -272,16 +272,16 @@ fn bench_index_build_peak() {
         let songs: Vec<Arc<SongHit>> = (0..100_000)
             .map(|i| {
                 Arc::new(SongHit {
-                    id: format!("s{i}"),
-                    title: format!("Track {i}"),
+                    id: format!("s{i}").into_boxed_str(),
+                    title: format!("Track {i}").into_boxed_str(),
                     artist: Some(Arc::clone(&artist_arc)),
                     album: Some(Arc::clone(&album_arc)),
-                    duration: Some(200),
-                    play_count: i % 100,
                     album_id: Some(Arc::clone(&album_id_arc)),
                     cover_art: None,
-                    track: Some(1),
-                    disc_number: Some(1),
+                    play_count: (i % 100) as u32,
+                    duration: 200,
+                    track: 1,
+                    disc_number: 1,
                 })
             })
             .collect();

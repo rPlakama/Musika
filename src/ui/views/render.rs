@@ -92,10 +92,10 @@ impl Render for AppRoot {
         if resized {
             // The list lays the new viewport out during this frame; re-center
             // on the next available frame instead of after a fixed delay.
-            request_frame(window, "resize");
-        }
-        if recenter {
-            self.recenter_after_resize();
+            // Bypass the unfocused frame gate: a resize is a one-shot layout
+            // settlement that must still run when a tiled WM resizes an
+            // unfocused window.
+            perf::request_frame(window, "resize");
         }
         #[cfg(debug_assertions)]
         {
@@ -355,6 +355,9 @@ impl Render for AppRoot {
             self.ensure_queue_metrics();
         }
         self.ensure_library_window();
+        if recenter {
+            self.recenter_after_resize();
+        }
         if !self.preloaded && self.view.rows.count > 0 && self.view.scope != Scope::Playlists {
             self.preloaded = true;
             let start_scope = self.view.scope;

@@ -234,15 +234,15 @@ struct SeedSong {
 impl SeedSong {
     fn from_index(hit: &crate::search::index::SongHit) -> Self {
         Self {
-            id: hit.id.clone(),
-            title: hit.title.clone(),
+            id: hit.id.to_string(),
+            title: hit.title.to_string(),
             artist: hit.artist.as_deref().map(str::to_string),
             album: hit.album.as_deref().map(str::to_string),
             album_id: hit.album_id.as_deref().map(str::to_string),
-            track: hit.track,
-            duration: hit.duration,
+            track: (hit.track != 0).then_some(i32::from(hit.track)),
+            duration: (hit.duration != 0).then_some(hit.duration as i32),
             cover_art: hit.cover_art.as_deref().map(str::to_string),
-            play_count: hit.play_count,
+            play_count: i64::from(hit.play_count),
         }
     }
 }

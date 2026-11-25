@@ -74,12 +74,14 @@ impl AppRoot {
     /// normally only run this when a keyboard/scroll action happens; a
     /// resize changes the viewport under the cursor without any such action.
     pub(in crate::ui) fn recenter_after_resize(&mut self) {
+        if self.search_open && self.search.is_some() {
+            self.follow_search(false);
+        }
         if self.queue_open {
             self.follow_queue(false);
-        } else if self.page.is_some() {
+        }
+        if self.page.is_some() {
             self.follow_page(false);
-        } else if self.search_open && self.search.is_some() {
-            self.follow_search(false);
         } else {
             self.follow_library(false);
         }
